@@ -154,8 +154,11 @@ pub fn SectorMap() -> impl IntoView {
                 </div>
             </div>
 
-            // Selected target info
-            <Show when=move || selected_target().is_some()>
+            // Selected target info (hidden when docked to avoid overlap with station panel)
+            <Show when=move || {
+                let is_docked = game_state.ship_status.get().starts_with("Docked");
+                selected_target().is_some() && !is_docked
+            }>
                 {move || {
                     if let Some(target_id) = selected_target() {
                         let ships_list = ships();
@@ -432,7 +435,8 @@ where
 
     view! {
         // Responsive positioning: above mobile nav on small screens
-        <div class="absolute bottom-20 md:bottom-4 right-2 md:right-4 bg-slate-900/90 rounded-lg p-3 w-56 md:w-64 border border-slate-700">
+        // bottom-nav accounts for nav bar height + safe area on mobile
+        <div class="absolute bottom-nav md:bottom-4 right-2 md:right-4 bg-slate-900/90 rounded-lg p-3 w-56 md:w-64 border border-slate-700">
             <div class="flex justify-between items-start mb-2">
                 <div>
                     <div class="font-semibold text-slate-200">{name}</div>
@@ -522,7 +526,8 @@ where
 
     view! {
         // Responsive: full-width on mobile with margins, centered on desktop
-        <div class="absolute top-1/2 left-2 right-2 md:left-1/2 md:right-auto -translate-y-1/2 md:-translate-x-1/2 bg-slate-900/95 border border-purple-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40">
+        // max-h constraint ensures panel doesn't overlap nav bar on short screens
+        <div class="absolute top-1/2 left-2 right-2 md:left-1/2 md:right-auto -translate-y-1/2 md:-translate-x-1/2 bg-slate-900/95 border border-purple-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40 max-h-[calc(100vh-10rem)] overflow-y-auto">
             // Header
             <div class="flex justify-between items-center mb-3 md:mb-4">
                 <h3 class="font-semibold text-purple-400">"Jumpgate Navigation"</h3>

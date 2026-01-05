@@ -197,12 +197,14 @@ pub fn GamePage() -> impl IntoView {
             // Main content
             <div class="flex-1 flex overflow-hidden relative">
                 // Left sidebar - full-screen overlay on mobile when active
+                // Hidden when docked to allow station panel to be visible
                 <aside class=move || {
                     let panel = game_state.active_mobile_panel.get();
-                    let is_visible = matches!(panel, MobilePanel::Missions | MobilePanel::Squadron);
+                    let is_docked = game_state.ship_status.get().starts_with("Docked");
+                    let is_visible = matches!(panel, MobilePanel::Missions | MobilePanel::Squadron) && !is_docked;
                     if is_visible {
-                        // Mobile: full-screen overlay
-                        "fixed inset-0 z-50 bg-slate-800 flex flex-col md:relative md:inset-auto md:z-auto md:w-80 md:border-r md:border-slate-700"
+                        // Mobile: full-screen overlay (z-[55] to be above alerts at z-50)
+                        "fixed inset-0 z-[55] bg-slate-800 flex flex-col md:relative md:inset-auto md:z-auto md:w-80 md:border-r md:border-slate-700"
                     } else {
                         // Mobile: hidden, Desktop: always visible
                         "hidden md:flex md:w-80 bg-slate-800 md:border-r md:border-slate-700 flex-col"
@@ -239,21 +241,12 @@ pub fn GamePage() -> impl IntoView {
                             on_click=move |_| left_tab.set(LeftTab::Squadron)
                         />
                     </div>
-                    // Tab content - on mobile show based on active_mobile_panel, on desktop use left_tab
-                    <div class="flex-1 overflow-y-auto pb-16 md:pb-0">
-                        {move || {
-                            // On mobile, show panel based on active_mobile_panel
-                            // On desktop, show based on left_tab
-                            let mobile_panel = game_state.active_mobile_panel.get();
-                            match mobile_panel {
-                                MobilePanel::Missions => view! { <MissionPanel /> }.into_any(),
-                                MobilePanel::Squadron => view! { <SquadronPanel /> }.into_any(),
-                                // Desktop fallback
-                                _ => match left_tab.get() {
-                                    LeftTab::Missions => view! { <MissionPanel /> }.into_any(),
-                                    LeftTab::Squadron => view! { <SquadronPanel /> }.into_any(),
-                                }
-                            }
+                    // Tab content - always use left_tab for consistency across mobile/desktop
+                    // pb-nav accounts for nav bar height + safe area on mobile
+                    <div class="flex-1 overflow-y-auto pb-nav md:pb-0">
+                        {move || match left_tab.get() {
+                            LeftTab::Missions => view! { <MissionPanel /> }.into_any(),
+                            LeftTab::Squadron => view! { <SquadronPanel /> }.into_any(),
                         }}
                     </div>
                 </aside>
@@ -307,12 +300,14 @@ pub fn GamePage() -> impl IntoView {
                 </main>
 
                 // Right sidebar - full-screen overlay on mobile when active
+                // Hidden when docked to allow station panel to be visible
                 <aside class=move || {
                     let panel = game_state.active_mobile_panel.get();
-                    let is_visible = matches!(panel, MobilePanel::Ship | MobilePanel::Comms | MobilePanel::Combat);
+                    let is_docked = game_state.ship_status.get().starts_with("Docked");
+                    let is_visible = matches!(panel, MobilePanel::Ship | MobilePanel::Comms | MobilePanel::Combat) && !is_docked;
                     if is_visible {
-                        // Mobile: full-screen overlay
-                        "fixed inset-0 z-50 bg-slate-800 flex flex-col md:relative md:inset-auto md:z-auto md:w-80 md:border-l md:border-slate-700"
+                        // Mobile: full-screen overlay (z-[55] to be above alerts at z-50)
+                        "fixed inset-0 z-[55] bg-slate-800 flex flex-col md:relative md:inset-auto md:z-auto md:w-80 md:border-l md:border-slate-700"
                     } else {
                         // Mobile: hidden, Desktop: always visible
                         "hidden md:flex md:w-80 bg-slate-800 md:border-l md:border-slate-700 flex-col"
@@ -355,21 +350,13 @@ pub fn GamePage() -> impl IntoView {
                             on_click=move |_| right_tab.set(RightTab::Combat)
                         />
                     </div>
-                    // Tab content - on mobile show based on active_mobile_panel, on desktop use right_tab
-                    <div class="flex-1 overflow-hidden pb-16 md:pb-0">
-                        {move || {
-                            let mobile_panel = game_state.active_mobile_panel.get();
-                            match mobile_panel {
-                                MobilePanel::Ship => view! { <ShipStatus /> }.into_any(),
-                                MobilePanel::Comms => view! { <CommsPanel /> }.into_any(),
-                                MobilePanel::Combat => view! { <CombatLog /> }.into_any(),
-                                // Desktop fallback
-                                _ => match right_tab.get() {
-                                    RightTab::Ship => view! { <ShipStatus /> }.into_any(),
-                                    RightTab::Comms => view! { <CommsPanel /> }.into_any(),
-                                    RightTab::Combat => view! { <CombatLog /> }.into_any(),
-                                }
-                            }
+                    // Tab content - always use right_tab for consistency across mobile/desktop
+                    // pb-nav accounts for nav bar height + safe area on mobile
+                    <div class="flex-1 overflow-hidden pb-nav md:pb-0">
+                        {move || match right_tab.get() {
+                            RightTab::Ship => view! { <ShipStatus /> }.into_any(),
+                            RightTab::Comms => view! { <CommsPanel /> }.into_any(),
+                            RightTab::Combat => view! { <CombatLog /> }.into_any(),
                         }}
                     </div>
                 </aside>
@@ -471,7 +458,7 @@ pub fn GamePage() -> impl IntoView {
             </footer>
 
             // Mobile bottom navigation (visible only on mobile)
-            <MobileBottomNav />
+            <MobileBottomNav left_tab=left_tab right_tab=right_tab />
 
             // Mission choice dialog
             <MissionChoiceDialog />
@@ -591,7 +578,10 @@ where
 /// Mobile bottom navigation bar (iOS/Android style).
 /// Only visible on screens smaller than md breakpoint (768px).
 #[component]
-fn MobileBottomNav() -> impl IntoView {
+fn MobileBottomNav(
+    left_tab: RwSignal<LeftTab>,
+    right_tab: RwSignal<RightTab>,
+) -> impl IntoView {
     let game_state = expect_context::<GameState>();
 
     let active_panel = move || game_state.active_mobile_panel.get();
@@ -603,7 +593,8 @@ fn MobileBottomNav() -> impl IntoView {
 
     view! {
         // Only show on mobile (hidden on md and up)
-        <nav class="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-800 border-t border-slate-700 z-40 pb-safe">
+        // z-30 so floating panels (z-40) appear above the nav bar
+        <nav class="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-800 border-t border-slate-700 z-30 pb-safe">
             <div class="h-full flex items-center justify-around px-1">
                 // Map
                 <button
@@ -638,6 +629,7 @@ fn MobileBottomNav() -> impl IntoView {
                     }
                     on:click=move |_| {
                         show_more.set(false);
+                        left_tab.set(LeftTab::Missions);
                         game_state.active_mobile_panel.set(MobilePanel::Missions);
                     }
                 >
@@ -667,6 +659,7 @@ fn MobileBottomNav() -> impl IntoView {
                     }
                     on:click=move |_| {
                         show_more.set(false);
+                        right_tab.set(RightTab::Ship);
                         game_state.active_mobile_panel.set(MobilePanel::Ship);
                     }
                 >
@@ -690,6 +683,7 @@ fn MobileBottomNav() -> impl IntoView {
                     }
                     on:click=move |_| {
                         show_more.set(false);
+                        right_tab.set(RightTab::Combat);
                         game_state.active_mobile_panel.set(MobilePanel::Combat);
                     }
                 >
@@ -725,13 +719,14 @@ fn MobileBottomNav() -> impl IntoView {
                         <span class="text-[10px] mt-0.5">"More"</span>
                     </button>
 
-                    // Dropdown menu
+                    // Dropdown menu - positioned to avoid clipping on small screens
                     <Show when=move || show_more.get()>
-                        <div class="absolute bottom-full right-0 mb-2 w-36 bg-slate-800 border border-slate-600 rounded-lg shadow-lg overflow-hidden">
+                        <div class="absolute bottom-full right-0 mb-2 w-36 bg-slate-800 border border-slate-600 rounded-lg shadow-lg overflow-hidden -mr-2">
                             <button
                                 class="w-full px-4 py-3 text-left text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-2"
                                 on:click=move |_| {
                                     show_more.set(false);
+                                    left_tab.set(LeftTab::Squadron);
                                     game_state.active_mobile_panel.set(MobilePanel::Squadron);
                                 }
                             >
@@ -744,6 +739,7 @@ fn MobileBottomNav() -> impl IntoView {
                                 class="w-full px-4 py-3 text-left text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-2"
                                 on:click=move |_| {
                                     show_more.set(false);
+                                    right_tab.set(RightTab::Comms);
                                     game_state.active_mobile_panel.set(MobilePanel::Comms);
                                 }
                             >

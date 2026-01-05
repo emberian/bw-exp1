@@ -24,7 +24,8 @@ pub fn StationPanel() -> impl IntoView {
     view! {
         <Show when=is_docked>
             // Responsive positioning: above mobile nav on small screens, full-width on mobile
-            <div class="absolute bottom-20 md:bottom-4 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40">
+            // bottom-nav accounts for nav bar height + safe area on mobile
+            <div class="absolute bottom-nav md:bottom-4 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40">
                 // Header
                 <div class="flex justify-between items-center mb-3 md:mb-4">
                     <div>

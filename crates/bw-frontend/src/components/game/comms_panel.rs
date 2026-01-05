@@ -177,7 +177,7 @@ pub fn CommsPanel() -> impl IntoView {
                                 send_message(());
                             }
                         }
-                        class="flex-1 px-2 py-1 bg-slate-700 border border-slate-600 rounded text-sm
+                        class="flex-1 px-3 py-2 md:py-1 min-h-[44px] md:min-h-0 bg-slate-700 border border-slate-600 rounded text-sm
                                text-slate-100 focus:outline-none focus:border-amber-500"
                         placeholder=move || {
                             match selected_channel.get() {
@@ -190,7 +190,7 @@ pub fn CommsPanel() -> impl IntoView {
                     />
                     <button
                         on:click=move |_| send_message(())
-                        class="px-3 py-1 bg-amber-600 hover:bg-amber-500 rounded text-sm
+                        class="px-4 py-2 md:py-1 min-h-[44px] md:min-h-0 bg-amber-600 hover:bg-amber-500 rounded text-sm
                                disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled=move || input.get().is_empty()
                     >

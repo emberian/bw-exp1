@@ -456,6 +456,7 @@ dependencies = [
 name = "bw-scripting"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bw-core",
  "chrono",
  "parking_lot",
@@ -464,6 +465,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+ "toml 0.8.23",
  "tracing",
  "uuid",
 ]

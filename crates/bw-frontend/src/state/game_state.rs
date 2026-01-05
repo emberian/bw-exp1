@@ -735,10 +735,18 @@ impl GameState {
         is_resolved: bool,
         winner: Option<String>,
     ) {
+        // Check if this is a new combat starting (not just an update)
+        let was_in_combat = self.combat_engagement_id.get().is_some();
+
         self.combat_engagement_id.set(Some(engagement_id));
         self.combat_round.set(round);
         self.combat_resolved.set(is_resolved);
         self.combat_winner.set(winner.clone());
+
+        // Auto-switch to Combat panel on mobile when combat starts
+        if !was_in_combat && !is_resolved {
+            self.active_mobile_panel.set(MobilePanel::Combat);
+        }
 
         // Convert DTOs to display info, storing the round when each event occurred
         let event_infos: Vec<CombatEventInfo> = events.into_iter().map(|e| CombatEventInfo {

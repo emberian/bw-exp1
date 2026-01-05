@@ -19,7 +19,8 @@ pub fn NotificationsPanel() -> impl IntoView {
 
     view! {
         <Show when=has_notifications>
-            <div class="absolute top-20 right-4 w-72 max-h-96 overflow-y-auto bg-slate-900/95 border border-amber-500/50 rounded-lg shadow-lg z-40">
+            // Responsive: full-width with margins on mobile, fixed width on desktop
+            <div class="absolute top-16 md:top-20 right-2 left-2 md:left-auto md:right-4 md:w-72 max-h-80 md:max-h-96 overflow-y-auto bg-slate-900/95 border border-amber-500/50 rounded-lg shadow-lg z-40">
                 // Header
                 <div class="p-3 border-b border-slate-700 bg-slate-800/50">
                     <h3 class="font-semibold text-amber-400 text-sm">"Pending Requests"</h3>
@@ -48,7 +49,7 @@ pub fn NotificationsPanel() -> impl IntoView {
                                     </div>
                                     <div class="flex gap-2 mt-2">
                                         <button
-                                            class="flex-1 px-2 py-1 bg-green-900/50 hover:bg-green-800 rounded text-xs text-green-200 transition-colors"
+                                            class="flex-1 px-2 py-2 md:py-1 min-h-[44px] md:min-h-0 bg-green-900/50 hover:bg-green-800 rounded text-xs text-green-200 transition-colors"
                                             on:click=move |_| {
                                                 ws_accept.accept_squadron_invite(invite_id);
                                                 game_state_accept.pending_squadron_invites.update(|list| {
@@ -59,7 +60,7 @@ pub fn NotificationsPanel() -> impl IntoView {
                                             "Accept"
                                         </button>
                                         <button
-                                            class="flex-1 px-2 py-1 bg-red-900/50 hover:bg-red-800 rounded text-xs text-red-200 transition-colors"
+                                            class="flex-1 px-2 py-2 md:py-1 min-h-[44px] md:min-h-0 bg-red-900/50 hover:bg-red-800 rounded text-xs text-red-200 transition-colors"
                                             on:click=move |_| {
                                                 ws_decline.decline_squadron_invite(invite_id);
                                                 game_state_decline.pending_squadron_invites.update(|list| {
@@ -97,7 +98,7 @@ pub fn NotificationsPanel() -> impl IntoView {
                                     </div>
                                     <div class="flex gap-2 mt-2">
                                         <button
-                                            class="flex-1 px-2 py-1 bg-green-900/50 hover:bg-green-800 rounded text-xs text-green-200 transition-colors"
+                                            class="flex-1 px-2 py-2 md:py-1 min-h-[44px] md:min-h-0 bg-green-900/50 hover:bg-green-800 rounded text-xs text-green-200 transition-colors"
                                             on:click=move |_| {
                                                 ws_accept.accept_alliance(proposal_id);
                                                 game_state_accept.pending_alliance_proposals.update(|list| {
@@ -108,7 +109,7 @@ pub fn NotificationsPanel() -> impl IntoView {
                                             "Accept"
                                         </button>
                                         <button
-                                            class="flex-1 px-2 py-1 bg-red-900/50 hover:bg-red-800 rounded text-xs text-red-200 transition-colors"
+                                            class="flex-1 px-2 py-2 md:py-1 min-h-[44px] md:min-h-0 bg-red-900/50 hover:bg-red-800 rounded text-xs text-red-200 transition-colors"
                                             on:click=move |_| {
                                                 ws_decline.decline_alliance(proposal_id);
                                                 game_state_decline.pending_alliance_proposals.update(|list| {
