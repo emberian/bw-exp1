@@ -37,7 +37,6 @@ ln -sf crates/bw-frontend/dist play
 mkdir -p static
 
 # Run server in background
-log "Starting server on http://localhost:3000"
 cargo run -p bw-server &
 SERVER_PID=$!
 

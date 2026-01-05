@@ -11,6 +11,7 @@ pub mod state_api;
 pub mod coroutine_api;
 pub mod event_api;
 pub mod action_api;
+pub mod effect_api;
 pub mod data_api;
 
 use rhai::Engine;
@@ -26,6 +27,7 @@ pub fn register_all(engine: &mut Engine) {
     coroutine_api::register(engine);
     event_api::register(engine);
     action_api::register(engine);
+    effect_api::register(engine);
     data_api::register(engine);
     message_api::register(engine);
 

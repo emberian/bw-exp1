@@ -22,7 +22,15 @@
 mod registry;
 mod ship_archetype;
 mod weapon_archetype;
+mod effect_archetype;
+mod ability_archetype;
+mod cargo_archetype;
+mod faction_archetype;
 
 pub use registry::*;
 pub use ship_archetype::*;
 pub use weapon_archetype::*;
+pub use effect_archetype::*;
+pub use ability_archetype::*;
+pub use cargo_archetype::*;
+pub use faction_archetype::*;

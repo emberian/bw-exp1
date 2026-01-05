@@ -477,6 +477,67 @@ pub enum AdminClientMessage {
 
     /// Get recent script errors
     GetRecentScriptErrors { limit: usize },
+
+    // === Interactive Debugger ===
+
+    /// Start a debug session
+    StartDebugSession { target: crate::dto::DebugTargetDto },
+
+    /// End the current debug session
+    EndDebugSession,
+
+    /// Set a breakpoint
+    SetBreakpoint {
+        script: String,
+        line: usize,
+        condition: Option<String>,
+    },
+
+    /// Set a function breakpoint
+    SetFunctionBreakpoint {
+        function_name: String,
+        break_on_entry: bool,
+        break_on_exit: bool,
+    },
+
+    /// Remove a breakpoint by ID
+    RemoveBreakpoint { breakpoint_id: Uuid },
+
+    /// Enable or disable a breakpoint
+    ToggleBreakpoint { breakpoint_id: Uuid, enabled: bool },
+
+    /// Get all breakpoints in current session
+    ListBreakpoints,
+
+    /// Continue execution (resume from pause)
+    DebugContinue,
+
+    /// Pause execution
+    DebugPause,
+
+    /// Step into the next statement/function
+    DebugStepInto,
+
+    /// Step over the next statement
+    DebugStepOver,
+
+    /// Step out of the current function
+    DebugStepOut,
+
+    /// Get variables at a specific stack frame
+    GetVariables { frame_index: usize },
+
+    /// Expand a variable (get children for maps/arrays)
+    ExpandVariable { variable_path: String },
+
+    /// Evaluate an expression in current context
+    EvaluateExpression {
+        expression: String,
+        frame_index: Option<usize>,
+    },
+
+    /// Get the current call stack
+    GetCallStack,
 }
 
 /// Admin messages sent from server to client.
@@ -631,6 +692,74 @@ pub enum AdminServerMessage {
 
     /// Unsubscribed from script errors
     UnsubscribedFromScriptErrors,
+
+    // === Interactive Debugger Responses ===
+
+    /// Debug session started
+    DebugSessionStarted { session_id: Uuid },
+
+    /// Debug session ended
+    DebugSessionEnded,
+
+    /// Breakpoint set confirmation
+    BreakpointSet { breakpoint: crate::dto::BreakpointDto },
+
+    /// Function breakpoint set confirmation
+    FunctionBreakpointSet { breakpoint: crate::dto::FunctionBreakpointDto },
+
+    /// Breakpoint removed
+    BreakpointRemoved { breakpoint_id: Uuid },
+
+    /// Breakpoint toggled
+    BreakpointToggled { breakpoint_id: Uuid, enabled: bool },
+
+    /// List of all breakpoints
+    BreakpointList {
+        breakpoints: Vec<crate::dto::BreakpointDto>,
+        function_breakpoints: Vec<crate::dto::FunctionBreakpointDto>,
+    },
+
+    /// Execution paused (breakpoint hit or step completed)
+    DebugPaused {
+        script: String,
+        line: usize,
+        column: usize,
+        reason: crate::dto::PauseReasonDto,
+        call_stack: Vec<crate::dto::StackFrameDto>,
+        entity_context: Option<crate::dto::EntityContextDto>,
+    },
+
+    /// Execution resumed
+    DebugResumed,
+
+    /// Variables at requested scope
+    DebugVariables {
+        frame_index: usize,
+        variables: Vec<crate::dto::VariableDto>,
+    },
+
+    /// Expanded variable children
+    VariableExpanded {
+        variable_path: String,
+        children: Vec<crate::dto::VariableDto>,
+    },
+
+    /// Expression evaluation result
+    EvaluationResult {
+        expression: String,
+        result: String,
+        type_name: String,
+        success: bool,
+        error: Option<String>,
+    },
+
+    /// Current call stack
+    CallStack {
+        frames: Vec<crate::dto::StackFrameDto>,
+    },
+
+    /// Debug error
+    DebugError { message: String },
 }
 
 /// Entity types for admin queries.

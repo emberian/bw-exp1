@@ -33,6 +33,7 @@ use thiserror::Error;
 use crate::state::{StateAccessor, WatchRegistry};
 use crate::events::EventRegistry;
 use crate::actions::ActionRegistry;
+use crate::effects::EffectDispatcher;
 use crate::persistence::ScriptStateStore;
 
 /// Error during script execution context setup.
@@ -63,6 +64,9 @@ pub struct ScriptExecutionContext {
     /// Action registry for action handlers (optional).
     pub action_registry: Option<Arc<ActionRegistry>>,
 
+    /// Effect dispatcher for combat effects (optional).
+    pub effect_dispatcher: Option<Arc<EffectDispatcher>>,
+
     /// Persistence store for script state (optional).
     pub persistence_store: Option<Arc<dyn ScriptStateStore>>,
 
@@ -87,6 +91,7 @@ impl ScriptExecutionContext {
             watch_registry: None,
             event_registry: None,
             action_registry: None,
+            effect_dispatcher: None,
             persistence_store: None,
             script_path: String::new(),
             owner_entity_id: None,
@@ -134,6 +139,12 @@ impl ScriptExecutionContext {
     /// Set the action registry.
     pub fn with_action_registry(mut self, registry: Arc<ActionRegistry>) -> Self {
         self.action_registry = Some(registry);
+        self
+    }
+
+    /// Set the effect dispatcher.
+    pub fn with_effect_dispatcher(mut self, dispatcher: Arc<EffectDispatcher>) -> Self {
+        self.effect_dispatcher = Some(dispatcher);
         self
     }
 
@@ -266,6 +277,11 @@ pub fn with_event_registry<T>(f: impl FnOnce(&EventRegistry) -> T) -> Option<T> 
 /// Get the current action registry.
 pub fn with_action_registry<T>(f: impl FnOnce(&ActionRegistry) -> T) -> Option<T> {
     with_context(|ctx| ctx.action_registry.as_ref().map(|r| f(r))).flatten()
+}
+
+/// Get the current effect dispatcher.
+pub fn with_effect_dispatcher<T>(f: impl FnOnce(&EffectDispatcher) -> T) -> Option<T> {
+    with_context(|ctx| ctx.effect_dispatcher.as_ref().map(|d| f(d))).flatten()
 }
 
 /// Get the current persistence store.

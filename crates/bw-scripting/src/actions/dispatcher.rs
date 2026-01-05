@@ -1,6 +1,7 @@
 //! Action dispatcher
 //!
 //! Dispatches client actions to registered script handlers.
+//! Uses the generic handler infrastructure with action-specific requirements validation.
 
 use std::sync::Arc;
 use rhai::{Dynamic, Map};
@@ -9,6 +10,7 @@ use uuid::Uuid;
 use crate::engine::ScriptEngine;
 use crate::state::{StateAccessor, AccessPermissions, StateMutation};
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
+use crate::handlers::HandlerContext;
 
 use super::{ActionRegistry, ActionHandler, ActionRequirement};
 
@@ -29,13 +31,28 @@ pub struct ActionContext {
 
 impl ActionContext {
     /// Convert to a Rhai map for passing to scripts.
-    pub fn to_dynamic(&self) -> Dynamic {
+    pub fn to_rhai_map(&self) -> Dynamic {
         let mut map = Map::new();
         map.insert("player_id".into(), self.player_id.to_string().into());
         map.insert("ship_id".into(), self.ship_id.to_string().into());
         map.insert("sector_id".into(), self.sector_id.to_string().into());
         map.insert("action".into(), self.action.clone().into());
         Dynamic::from(map)
+    }
+}
+
+/// Implement generic HandlerContext for ActionContext.
+impl HandlerContext for ActionContext {
+    fn to_dynamic(&self) -> Dynamic {
+        self.to_rhai_map()
+    }
+
+    fn sector_id(&self) -> Option<Uuid> {
+        Some(self.sector_id)
+    }
+
+    fn owner_entity_id(&self) -> Option<Uuid> {
+        Some(self.ship_id)
     }
 }
 

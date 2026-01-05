@@ -16,7 +16,9 @@ pub mod mission_generator;
 pub mod state;
 pub mod coroutines;
 pub mod events;
+pub mod handlers;
 pub mod actions;
+pub mod effects;
 pub mod behaviors;
 pub mod validation;
 pub mod views;
@@ -26,6 +28,7 @@ pub mod ai;
 pub mod persistence;
 pub mod errors;
 pub mod context;
+pub mod debug;
 
 pub use engine::*;
 pub use mission_runner::*;
@@ -33,12 +36,26 @@ pub use mission_generator::*;
 pub use state::*;
 pub use coroutines::*;
 pub use events::*;
+pub use handlers::{
+    HandlerContext, HandlerFn, Handler, HandlerType, HandlerResult,
+    HandlerRegistry, HandlerDispatcher,
+};
 pub use actions::*;
+pub use effects::{
+    EffectContext, EffectDispatcher, EffectRegistry,
+    create_effect_registry, create_effect_dispatcher, apply_effect,
+};
 pub use behaviors::*;
 pub use validation::*;
 pub use views::{ShipView, PlayerView, SectorView, LocationView};
 pub use transaction::TransactionContext;
-pub use archetypes::{ArchetypeRegistry, ShipArchetype, WeaponArchetype, ShipStats, ShipWeapon};
+pub use archetypes::{
+    ArchetypeRegistry, ShipArchetype, WeaponArchetype, ShipStats, ShipWeapon,
+    EffectArchetype, EffectType, StackingBehavior, EffectTrigger,
+    AbilityArchetype, AbilityTarget, AbilityCost, AbilityEffect, AbilityRequirements,
+    CargoArchetype, CargoCategory,
+    FactionArchetype, FactionBehaviors, FactionCombatBonuses, FactionStandingRequirements,
+};
 pub use ai::{BtNode, BtStatus, BtNodeState, DecoratorKind, UtilityOption, BehaviorTreeRunner, register_ai_bindings};
 pub use persistence::{
     ScriptStateStore, InMemoryStore, FileStore, ScriptState, PersistenceError,
@@ -53,6 +70,13 @@ pub use context::{
     ScriptExecutionContext, ExecutionGuard, ExecutionError,
     with_context, with_context_mut, is_executing,
     current_script_path, current_owner_entity, current_sector, current_tick,
+    with_effect_dispatcher,
+};
+pub use debug::{
+    DebugController, DebugSession, DebugTarget, DebugCommand,
+    Breakpoint, FunctionBreakpoint, PausedState, StackFrame, Variable,
+    EntityContext, PauseReason, StepMode, EvaluationResult,
+    register_debugger,
 };
 
 // Re-export derive macros

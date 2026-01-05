@@ -327,3 +327,93 @@ pub struct PlaytestParticipantDto {
     pub sector_id: Uuid,
     pub is_connected: bool,
 }
+
+// =============================================================================
+// Debug DTOs
+// =============================================================================
+
+/// Debug session target.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DebugTargetDto {
+    /// Debug within a specific playtest
+    Playtest(Uuid),
+    /// Debug on the live server
+    Live,
+}
+
+/// Breakpoint DTO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakpointDto {
+    pub id: Uuid,
+    pub script: String,
+    pub line: usize,
+    pub column: Option<usize>,
+    pub condition: Option<String>,
+    pub hit_count: u64,
+    pub enabled: bool,
+}
+
+/// Function breakpoint DTO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionBreakpointDto {
+    pub id: Uuid,
+    pub function_name: String,
+    pub break_on_entry: bool,
+    pub break_on_exit: bool,
+    pub enabled: bool,
+}
+
+/// Stack frame DTO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackFrameDto {
+    pub index: usize,
+    pub function_name: String,
+    pub source: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+}
+
+/// Variable DTO for inspection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableDto {
+    pub name: String,
+    pub value: String,
+    pub type_name: String,
+    pub expandable: bool,
+    pub path: String,
+}
+
+/// Entity context during debugging.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityContextDto {
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub entity_name: String,
+    pub sector_id: Option<Uuid>,
+}
+
+/// Reason execution was paused.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PauseReasonDto {
+    /// Hit a line breakpoint
+    Breakpoint { breakpoint_id: Uuid },
+    /// Hit a function entry breakpoint
+    FunctionEntry { function_name: String },
+    /// Hit a function exit breakpoint
+    FunctionExit { function_name: String },
+    /// Step completed
+    Step,
+    /// Manual pause requested
+    Pause,
+    /// Exception was thrown
+    Exception { message: String },
+}
+
+/// Debug session info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugSessionDto {
+    pub session_id: Uuid,
+    pub target: DebugTargetDto,
+    pub is_paused: bool,
+    pub breakpoint_count: usize,
+}
