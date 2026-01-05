@@ -43,12 +43,8 @@ pub enum StateMutation {
     },
 }
 
-/// Entity types that can be destroyed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntityType {
-    Ship,
-    Mission,
-}
+// EntityType is defined in behaviors module
+pub use crate::behaviors::EntityType;
 
 /// Changes to apply to a ship.
 #[derive(Debug, Clone, Default)]

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Build stage for the server
-FROM rust:1.84-bookworm AS server-builder
+FROM rust:latest AS server-builder
 
 WORKDIR /app
 
@@ -43,7 +43,7 @@ RUN touch crates/bw-core/src/lib.rs crates/bw-shared/src/lib.rs crates/bw-script
     cargo build --release --package bw-server
 
 # Build stage for the frontend
-FROM rust:1.84-bookworm AS frontend-builder
+FROM rust:latest AS frontend-builder
 
 WORKDIR /app
 

@@ -62,7 +62,7 @@ pub fn LoginPage() -> impl IntoView {
 
                             // Redirect to game
                             if let Some(window) = web_sys::window() {
-                                let _ = window.location().set_href("/game");
+                                let _ = window.location().set_href("/play/game");
                             }
                         }
                     } else {
@@ -135,7 +135,7 @@ pub fn LoginPage() -> impl IntoView {
             </form>
 
             <div class="mt-6 flex flex-col items-center gap-2">
-                <a href="/register" class="text-amber-400 hover:text-amber-300">
+                <a href="/play/register" class="text-amber-400 hover:text-amber-300">
                     "Need an account? Register"
                 </a>
                 <a href="/" class="text-slate-400 hover:text-slate-300">

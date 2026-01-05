@@ -341,6 +341,31 @@ impl GameState {
                         }
                         MutationResult::failure(mutation, "Mission not found")
                     }
+                    bw_scripting::state::EntityType::Station => {
+                        // Find and remove station (location) from any sector
+                        for mut sector in self.sectors.iter_mut() {
+                            let initial_len = sector.sector.locations.len();
+                            sector.sector.locations.retain(|loc| loc.id != *entity_id);
+                            if sector.sector.locations.len() < initial_len {
+                                return MutationResult::success(mutation);
+                            }
+                        }
+                        MutationResult::failure(mutation, "Station not found")
+                    }
+                    bw_scripting::state::EntityType::Sector => {
+                        if let Some((_, sector)) = self.sectors.remove(entity_id) {
+                            // Move all ships in this sector to limbo (remove from tracking)
+                            for ship_entry in sector.ship_ids.iter() {
+                                if let Some(mut ship) = self.ships.get_mut(ship_entry.key()) {
+                                    // Could relocate to a default sector instead
+                                    ship.sector_id = Uuid::nil();
+                                }
+                            }
+                            MutationResult::success(mutation)
+                        } else {
+                            MutationResult::failure(mutation, "Sector not found")
+                        }
+                    }
                 }
             }
 

@@ -85,6 +85,9 @@ pub struct GameState {
     pub pending_squadron_invites: RwSignal<Vec<SquadronInviteInfo>>,
     pub pending_alliance_proposals: RwSignal<Vec<AllianceProposalInfo>>,
 
+    // Incoming hails ("Yo"-style quick hails)
+    pub incoming_hails: RwSignal<Vec<HailInfo>>,
+
     // Combat state
     pub combat_engagement_id: RwSignal<Option<Uuid>>,
     pub combat_round: RwSignal<u32>,
@@ -230,6 +233,14 @@ pub struct AllianceProposalInfo {
     pub from_squadron_tag: String,
 }
 
+/// Incoming hail info for "Yo"-style quick hails.
+#[derive(Clone, Debug)]
+pub struct HailInfo {
+    pub from_id: Uuid,
+    pub from_name: String,
+    pub received_at: f64, // timestamp in ms for auto-dismiss
+}
+
 impl Default for GameState {
     fn default() -> Self {
         Self::new()
@@ -294,6 +305,8 @@ impl GameState {
             pending_squadron_invites: RwSignal::new(vec![]),
             pending_alliance_proposals: RwSignal::new(vec![]),
 
+            incoming_hails: RwSignal::new(vec![]),
+
             combat_engagement_id: RwSignal::new(None),
             combat_round: RwSignal::new(0),
             combat_events: RwSignal::new(vec![]),
@@ -341,6 +354,34 @@ impl GameState {
         self.squadron.set(info);
     }
 
+    /// Add incoming hail.
+    pub fn add_hail(&self, from_id: Uuid, from_name: String) {
+        let now = js_sys::Date::now();
+        self.incoming_hails.update(|hails| {
+            // Remove any existing hail from same player
+            hails.retain(|h| h.from_id != from_id);
+            hails.push(HailInfo {
+                from_id,
+                from_name,
+                received_at: now,
+            });
+        });
+    }
+
+    /// Remove expired hails (older than 3 seconds).
+    pub fn cleanup_expired_hails(&self) {
+        let now = js_sys::Date::now();
+        let expiry_ms = 3000.0; // 3 seconds
+        self.incoming_hails.update(|hails| {
+            hails.retain(|h| now - h.received_at < expiry_ms);
+        });
+    }
+
+    /// Check if a ship has an active incoming hail.
+    pub fn has_hail_from(&self, ship_id: Uuid) -> bool {
+        self.incoming_hails.get().iter().any(|h| h.from_id == ship_id)
+    }
+
     /// Handle initial state from server.
     pub fn handle_initial_state(
         &self,
@@ -356,25 +397,6 @@ impl GameState {
         self.reputation.set(player.reputation);
         self.fame.set(player.fame);
 
-        // Ship info
-        self.ship_id.set(Some(ship.id));
-        self.ship_name.set(ship.name.clone());
-        self.ship_class.set(ship.ship_class.clone());
-        self.position_x.set(ship.position.x);
-        self.position_y.set(ship.position.y);
-        self.ship_hull.set(ship.hull_percent);
-        self.ship_shields.set(ship.shield_percent);
-        self.ship_status.set(ship.status.clone());
-
-        // Update docked state based on ship status
-        if ship.status == "Docked" {
-            // Will be populated when station info is available
-        } else {
-            self.docked_station_id.set(None);
-            self.docked_station_name.set(String::new());
-            self.docked_station_services.set(vec![]);
-        }
-
         // Sector info
         self.sector_id.set(Some(sector.id));
         self.sector_name.set(sector.name.clone());
@@ -388,7 +410,7 @@ impl GameState {
         }).collect();
         self.adjacent_sectors.set(adjacent);
 
-        // Locations
+        // Locations - process these first so we can check for docked station
         let locs: Vec<LocationInfo> = sector.locations.into_iter().map(|l| LocationInfo {
             id: l.id,
             name: l.name,
@@ -397,7 +419,39 @@ impl GameState {
             y: l.position.y,
             services: l.services,
         }).collect();
-        self.locations.set(locs);
+        self.locations.set(locs.clone());
+
+        // Ship info
+        self.ship_id.set(Some(ship.id));
+        self.ship_name.set(ship.name.clone());
+        self.ship_class.set(ship.ship_class.clone());
+        self.position_x.set(ship.position.x);
+        self.position_y.set(ship.position.y);
+        self.ship_hull.set(ship.hull_percent);
+        self.ship_shields.set(ship.shield_percent);
+        self.ship_status.set(ship.status.clone());
+
+        // Update docked state based on ship status
+        if ship.status == "Docked" {
+            // Find the station we're docked at by finding the nearest station to ship position
+            let ship_pos = (ship.position.x, ship.position.y);
+            if let Some(station) = locs.iter()
+                .filter(|l| l.location_type == "Station" || l.location_type == "station")
+                .min_by(|a, b| {
+                    let dist_a = (a.x - ship_pos.0).powi(2) + (a.y - ship_pos.1).powi(2);
+                    let dist_b = (b.x - ship_pos.0).powi(2) + (b.y - ship_pos.1).powi(2);
+                    dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                })
+            {
+                self.docked_station_id.set(Some(station.id));
+                self.docked_station_name.set(station.name.clone());
+                self.docked_station_services.set(station.services.clone());
+            }
+        } else {
+            self.docked_station_id.set(None);
+            self.docked_station_name.set(String::new());
+            self.docked_station_services.set(vec![]);
+        }
 
         // Other ships
         let ship_infos: Vec<ShipInfo> = ships.into_iter().map(|s| ShipInfo {

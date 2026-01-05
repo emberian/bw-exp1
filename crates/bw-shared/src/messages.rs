@@ -55,6 +55,9 @@ pub enum ClientMessage {
     AcceptAlliance { proposal_id: Uuid },
     DeclineAlliance { proposal_id: Uuid },
 
+    /// Quick "Yo" style hail to another ship
+    Hail { target_id: Uuid },
+
     /// Heartbeat
     Ping { timestamp: u64 },
 }
@@ -158,6 +161,12 @@ pub enum ServerMessage {
         from_squadron_id: Uuid,
         from_squadron_name: String,
         from_squadron_tag: String,
+    },
+
+    /// Quick "Yo" style hail received from another player
+    HailReceived {
+        from_id: Uuid,
+        from_name: String,
     },
 }
 

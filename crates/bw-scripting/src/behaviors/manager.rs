@@ -109,7 +109,8 @@ impl BehaviorManager {
                 ids.retain(|i| *i != id);
             }
 
-            return Err(ScriptError::RuntimeError(
+            return Err(ScriptError::runtime(
+                script_path,
                 result.error.unwrap_or_else(|| "on_spawn failed".to_string())
             ));
         }

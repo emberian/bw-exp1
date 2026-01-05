@@ -37,7 +37,7 @@ impl<'a> MissionRunner<'a> {
         )?;
 
         MissionOutcome::from_dynamic(result)
-            .ok_or(ScriptError::RuntimeError("Invalid mission result".to_string()))
+            .ok_or_else(|| ScriptError::runtime(script_name, "Invalid mission result"))
     }
 
     /// Process a player choice, calling on_choice in the script.
@@ -60,7 +60,7 @@ impl<'a> MissionRunner<'a> {
         )?;
 
         MissionOutcome::from_dynamic(result)
-            .ok_or(ScriptError::RuntimeError("Invalid mission result".to_string()))
+            .ok_or_else(|| ScriptError::runtime(script_name, "Invalid mission result"))
     }
 
     /// Process combat resolution, calling on_combat_resolved in the script.
@@ -91,7 +91,7 @@ impl<'a> MissionRunner<'a> {
         )?;
 
         MissionOutcome::from_dynamic(result)
-            .ok_or(ScriptError::RuntimeError("Invalid mission result".to_string()))
+            .ok_or_else(|| ScriptError::runtime(script_name, "Invalid mission result"))
     }
 
     /// Process a timed event (for missions with time pressure).
@@ -120,7 +120,7 @@ impl<'a> MissionRunner<'a> {
                     Ok(MissionOutcome::from_dynamic(result))
                 }
             }
-            Err(ScriptError::RuntimeError(e)) if e.contains("Function not found") => Ok(None),
+            Err(e) if e.is_function_not_found() => Ok(None),
             Err(e) => Err(e),
         }
     }

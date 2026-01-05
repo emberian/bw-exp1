@@ -3,6 +3,8 @@
 //! Displays chat messages and allows sending to different channels.
 
 use leptos::prelude::*;
+use leptos::html::Div;
+use wasm_bindgen::JsCast;
 
 use bw_shared::ChatChannel;
 
@@ -17,11 +19,35 @@ pub fn CommsPanel() -> impl IntoView {
     let input = RwSignal::new(String::new());
     let selected_channel = RwSignal::new(ChatChannel::Sector);
 
+    // Track if user is at bottom of messages
+    let is_at_bottom = RwSignal::new(true);
+    let messages_ref = NodeRef::<Div>::new();
+
     // Get messages from game state
     let messages = move || game_state.chat_messages.get();
 
     // Check if player is in a squadron (to enable squadron chat)
     let in_squadron = move || game_state.in_squadron();
+
+    // Scroll handler to track if user is at bottom
+    let handle_scroll = move |_| {
+        if let Some(el) = messages_ref.get() {
+            let scroll_top = el.scroll_top();
+            let scroll_height = el.scroll_height();
+            let client_height = el.client_height();
+            // Consider "at bottom" if within 50px of bottom
+            let at_bottom = scroll_height - scroll_top - client_height < 50;
+            is_at_bottom.set(at_bottom);
+        }
+    };
+
+    // Scroll to bottom function
+    let scroll_to_bottom = move |_| {
+        if let Some(el) = messages_ref.get() {
+            el.set_scroll_top(el.scroll_height());
+            is_at_bottom.set(true);
+        }
+    };
 
     // Send message handler
     let ws_clone = ws;
@@ -57,59 +83,80 @@ pub fn CommsPanel() -> impl IntoView {
                 </div>
             </div>
 
-            // Message list
-            <div class="flex-1 overflow-y-auto p-2 space-y-1 text-xs">
-                <For
-                    each=messages
-                    key=|msg| msg.id
-                    children=move |msg| {
-                        let channel_color = match msg.channel {
-                            ChatChannel::System => "text-amber-400",
-                            ChatChannel::Sector => "text-blue-400",
-                            ChatChannel::Squadron => "text-purple-400",
-                            ChatChannel::Direct => "text-green-400",
-                        };
+            // Message list container
+            <div class="flex-1 relative overflow-hidden">
+                // Message list
+                <div
+                    node_ref=messages_ref
+                    on:scroll=handle_scroll
+                    class="h-full overflow-y-auto p-2 space-y-1 text-xs"
+                >
+                    <For
+                        each=messages
+                        key=|msg| msg.id
+                        children=move |msg| {
+                            let channel_color = match msg.channel {
+                                ChatChannel::System => "text-amber-400",
+                                ChatChannel::Sector => "text-blue-400",
+                                ChatChannel::Squadron => "text-purple-400",
+                                ChatChannel::Direct => "text-green-400",
+                            };
 
-                        let channel_prefix = match msg.channel {
-                            ChatChannel::System => "[SYS]",
-                            ChatChannel::Sector => "[SEC]",
-                            ChatChannel::Squadron => "[SQD]",
-                            ChatChannel::Direct => "[DM]",
-                        };
+                            let channel_prefix = match msg.channel {
+                                ChatChannel::System => "[SYS]",
+                                ChatChannel::Sector => "[SEC]",
+                                ChatChannel::Squadron => "[SQD]",
+                                ChatChannel::Direct => "[DM]",
+                            };
 
-                        let is_system = msg.is_system;
-                        let sender_name = msg.sender_name.clone();
-                        let message = msg.message.clone();
+                            let is_system = msg.is_system;
+                            let sender_name = msg.sender_name.clone();
+                            let message = msg.message.clone();
 
-                        // Use if/else to avoid Show closure issues
-                        if is_system {
-                            view! {
-                                <div class="flex gap-1 leading-relaxed">
-                                    <span class={format!("flex-shrink-0 {}", channel_color)}>
-                                        {channel_prefix}
-                                    </span>
-                                    <span class="text-amber-400 italic">{message}</span>
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <div class="flex gap-1 leading-relaxed">
-                                    <span class={format!("flex-shrink-0 {}", channel_color)}>
-                                        {channel_prefix}
-                                    </span>
-                                    <span class="text-slate-400">{sender_name}":"</span>
-                                    <span class="text-slate-200">{message}</span>
-                                </div>
-                            }.into_any()
+                            // Use if/else to avoid Show closure issues
+                            if is_system {
+                                view! {
+                                    <div class="flex gap-1 leading-relaxed">
+                                        <span class={format!("flex-shrink-0 {}", channel_color)}>
+                                            {channel_prefix}
+                                        </span>
+                                        <span class="text-amber-400 italic">{message}</span>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <div class="flex gap-1 leading-relaxed">
+                                        <span class={format!("flex-shrink-0 {}", channel_color)}>
+                                            {channel_prefix}
+                                        </span>
+                                        <span class="text-slate-400">{sender_name}":"</span>
+                                        <span class="text-slate-200">{message}</span>
+                                    </div>
+                                }.into_any()
+                            }
                         }
-                    }
-                />
+                    />
 
-                // Show empty state if no messages
-                <Show when=move || messages().is_empty()>
-                    <div class="text-slate-500 italic text-center py-4">
-                        "No messages yet."
-                    </div>
+                    // Show empty state if no messages
+                    <Show when=move || messages().is_empty()>
+                        <div class="text-slate-500 italic text-center py-4">
+                            "No messages yet."
+                        </div>
+                    </Show>
+                </div>
+
+                // Jump to bottom button
+                <Show when=move || !is_at_bottom.get()>
+                    <button
+                        on:click=scroll_to_bottom
+                        class="absolute bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 bg-amber-600 hover:bg-amber-500
+                               rounded-full text-xs text-white shadow-lg flex items-center gap-1 transition-all"
+                    >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 5v14m-7-7l7 7 7-7" />
+                        </svg>
+                        "New messages"
+                    </button>
                 </Show>
             </div>
 

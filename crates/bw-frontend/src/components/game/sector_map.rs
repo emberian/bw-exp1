@@ -109,6 +109,7 @@ pub fn SectorMap() -> impl IntoView {
                 children=move |ship| {
                     let ship_id = ship.id;
                     let is_selected = move || selected_target() == Some(ship_id);
+                    let has_hail = move || game_state.has_hail_from(ship_id);
                     view! {
                         <ShipMarker
                             ship=ship.clone()
@@ -116,6 +117,7 @@ pub fn SectorMap() -> impl IntoView {
                             on_select=move |id| {
                                 select_target(Some(id));
                             }
+                            has_hail=has_hail
                         />
                     }
                 }
@@ -152,6 +154,7 @@ pub fn SectorMap() -> impl IntoView {
                                     ship=ship.clone()
                                     on_engage=move || ws.engage_target(target)
                                     on_deselect=move || select_target(None)
+                                    on_hail=move || ws.hail(target)
                                 />
                             }.into_any()
                         } else {
@@ -238,10 +241,11 @@ where
 }
 
 #[component]
-fn ShipMarker<F, S>(ship: ShipInfo, is_selected: S, on_select: F) -> impl IntoView
+fn ShipMarker<F, S, H>(ship: ShipInfo, is_selected: S, on_select: F, has_hail: H) -> impl IntoView
 where
     F: Fn(Uuid) + 'static + Clone + Send,
     S: Fn() -> bool + 'static + Clone + Send,
+    H: Fn() -> bool + 'static + Clone + Send,
 {
     let id = ship.id;
     let name = ship.name.clone();
@@ -266,6 +270,8 @@ where
     } else {
         "text-slate-400"
     };
+
+    let has_hail = has_hail.clone();
 
     let is_selected = is_selected.clone();
 
@@ -293,6 +299,18 @@ where
             // Hull damage indicator (red overlay for low hull)
             <Show when=move || hull_percent < 50.0>
                 <div class="absolute inset-0 bg-red-500/30 rounded animate-pulse" />
+            </Show>
+
+            // Hail indicator ("Yo" style notification badge)
+            <Show when=has_hail>
+                <div class="absolute -top-3 -right-3 animate-bounce">
+                    <div class="relative">
+                        <div class="w-6 h-6 bg-amber-500 rounded-full flex items-center justify-center text-[8px] font-bold text-slate-900 shadow-lg">
+                            "YO"
+                        </div>
+                        <div class="absolute inset-0 bg-amber-500 rounded-full animate-ping opacity-50" />
+                    </div>
+                </div>
             </Show>
 
             // Name tooltip
@@ -379,10 +397,11 @@ fn MapLegend() -> impl IntoView {
 }
 
 #[component]
-fn TargetInfo<E, D>(ship: ShipInfo, on_engage: E, on_deselect: D) -> impl IntoView
+fn TargetInfo<E, D, H>(ship: ShipInfo, on_engage: E, on_deselect: D, on_hail: H) -> impl IntoView
 where
     E: Fn() + 'static + Clone + Send,
     D: Fn() + 'static + Clone + Send,
+    H: Fn() + 'static + Clone + Send,
 {
     let name = ship.name.clone();
     let ship_class = ship.ship_class.clone();
@@ -392,6 +411,7 @@ where
 
     let on_engage_clone = on_engage.clone();
     let on_deselect_clone = on_deselect.clone();
+    let on_hail_clone = on_hail.clone();
 
     view! {
         <div class="absolute bottom-4 right-4 bg-slate-900/90 rounded-lg p-3 w-64 border border-slate-700">
@@ -447,7 +467,13 @@ where
                 } else {
                     view! { <span /> }.into_any()
                 }}
-                <button class="flex-1 px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">
+                <button
+                    class="flex-1 px-3 py-1 bg-amber-900 hover:bg-amber-800 rounded text-xs text-amber-100"
+                    on:click={
+                        let on_hail = on_hail_clone.clone();
+                        move |_| on_hail()
+                    }
+                >
                     "Hail"
                 </button>
             </div>

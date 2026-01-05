@@ -938,6 +938,26 @@ async fn handle_game_message(
             }
         }
 
+        ClientMessage::Hail { target_id } => {
+            // Get the sender's name
+            let from_name = state.player_data.get(&player_id)
+                .map(|p| p.username.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            // Find the target ship's owner and send them the hail
+            if let Some(ship) = state.ships.get(&target_id) {
+                if let Some(owner_id) = ship.owner_id {
+                    // Find the owner's connection and send the hail notification
+                    if let Some(session) = state.players.get(&owner_id) {
+                        let _ = session.tx.send(ServerMessage::HailReceived {
+                            from_id: player_id,
+                            from_name,
+                        }).await;
+                    }
+                }
+            }
+        }
+
         _ => {
             tracing::debug!("Unhandled message from player {}: {:?}", player_id, msg);
         }

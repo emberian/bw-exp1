@@ -14,19 +14,57 @@ body {
     color: #f1f5f9; /* slate-100 */
 }
 
-/* Stars background pattern */
+/* Stars background pattern with twinkling animation */
 .stars-pattern {
-    background-image: radial-gradient(2px 2px at 20px 30px, #eee, rgba(0,0,0,0)),
-                      radial-gradient(2px 2px at 40px 70px, #fff, rgba(0,0,0,0)),
-                      radial-gradient(1px 1px at 90px 40px, #fff, rgba(0,0,0,0)),
-                      radial-gradient(2px 2px at 160px 120px, #ddd, rgba(0,0,0,0)),
-                      radial-gradient(1px 1px at 230px 80px, #fff, rgba(0,0,0,0)),
-                      radial-gradient(1px 1px at 300px 150px, #fff, rgba(0,0,0,0)),
-                      radial-gradient(2px 2px at 350px 50px, #eee, rgba(0,0,0,0)),
-                      radial-gradient(1px 1px at 400px 180px, #fff, rgba(0,0,0,0)),
-                      radial-gradient(1px 1px at 450px 100px, #fff, rgba(0,0,0,0)),
-                      radial-gradient(2px 2px at 500px 200px, #ddd, rgba(0,0,0,0));
+    position: relative;
+    overflow: hidden;
+}
+
+.stars-pattern::before,
+.stars-pattern::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+}
+
+.stars-pattern::before {
+    background-image: radial-gradient(2px 2px at 20px 30px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(2px 2px at 40px 70px, rgba(255,255,255,0.9), transparent),
+                      radial-gradient(1px 1px at 90px 40px, rgba(255,255,255,0.7), transparent),
+                      radial-gradient(2px 2px at 160px 120px, rgba(255,255,255,0.6), transparent),
+                      radial-gradient(1px 1px at 230px 80px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(1px 1px at 300px 150px, rgba(255,255,255,0.7), transparent),
+                      radial-gradient(2px 2px at 350px 50px, rgba(255,255,255,0.6), transparent),
+                      radial-gradient(1px 1px at 400px 180px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(1px 1px at 450px 100px, rgba(255,255,255,0.5), transparent),
+                      radial-gradient(2px 2px at 500px 200px, rgba(255,255,255,0.7), transparent);
     background-size: 550px 220px;
+    animation: twinkle 4s ease-in-out infinite;
+}
+
+.stars-pattern::after {
+    background-image: radial-gradient(1px 1px at 100px 60px, rgba(255,255,255,0.7), transparent),
+                      radial-gradient(2px 2px at 200px 140px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(1px 1px at 280px 30px, rgba(255,255,255,0.6), transparent),
+                      radial-gradient(1px 1px at 380px 90px, rgba(255,255,255,0.9), transparent),
+                      radial-gradient(2px 2px at 480px 160px, rgba(255,255,255,0.5), transparent),
+                      radial-gradient(1px 1px at 520px 40px, rgba(255,255,255,0.7), transparent);
+    background-size: 600px 200px;
+    animation: twinkle 5s ease-in-out infinite reverse;
+    animation-delay: 1s;
+}
+
+@keyframes twinkle {
+    0%, 100% {
+        opacity: 0.6;
+    }
+    50% {
+        opacity: 1;
+    }
 }
 
 /* Scrollbar styling */

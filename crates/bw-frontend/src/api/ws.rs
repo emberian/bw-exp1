@@ -223,6 +223,11 @@ impl WsService {
         self.send(ClientMessage::DeclineAlliance { proposal_id });
     }
 
+    /// Send a quick "Yo" style hail to another ship.
+    pub fn hail(&self, target_id: Uuid) {
+        self.send(ClientMessage::Hail { target_id });
+    }
+
     /// Request to move to another sector.
     pub fn move_to_sector(&self, sector_id: Uuid) {
         self.send(ClientMessage::MoveToSector { sector_id });
@@ -537,6 +542,12 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
 
         ServerMessage::SquadronUpdate { squadron, message } => {
             if let Some(sq) = squadron {
+                // Determine if current player is leader by comparing usernames
+                let current_username = game_state.username.get_untracked();
+                let is_leader = sq.leader_name == current_username;
+                // TODO: is_officer needs server-side support to properly determine
+                let is_officer = false;
+
                 game_state.update_squadron(Some(SquadronInfo {
                     id: sq.id,
                     name: sq.name,
@@ -547,8 +558,8 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
                     reputation_bonus: sq.reputation_bonus,
                     fame_bonus: sq.fame_bonus,
                     is_at_war: sq.is_at_war,
-                    is_leader: false,
-                    is_officer: false,
+                    is_leader,
+                    is_officer,
                 }));
             } else {
                 game_state.update_squadron(None);
@@ -604,6 +615,11 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
                 "Alliance proposal from {} [{}]",
                 from_squadron_name, from_squadron_tag
             )));
+        }
+
+        ServerMessage::HailReceived { from_id, from_name } => {
+            // Add hail to state - UI will show indicator on ship
+            game_state.add_hail(from_id, from_name);
         }
     }
 }

@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_futures::spawn_local;
+use uuid::Uuid;
 
 #[derive(Serialize)]
 struct RegisterRequest {
@@ -19,14 +20,55 @@ struct AuthResponse {
     error: Option<String>,
 }
 
+/// Faction info from API.
+#[derive(Clone, Debug, Deserialize)]
+pub struct FactionInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub tag: String,
+    pub description: String,
+    pub philosophy: String,
+    pub color: String,
+}
+
+#[derive(Deserialize)]
+struct FactionsResponse {
+    factions: Vec<FactionInfo>,
+}
+
 #[component]
 pub fn RegisterPage() -> impl IntoView {
     let username = RwSignal::new(String::new());
     let password = RwSignal::new(String::new());
     let password_confirm = RwSignal::new(String::new());
-    let faction = RwSignal::new("COMPACT".to_string());
+    let faction = RwSignal::new(String::new());
     let error = RwSignal::new(Option::<String>::None);
     let loading = RwSignal::new(false);
+
+    // Factions state
+    let factions = RwSignal::new(Vec::<FactionInfo>::new());
+    let factions_loading = RwSignal::new(true);
+    let factions_error = RwSignal::new(Option::<String>::None);
+
+    // Fetch factions on mount
+    Effect::new(move |_| {
+        spawn_local(async move {
+            match fetch_factions().await {
+                Ok(response) => {
+                    // Set default faction to first one's tag
+                    if let Some(first) = response.factions.first() {
+                        faction.set(first.tag.clone());
+                    }
+                    factions.set(response.factions);
+                    factions_loading.set(false);
+                }
+                Err(e) => {
+                    factions_error.set(Some(e));
+                    factions_loading.set(false);
+                }
+            }
+        });
+    });
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
@@ -51,6 +93,11 @@ pub fn RegisterPage() -> impl IntoView {
             return;
         }
 
+        if faction_val.is_empty() {
+            error.set(Some("Please select a faction".to_string()));
+            return;
+        }
+
         loading.set(true);
         error.set(None);
 
@@ -72,7 +119,7 @@ pub fn RegisterPage() -> impl IntoView {
 
                             // Redirect to game
                             if let Some(window) = web_sys::window() {
-                                let _ = window.location().set_href("/game");
+                                let _ = window.location().set_href("/play/game");
                             }
                         }
                     } else {
@@ -146,26 +193,54 @@ pub fn RegisterPage() -> impl IntoView {
                     <label class="block text-sm font-medium text-slate-300 mb-2">
                         "Faction"
                     </label>
-                    <div class="grid grid-cols-1 gap-3">
-                        <FactionOption
-                            value="COMPACT"
-                            name="Continuity Compact"
-                            description="The legitimate government. Stability through cooperation."
-                            selected=faction
-                        />
-                        <FactionOption
-                            value="FLOTILLA"
-                            name="Argent Flotilla"
-                            description="Military peacekeepers. Vigilance is purpose."
-                            selected=faction
-                        />
-                        <FactionOption
-                            value="FORGE"
-                            name="Forgeborn"
-                            description="Industrial builders. Purpose through creation."
-                            selected=faction
-                        />
-                    </div>
+
+                    // Loading state
+                    <Show when=move || factions_loading.get()>
+                        <div class="animate-pulse space-y-3">
+                            <div class="h-24 bg-slate-700 rounded-lg" />
+                            <div class="h-24 bg-slate-700 rounded-lg" />
+                            <div class="h-24 bg-slate-700 rounded-lg" />
+                        </div>
+                    </Show>
+
+                    // Error state
+                    {move || factions_error.get().map(|e| view! {
+                        <div class="p-3 bg-red-900/50 border border-red-700 rounded text-red-200 text-sm">
+                            "Failed to load factions: "{e}
+                        </div>
+                    })}
+
+                    // Factions list
+                    <Show when=move || !factions_loading.get() && factions_error.get().is_none()>
+                        <div class="grid grid-cols-1 gap-3">
+                            <For
+                                each=move || factions.get()
+                                key=|f| f.id
+                                children=move |f| {
+                                    let tag = f.tag.clone();
+                                    let tag_for_click = f.tag.clone();
+                                    let tag_for_selected = f.tag.clone();
+                                    let name = f.name.clone();
+                                    let description = f.description.clone();
+                                    let philosophy = f.philosophy.clone();
+                                    let color = f.color.clone();
+
+                                    view! {
+                                        <FactionOption
+                                            tag=tag
+                                            name=name
+                                            description=description
+                                            philosophy=philosophy
+                                            color=color
+                                            selected=faction
+                                            on_select=move |_| faction.set(tag_for_click.clone())
+                                            is_selected=move || faction.get() == tag_for_selected
+                                        />
+                                    }
+                                }
+                            />
+                        </div>
+                    </Show>
                 </div>
 
                 // Error display
@@ -178,7 +253,7 @@ pub fn RegisterPage() -> impl IntoView {
                 // Submit button
                 <button
                     type="submit"
-                    disabled=move || loading.get()
+                    disabled=move || loading.get() || factions_loading.get()
                     class="w-full py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-600
                            text-white font-semibold rounded-lg transition-colors"
                 >
@@ -187,7 +262,7 @@ pub fn RegisterPage() -> impl IntoView {
             </form>
 
             <div class="mt-6 flex flex-col items-center gap-2">
-                <a href="/login" class="text-amber-400 hover:text-amber-300">
+                <a href="/play/login" class="text-amber-400 hover:text-amber-300">
                     "Already have an account? Log in"
                 </a>
                 <a href="/" class="text-slate-400 hover:text-slate-300">
@@ -196,6 +271,19 @@ pub fn RegisterPage() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Fetch factions from API.
+async fn fetch_factions() -> Result<FactionsResponse, String> {
+    let response = Request::get("/api/factions")
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    response
+        .json::<FactionsResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
 /// Call the registration API.
@@ -217,29 +305,54 @@ async fn register_player(username: String, password: String, faction: String) ->
 }
 
 #[component]
-fn FactionOption(
-    value: &'static str,
-    name: &'static str,
-    description: &'static str,
+fn FactionOption<S, C>(
+    tag: String,
+    name: String,
+    description: String,
+    philosophy: String,
+    color: String,
     selected: RwSignal<String>,
-) -> impl IntoView {
-    let is_selected = move || selected.get() == value;
+    on_select: C,
+    is_selected: S,
+) -> impl IntoView
+where
+    S: Fn() -> bool + 'static + Clone + Send + Sync,
+    C: Fn(()) + 'static + Clone + Send + Sync,
+{
+    let is_selected_class = is_selected.clone();
+    let on_select_click = on_select.clone();
+
+    // Parse color to use as accent (hex color from server)
+    let border_style = if is_selected() {
+        format!("border-color: {}; background-color: {}20", color, color)
+    } else {
+        String::new()
+    };
 
     view! {
         <button
             type="button"
-            on:click=move |_| selected.set(value.to_string())
+            on:click=move |_| on_select_click(())
             class=move || format!(
-                "p-4 rounded-lg border-2 text-left transition-colors {}",
-                if is_selected() {
+                "p-4 rounded-lg border-2 text-left transition-all {}",
+                if is_selected_class() {
                     "border-amber-500 bg-amber-900/20"
                 } else {
                     "border-slate-600 bg-slate-700 hover:border-slate-500"
                 }
             )
+            style=border_style
         >
-            <div class="font-semibold text-slate-200">{name}</div>
-            <div class="text-sm text-slate-400">{description}</div>
+            <div class="flex items-center gap-2 mb-1">
+                <span
+                    class="w-3 h-3 rounded-full"
+                    style=format!("background-color: {}", color)
+                />
+                <span class="font-semibold text-slate-200">{name}</span>
+                <span class="text-xs text-slate-500">"["{tag}"]"</span>
+            </div>
+            <div class="text-sm text-slate-400 mb-2">{description}</div>
+            <div class="text-xs text-slate-500 italic">"\"{philosophy}\""</div>
         </button>
     }
 }

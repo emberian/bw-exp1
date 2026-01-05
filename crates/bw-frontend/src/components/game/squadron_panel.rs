@@ -6,6 +6,7 @@ use leptos::prelude::*;
 
 use crate::api::WsService;
 use crate::state::GameState;
+use super::ConfirmDialogState;
 
 #[component]
 pub fn SquadronPanel() -> impl IntoView {
@@ -35,6 +36,9 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
     let game_state = expect_context::<GameState>();
     let ws = expect_context::<WsService>();
 
+    // Confirmation dialog state
+    let confirm_state = ConfirmDialogState::new();
+
     let role_text = if squadron.is_leader {
         "Leader"
     } else if squadron.is_officer {
@@ -51,9 +55,22 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
         "text-slate-400"
     };
 
-    let ws_clone = ws;
-    let handle_leave = move |_| {
-        ws_clone.leave_squadron();
+    const CONFIRM_LEAVE: u32 = 1;
+
+    let ws_for_confirm = ws;
+    let handle_confirm = move |id: u32| {
+        match id {
+            CONFIRM_LEAVE => ws_for_confirm.leave_squadron(),
+            _ => {}
+        }
+    };
+
+    let handle_leave_click = move |_| {
+        confirm_state.show(
+            "Leave Squadron",
+            "Are you sure you want to leave this squadron? You will lose access to squadron bonuses and any rank you hold.",
+            CONFIRM_LEAVE
+        );
     };
 
     view! {
@@ -107,11 +124,17 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
 
                 <button
                     class="w-full px-3 py-2 bg-red-900/50 hover:bg-red-800/50 rounded text-sm text-red-400 transition-colors"
-                    on:click=handle_leave
+                    on:click=handle_leave_click
                 >
                     "Leave Squadron"
                 </button>
             </div>
+
+            // Confirmation dialog
+            <super::ConfirmDialog
+                state=confirm_state
+                on_confirm=handle_confirm
+            />
         </div>
     }
 }

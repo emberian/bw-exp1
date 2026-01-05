@@ -24,7 +24,7 @@ pub fn GamePage() -> impl IntoView {
             } else {
                 // No token - redirect to register
                 if let Some(window) = web_sys::window() {
-                    let _ = window.location().set_href("/register");
+                    let _ = window.location().set_href("/play/register");
                 }
             }
         }
@@ -92,6 +92,24 @@ pub fn GamePage() -> impl IntoView {
                     </span>
                 </div>
                 <ResourceBar />
+                <button
+                    class="ml-4 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
+                    on:click=move |_| {
+                        // Clear token from localStorage
+                        if let Some(storage) = web_sys::window()
+                            .and_then(|w| w.local_storage().ok())
+                            .flatten()
+                        {
+                            let _ = storage.remove_item("auth_token");
+                        }
+                        // Redirect to login
+                        if let Some(window) = web_sys::window() {
+                            let _ = window.location().set_href("/play/login");
+                        }
+                    }
+                >
+                    "Logout"
+                </button>
             </header>
 
             // Main content

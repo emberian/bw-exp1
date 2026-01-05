@@ -9,6 +9,7 @@ mod squadron_panel;
 mod combat_log;
 mod station_panel;
 mod notifications;
+mod confirm_dialog;
 
 pub use resource_bar::*;
 pub use sector_map::*;
@@ -19,3 +20,4 @@ pub use squadron_panel::*;
 pub use combat_log::*;
 pub use station_panel::*;
 pub use notifications::*;
+pub use confirm_dialog::*;

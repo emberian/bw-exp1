@@ -8,6 +8,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::api::WsService;
 use crate::state::{GameState, MissionInfo};
+use super::ConfirmDialogState;
 
 #[component]
 pub fn MissionPanel() -> impl IntoView {
@@ -156,7 +157,7 @@ where
 #[component]
 fn ActiveMissionCard<F>(mission: MissionInfo, on_abandon: F) -> impl IntoView
 where
-    F: Fn(Uuid) + 'static + Clone,
+    F: Fn(Uuid) + 'static + Clone + Send + Sync,
 {
     let id = mission.id;
     let title = mission.title.clone();
@@ -166,10 +167,25 @@ where
     let progress = mission.progress;
     let status = mission.status.clone();
 
-    let on_abandon = on_abandon.clone();
-    let handle_abandon = move |ev: web_sys::MouseEvent| {
+    // Confirmation dialog state
+    let confirm_state = ConfirmDialogState::new();
+
+    const CONFIRM_ABANDON: u32 = 1;
+
+    let on_abandon_clone = on_abandon.clone();
+    let handle_confirm = move |confirm_id: u32| {
+        if confirm_id == CONFIRM_ABANDON {
+            on_abandon_clone(id);
+        }
+    };
+
+    let handle_abandon_click = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        on_abandon(id);
+        confirm_state.show(
+            "Abandon Mission",
+            "Are you sure you want to abandon this mission? You will lose all progress.",
+            CONFIRM_ABANDON
+        );
     };
 
     // Progress bar width
@@ -212,11 +228,17 @@ where
                 </div>
                 <button
                     class="text-xs text-red-400 hover:text-red-300 hover:underline"
-                    on:click=handle_abandon
+                    on:click=handle_abandon_click
                 >
                     "Abandon"
                 </button>
             </div>
+
+            // Confirmation dialog
+            <super::ConfirmDialog
+                state=confirm_state
+                on_confirm=handle_confirm
+            />
         </div>
     }
 }
