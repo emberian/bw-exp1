@@ -12,7 +12,9 @@ use bw_shared::{
     ScriptFileInfo, SectorSummaryAdmin, ServerMessage, StagedChange, ChangePreview,
     ValidationError, SimConfigSection, ScriptErrorDto,
     ForkConfigDto, PromoteConfigDto, PlaytestSummaryDto, PlaytestDetailDto, PlaytestParticipantDto,
+    dto::{BreakpointDto, FunctionBreakpointDto, StackFrameDto, VariableDto, PauseReasonDto, DebugTargetDto},
 };
+use bw_scripting::debug::{Breakpoint, DebugTarget, DebugCommand, PauseReason};
 use crate::{config::config, GameState};
 
 /// Handle an admin message from a connected client.
@@ -143,6 +145,72 @@ pub async fn handle_admin_message(
 
         AdminClientMessage::GetRecentScriptErrors { limit } => {
             handle_get_recent_errors(tx, limit).await;
+        }
+
+        // === Interactive Debugger ===
+
+        AdminClientMessage::StartDebugSession { target } => {
+            handle_start_debug_session(state.clone(), tx, _player_id, target).await;
+        }
+
+        AdminClientMessage::EndDebugSession => {
+            handle_end_debug_session(state, tx, _player_id).await;
+        }
+
+        AdminClientMessage::SetBreakpoint { script, line, condition } => {
+            handle_set_breakpoint(state, tx, _player_id, script, line, condition).await;
+        }
+
+        AdminClientMessage::SetFunctionBreakpoint { function_name, break_on_entry, break_on_exit } => {
+            handle_set_function_breakpoint(state, tx, _player_id, function_name, break_on_entry, break_on_exit).await;
+        }
+
+        AdminClientMessage::RemoveBreakpoint { breakpoint_id } => {
+            handle_remove_breakpoint(state, tx, _player_id, breakpoint_id).await;
+        }
+
+        AdminClientMessage::ToggleBreakpoint { breakpoint_id, enabled } => {
+            handle_toggle_breakpoint(state, tx, _player_id, breakpoint_id, enabled).await;
+        }
+
+        AdminClientMessage::ListBreakpoints => {
+            handle_list_breakpoints(state, tx, _player_id).await;
+        }
+
+        AdminClientMessage::DebugContinue => {
+            handle_debug_continue(state, tx, _player_id).await;
+        }
+
+        AdminClientMessage::DebugPause => {
+            handle_debug_pause(state, tx, _player_id).await;
+        }
+
+        AdminClientMessage::DebugStepInto => {
+            handle_debug_step(state, tx, _player_id, DebugCommand::StepInto).await;
+        }
+
+        AdminClientMessage::DebugStepOver => {
+            handle_debug_step(state, tx, _player_id, DebugCommand::StepOver).await;
+        }
+
+        AdminClientMessage::DebugStepOut => {
+            handle_debug_step(state, tx, _player_id, DebugCommand::StepOut).await;
+        }
+
+        AdminClientMessage::GetVariables { frame_index } => {
+            handle_get_variables(state, tx, _player_id, frame_index).await;
+        }
+
+        AdminClientMessage::ExpandVariable { variable_path } => {
+            handle_expand_variable(state, tx, _player_id, variable_path).await;
+        }
+
+        AdminClientMessage::EvaluateExpression { expression, frame_index } => {
+            handle_evaluate_expression(state, tx, _player_id, expression, frame_index).await;
+        }
+
+        AdminClientMessage::GetCallStack => {
+            handle_get_call_stack(state, tx, _player_id).await;
         }
     }
 
@@ -1740,4 +1808,448 @@ async fn handle_preview_promote(
         new_entities,
         deletions,
     })).await;
+}
+
+// =============================================================================
+// Debug Operations
+// =============================================================================
+
+/// Track which player has which debug session.
+/// This is a simple in-memory mapping stored in the handler context.
+/// For a more robust solution, this could be stored in GameState.
+static DEBUG_SESSIONS: std::sync::LazyLock<dashmap::DashMap<Uuid, Uuid>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+async fn handle_start_debug_session(
+    state: Arc<GameState>,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    target_dto: DebugTargetDto,
+) {
+    // Check if player already has a debug session
+    if DEBUG_SESSIONS.contains_key(&player_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Debug session already active. End it first.".to_string(),
+        })).await;
+        return;
+    }
+
+    // Convert DTO to internal type
+    let target = match target_dto {
+        DebugTargetDto::Playtest(id) => DebugTarget::Playtest(id),
+        DebugTargetDto::Live => DebugTarget::Live,
+    };
+
+    // Start session
+    let (session_id, mut pause_rx) = state.debug_controller.start_session(player_id, target);
+    DEBUG_SESSIONS.insert(player_id, session_id);
+
+    // Spawn a task to forward pause events to the client
+    let tx_clone = tx.clone();
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        while let Ok(paused_state) = pause_rx.recv().await {
+            // Store the paused state in the session for later queries
+            state_clone.debug_controller.set_paused(session_id, Some(paused_state.clone()));
+
+            let msg = ServerMessage::Admin(AdminServerMessage::DebugPaused {
+                script: paused_state.script_path.clone(),
+                line: paused_state.line,
+                column: paused_state.column,
+                reason: pause_reason_to_dto(&paused_state.reason),
+                call_stack: paused_state.call_stack.iter().map(|f| StackFrameDto {
+                    index: f.index,
+                    function_name: f.function_name.clone(),
+                    source: f.source.clone(),
+                    line: f.line,
+                    column: f.column,
+                }).collect(),
+                entity_context: paused_state.entity_context.as_ref().map(|ctx| {
+                    bw_shared::dto::EntityContextDto {
+                        entity_type: ctx.entity_type.clone(),
+                        entity_id: ctx.entity_id,
+                        entity_name: ctx.entity_name.clone(),
+                        sector_id: ctx.sector_id,
+                    }
+                }),
+            });
+            if tx_clone.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugSessionStarted {
+        session_id,
+    })).await;
+
+    tracing::info!(player_id = %player_id, session_id = %session_id, "Debug session started");
+}
+
+async fn handle_end_debug_session(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+) {
+    if let Some((_, session_id)) = DEBUG_SESSIONS.remove(&player_id) {
+        state.debug_controller.end_session(session_id);
+
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugSessionEnded)).await;
+        tracing::info!(player_id = %player_id, session_id = %session_id, "Debug session ended");
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_set_breakpoint(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    script: String,
+    line: usize,
+    condition: Option<String>,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    let mut bp = Breakpoint::at_line(&script, line);
+    if let Some(ref cond) = condition {
+        bp = bp.with_condition(cond.clone());
+    }
+    let bp_id = bp.id;
+
+    if let Some(_) = state.debug_controller.set_breakpoint(session_id, bp) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::BreakpointSet {
+            breakpoint: BreakpointDto {
+                id: bp_id,
+                script,
+                line,
+                column: None,
+                condition,
+                hit_count: 0,
+                enabled: true,
+            },
+        })).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Failed to set breakpoint".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_set_function_breakpoint(
+    _state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    function_name: String,
+    break_on_entry: bool,
+    break_on_exit: bool,
+) {
+    let Some(_session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    // Function breakpoints require Rhai's AtFunctionName or AtFunctionCall breakpoint types
+    // For now, just acknowledge - full implementation would need breakpoint type extensions
+    let bp_id = Uuid::new_v4();
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::FunctionBreakpointSet {
+        breakpoint: FunctionBreakpointDto {
+            id: bp_id,
+            function_name,
+            break_on_entry,
+            break_on_exit,
+            enabled: true,
+        },
+    })).await;
+}
+
+async fn handle_remove_breakpoint(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    breakpoint_id: Uuid,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    if state.debug_controller.remove_breakpoint(session_id, breakpoint_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::BreakpointRemoved {
+            breakpoint_id,
+        })).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Breakpoint not found".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_toggle_breakpoint(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    breakpoint_id: Uuid,
+    enabled: bool,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    if state.debug_controller.set_breakpoint_enabled(session_id, breakpoint_id, enabled) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::BreakpointToggled {
+            breakpoint_id,
+            enabled,
+        })).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Breakpoint not found".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_list_breakpoints(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    let bps = state.debug_controller.get_breakpoints(session_id);
+    let breakpoints: Vec<BreakpointDto> = bps.iter().map(|bp| BreakpointDto {
+        id: bp.id,
+        script: bp.source.clone(),
+        line: bp.line,
+        column: bp.column,
+        condition: bp.condition.clone(),
+        hit_count: bp.hit_count,
+        enabled: bp.enabled,
+    }).collect();
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::BreakpointList {
+        breakpoints,
+        function_breakpoints: vec![], // Function breakpoints not yet implemented
+    })).await;
+}
+
+async fn handle_debug_continue(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    if state.debug_controller.send_command(session_id, DebugCommand::Continue) {
+        // Clear the paused state since we're resuming
+        state.debug_controller.set_paused(session_id, None);
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugResumed)).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Failed to send continue command".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_debug_pause(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    if state.debug_controller.send_command(session_id, DebugCommand::Pause) {
+        // Pause will be acknowledged when the debugger actually pauses
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugResumed)).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Failed to send pause command".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_debug_step(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    command: DebugCommand,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    if state.debug_controller.send_command(session_id, command) {
+        // Clear the paused state since execution will resume (until next pause point)
+        state.debug_controller.set_paused(session_id, None);
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugResumed)).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Failed to send step command".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_get_variables(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    frame_index: usize,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    // Get the paused state to access variables
+    if let Some(paused) = state.debug_controller.get_paused_state(session_id) {
+        let variables: Vec<VariableDto> = paused.local_variables.iter().map(|v| VariableDto {
+            name: v.name.clone(),
+            value: v.value.clone(),
+            type_name: v.type_name.clone(),
+            expandable: v.expandable,
+            path: v.path.clone(),
+        }).collect();
+
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugVariables {
+            frame_index,
+            variables,
+        })).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Not currently paused".to_string(),
+        })).await;
+    }
+}
+
+async fn handle_expand_variable(
+    _state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    variable_path: String,
+) {
+    let Some(_session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    // Variable expansion requires access to the actual Rhai Dynamic values
+    // which are not currently persisted in PausedState.
+    // For now, return an error - this would need rhai_integration.rs changes.
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+        message: format!("Variable expansion not yet implemented for path: {}", variable_path),
+    })).await;
+}
+
+async fn handle_evaluate_expression(
+    _state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    expression: String,
+    frame_index: Option<usize>,
+) {
+    let Some(_session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    // Expression evaluation requires sending a command to the paused script context
+    // For now, return an error - this would need rhai_integration.rs changes.
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::EvaluationResult {
+        expression,
+        result: String::new(),
+        type_name: String::new(),
+        success: false,
+        error: Some("Expression evaluation not yet implemented".to_string()),
+    })).await;
+    let _ = frame_index; // Silence unused warning
+}
+
+async fn handle_get_call_stack(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+) {
+    let Some(session_id) = DEBUG_SESSIONS.get(&player_id).map(|r| *r) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "No active debug session".to_string(),
+        })).await;
+        return;
+    };
+
+    // Get the paused state to access call stack
+    if let Some(paused) = state.debug_controller.get_paused_state(session_id) {
+        let call_stack: Vec<StackFrameDto> = paused.call_stack.iter().map(|f| StackFrameDto {
+            index: f.index,
+            function_name: f.function_name.clone(),
+            source: f.source.clone(),
+            line: f.line,
+            column: f.column,
+        }).collect();
+
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::CallStack {
+            frames: call_stack,
+        })).await;
+    } else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+            message: "Not currently paused".to_string(),
+        })).await;
+    }
+}
+
+/// Convert internal PauseReason to DTO
+fn pause_reason_to_dto(reason: &PauseReason) -> PauseReasonDto {
+    match reason {
+        PauseReason::Breakpoint { breakpoint_id } => PauseReasonDto::Breakpoint {
+            breakpoint_id: *breakpoint_id,
+        },
+        PauseReason::FunctionEntry { function_name } => PauseReasonDto::FunctionEntry {
+            function_name: function_name.clone(),
+        },
+        PauseReason::FunctionExit { function_name } => PauseReasonDto::FunctionExit {
+            function_name: function_name.clone(),
+        },
+        PauseReason::Step => PauseReasonDto::Step,
+        PauseReason::Exception { message } => PauseReasonDto::Exception {
+            message: message.clone(),
+        },
+        PauseReason::Pause => PauseReasonDto::Pause,
+    }
 }

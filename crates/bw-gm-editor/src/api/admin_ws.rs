@@ -13,9 +13,10 @@ use web_sys::{MessageEvent, WebSocket};
 use bw_shared::{
     AdminClientMessage, AdminServerMessage, ClientMessage, EntityFilter, EntityType,
     ServerMessage, StagedChange,
+    dto::DebugTargetDto,
 };
 
-use crate::state::{GMEditorState, StagedChangesState};
+use crate::state::{GMEditorState, StagedChangesState, DebugPanelState};
 
 thread_local! {
     static ADMIN_WS: RefCell<Option<AdminWsClient>> = const { RefCell::new(None) };
@@ -223,6 +224,101 @@ impl AdminWsClient {
     /// Get recent script errors
     pub fn get_recent_errors(&self, limit: usize) {
         self.send(AdminClientMessage::GetRecentScriptErrors { limit });
+    }
+
+    // === Debug Operations ===
+
+    /// Start a debug session
+    pub fn start_debug_session(&self, target: DebugTargetDto) {
+        self.send(AdminClientMessage::StartDebugSession { target });
+    }
+
+    /// End the current debug session
+    pub fn end_debug_session(&self) {
+        self.send(AdminClientMessage::EndDebugSession);
+    }
+
+    /// Set a line breakpoint
+    pub fn set_breakpoint(&self, script: &str, line: usize, condition: Option<String>) {
+        self.send(AdminClientMessage::SetBreakpoint {
+            script: script.to_string(),
+            line,
+            condition,
+        });
+    }
+
+    /// Set a function breakpoint
+    pub fn set_function_breakpoint(&self, function_name: &str, break_on_entry: bool, break_on_exit: bool) {
+        self.send(AdminClientMessage::SetFunctionBreakpoint {
+            function_name: function_name.to_string(),
+            break_on_entry,
+            break_on_exit,
+        });
+    }
+
+    /// Remove a breakpoint
+    pub fn remove_breakpoint(&self, breakpoint_id: uuid::Uuid) {
+        self.send(AdminClientMessage::RemoveBreakpoint { breakpoint_id });
+    }
+
+    /// Toggle a breakpoint
+    pub fn toggle_breakpoint(&self, breakpoint_id: uuid::Uuid, enabled: bool) {
+        self.send(AdminClientMessage::ToggleBreakpoint { breakpoint_id, enabled });
+    }
+
+    /// List all breakpoints
+    pub fn list_breakpoints(&self) {
+        self.send(AdminClientMessage::ListBreakpoints);
+    }
+
+    /// Continue execution
+    pub fn debug_continue(&self) {
+        self.send(AdminClientMessage::DebugContinue);
+    }
+
+    /// Pause execution
+    pub fn debug_pause(&self) {
+        self.send(AdminClientMessage::DebugPause);
+    }
+
+    /// Step into
+    pub fn debug_step_into(&self) {
+        self.send(AdminClientMessage::DebugStepInto);
+    }
+
+    /// Step over
+    pub fn debug_step_over(&self) {
+        self.send(AdminClientMessage::DebugStepOver);
+    }
+
+    /// Step out
+    pub fn debug_step_out(&self) {
+        self.send(AdminClientMessage::DebugStepOut);
+    }
+
+    /// Get variables for a stack frame
+    pub fn get_variables(&self, frame_index: usize) {
+        self.send(AdminClientMessage::GetVariables { frame_index });
+    }
+
+    /// Expand a variable
+    pub fn expand_variable(&self, variable_path: &str) {
+        self.send(AdminClientMessage::ExpandVariable {
+            variable_path: variable_path.to_string(),
+        });
+    }
+
+    /// Evaluate an expression
+    pub fn evaluate_expression(&self, expression: &str, frame_index: Option<usize>) {
+        self.send(AdminClientMessage::EvaluateExpression {
+            expression: expression.to_string(),
+            frame_index,
+        });
+    }
+
+    /// Get the call stack
+    pub fn get_call_stack(&self) {
+        self.send(AdminClientMessage::GetCallStack);
     }
 }
 
@@ -445,6 +541,119 @@ fn handle_admin_message(msg: AdminServerMessage) {
 
         AdminServerMessage::UnsubscribedFromScriptErrors => {
             tracing::info!("[gm-ws] Unsubscribed from script errors");
+        }
+
+        // === Interactive Debugger Messages ===
+
+        AdminServerMessage::DebugSessionStarted { session_id } => {
+            tracing::info!("[gm-ws] Debug session started: {}", session_id);
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_session_started(session_id);
+            }
+        }
+
+        AdminServerMessage::DebugSessionEnded => {
+            tracing::info!("[gm-ws] Debug session ended");
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_session_ended();
+            }
+        }
+
+        AdminServerMessage::BreakpointSet { breakpoint } => {
+            tracing::debug!("[gm-ws] Breakpoint set: {}:{}",
+                breakpoint.script, breakpoint.line);
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_breakpoint_set(breakpoint);
+            }
+        }
+
+        AdminServerMessage::FunctionBreakpointSet { breakpoint } => {
+            tracing::debug!("[gm-ws] Function breakpoint set: {}",
+                breakpoint.function_name);
+            // Function breakpoints stored separately in debug state
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.function_breakpoints.update(|bps| bps.push(breakpoint));
+            }
+        }
+
+        AdminServerMessage::BreakpointRemoved { breakpoint_id } => {
+            tracing::debug!("[gm-ws] Breakpoint removed: {}", breakpoint_id);
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_breakpoint_removed(breakpoint_id);
+            }
+        }
+
+        AdminServerMessage::BreakpointToggled { breakpoint_id, enabled } => {
+            tracing::debug!("[gm-ws] Breakpoint toggled: {} = {}",
+                breakpoint_id, enabled);
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_breakpoint_toggled(breakpoint_id, enabled);
+            }
+        }
+
+        AdminServerMessage::BreakpointList { breakpoints, function_breakpoints } => {
+            tracing::debug!("[gm-ws] Received {} breakpoints, {} function breakpoints",
+                breakpoints.len(), function_breakpoints.len());
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_breakpoint_list(breakpoints, function_breakpoints);
+            }
+        }
+
+        AdminServerMessage::DebugPaused { script, line, column, reason, call_stack, entity_context } => {
+            tracing::info!("[gm-ws] Debug paused at {}:{}", script, line);
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_paused(script, line, column, reason, call_stack, entity_context);
+                // Automatically request variables for frame 0
+                with_admin_ws(|ws| ws.get_variables(0));
+            }
+        }
+
+        AdminServerMessage::DebugResumed => {
+            tracing::debug!("[gm-ws] Debug resumed");
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_resumed();
+            }
+        }
+
+        AdminServerMessage::DebugVariables { frame_index, variables } => {
+            tracing::debug!("[gm-ws] Received {} variables for frame {}",
+                variables.len(), frame_index);
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_variables(frame_index, variables);
+            }
+        }
+
+        AdminServerMessage::EvaluationResult { expression, result, type_name, success, error } => {
+            if success {
+                tracing::debug!("[gm-ws] Eval '{}' = {} ({})",
+                    expression, result, type_name);
+            } else {
+                tracing::warn!("[gm-ws] Eval '{}' failed: {:?}",
+                    expression, error);
+            }
+            // Could store in state for display if needed
+        }
+
+        AdminServerMessage::CallStack { frames } => {
+            tracing::debug!("[gm-ws] Received call stack with {} frames",
+                frames.len());
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_call_stack(frames);
+            }
+        }
+
+        AdminServerMessage::DebugError { message } => {
+            tracing::error!("[gm-ws] Debug error: {}", message);
+            if let Some(debug_state) = use_context::<DebugPanelState>() {
+                debug_state.on_error(message);
+            }
+        }
+
+        AdminServerMessage::VariableExpanded { variable_path, children } => {
+            tracing::debug!("[gm-ws] Variable expanded '{}': {} children",
+                variable_path, children.len());
+            // Could update variables in state if we implement expansion UI
+            let _ = (variable_path, children);
         }
     }
 }

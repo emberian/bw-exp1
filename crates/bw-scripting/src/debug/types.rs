@@ -111,7 +111,6 @@ pub enum DebugTarget {
 }
 
 /// A debug session tracks breakpoints and state for a debugging client.
-#[derive(Debug)]
 pub struct DebugSession {
     /// Unique session ID
     pub id: Uuid,
@@ -119,16 +118,28 @@ pub struct DebugSession {
     pub target: DebugTarget,
     /// GM player ID who owns this session
     pub owner_id: Uuid,
-    /// Line breakpoints
-    pub breakpoints: RwLock<Vec<Breakpoint>>,
-    /// Function breakpoints
-    pub function_breakpoints: RwLock<Vec<FunctionBreakpoint>>,
+    /// Line breakpoints (Arc-wrapped for sharing with debugger)
+    pub breakpoints: SharedBreakpoints,
+    /// Function breakpoints (Arc-wrapped for sharing)
+    pub function_breakpoints: SharedFunctionBreakpoints,
     /// Current paused state (if paused)
     pub paused_at: RwLock<Option<PausedState>>,
     /// Whether this session is active
     pub active: bool,
     /// Auto-timeout for paused scripts (in seconds, 0 = no timeout)
     pub pause_timeout_secs: u32,
+}
+
+impl std::fmt::Debug for DebugSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DebugSession")
+            .field("id", &self.id)
+            .field("target", &self.target)
+            .field("owner_id", &self.owner_id)
+            .field("breakpoints", &self.breakpoints.read().len())
+            .field("active", &self.active)
+            .finish()
+    }
 }
 
 impl DebugSession {
@@ -138,12 +149,22 @@ impl DebugSession {
             id: Uuid::new_v4(),
             target,
             owner_id,
-            breakpoints: RwLock::new(Vec::new()),
-            function_breakpoints: RwLock::new(Vec::new()),
+            breakpoints: Arc::new(RwLock::new(Vec::new())),
+            function_breakpoints: Arc::new(RwLock::new(Vec::new())),
             paused_at: RwLock::new(None),
             active: true,
             pause_timeout_secs: 30, // Default 30s timeout for safety
         }
+    }
+
+    /// Get the shared breakpoints Arc for use with debugger registration.
+    pub fn shared_breakpoints(&self) -> SharedBreakpoints {
+        Arc::clone(&self.breakpoints)
+    }
+
+    /// Get the shared function breakpoints Arc for use with debugger registration.
+    pub fn shared_function_breakpoints(&self) -> SharedFunctionBreakpoints {
+        Arc::clone(&self.function_breakpoints)
     }
 
     /// Add a breakpoint.

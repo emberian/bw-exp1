@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use parking_lot::RwLock;
-use rhai::{Dynamic, Map};
+use rhai::{Dynamic, Map, Engine};
 use uuid::Uuid;
 
 use bw_core::events::GameEvent;
@@ -15,6 +15,7 @@ use crate::events::EventRegistry;
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
 use crate::ai::{BehaviorTreeRunner, AiContext, BtNode};
 use crate::persistence::{ScriptStateStore, PersistenceError};
+use crate::debug::{DebugController, EntityContext};
 
 use super::{EntityBehavior, EntityType, BehaviorState, BehaviorContext, BehaviorExecResult};
 
@@ -34,6 +35,8 @@ pub struct BehaviorManager {
     event_registry: Option<Arc<EventRegistry>>,
     /// Persistent state store for behavior data
     state_store: Option<Arc<dyn ScriptStateStore>>,
+    /// Debug controller for script debugging
+    debug_controller: Option<Arc<DebugController>>,
     /// Current game tick
     current_tick: RwLock<u64>,
     /// Current game time in seconds
@@ -51,9 +54,15 @@ impl BehaviorManager {
             state_accessor: None,
             event_registry: None,
             state_store: None,
+            debug_controller: None,
             current_tick: RwLock::new(0),
             current_game_time: RwLock::new(0.0),
         }
+    }
+
+    /// Set the debug controller for script debugging.
+    pub fn set_debug_controller(&mut self, controller: Arc<DebugController>) {
+        self.debug_controller = Some(controller);
     }
 
     /// Set the state store for persistent behavior data.
@@ -562,12 +571,48 @@ impl BehaviorManager {
             }
         };
 
-        // Call the hook
-        let result = self.engine.call_function_dynamic(
-            &behavior.script_path,
-            hook_name,
-            (ctx.to_dynamic(),),
-        );
+        // Check if we should use a debug engine
+        let debug_engine: Option<Engine> = self.debug_controller.as_ref().and_then(|dc| {
+            // Find any debug sessions that have breakpoints for this script
+            let sessions = dc.sessions_for_script(&behavior.script_path);
+            if let Some(&session_id) = sessions.first() {
+                // Create entity context for the debugger
+                let entity_ctx = EntityContext {
+                    entity_type: behavior.entity_type.as_str().to_string(),
+                    entity_id: behavior.entity_id,
+                    entity_name: format!("{}:{}", behavior.entity_type.as_str(), behavior.entity_id),
+                    sector_id: behavior.sector_id,
+                };
+
+                // Create a debug-enabled engine
+                let base_engine = self.engine.create_engine_with_bindings();
+                dc.create_debug_engine(session_id, base_engine, &behavior.script_path, Some(entity_ctx))
+            } else {
+                None
+            }
+        });
+
+        // Call the hook (with debug engine if available)
+        let result = if let Some(ref dbg_engine) = debug_engine {
+            tracing::debug!(
+                behavior_id = %behavior.id,
+                script = %behavior.script_path,
+                hook = hook_name,
+                "Executing with debug engine"
+            );
+            self.engine.call_function_dynamic_with_engine(
+                dbg_engine,
+                &behavior.script_path,
+                hook_name,
+                (ctx.to_dynamic(),),
+            )
+        } else {
+            self.engine.call_function_dynamic(
+                &behavior.script_path,
+                hook_name,
+                (ctx.to_dynamic(),),
+            )
+        };
 
         // Guard drop applies mutations automatically
 

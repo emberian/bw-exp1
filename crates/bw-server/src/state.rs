@@ -13,6 +13,7 @@ use bw_scripting::{
     ActionRegistry, ActionDispatcher,
     StateAccessor, StateProvider, ShipSnapshot, PlayerSnapshot, SectorSnapshot,
     StateMutation, MutationResult, FileStore,
+    debug::DebugController,
 };
 use bw_shared::ServerMessage;
 
@@ -137,6 +138,9 @@ pub struct GameState {
 
     /// Playtest manager for GM testing sessions
     pub playtest_manager: PlaytestManager,
+
+    /// Debug controller for script debugging sessions
+    pub debug_controller: DebugController,
 }
 
 impl GameState {
@@ -186,6 +190,7 @@ impl GameState {
             script_logs: RwLock::new(ScriptLogBuffer::new(1000)),
             metrics: MetricsStore::new(),
             playtest_manager: PlaytestManager::new(10), // Max 10 concurrent playtests
+            debug_controller: DebugController::new(),
         };
 
         // Load factions from database

@@ -1,7 +1,9 @@
 //! GM Editor state management
 
+mod debug_state;
 mod staged_changes;
 
+pub use debug_state::*;
 pub use staged_changes::*;
 
 use leptos::prelude::*;

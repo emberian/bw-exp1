@@ -31,7 +31,7 @@ tokio = { version = "1.42", features = ["full"] }
 futures = "0.3"
 
 # Scripting
-rhai = { version = "1.20", features = ["sync", "serde"] }
+rhai = { version = "1.20", features = ["sync", "serde", "debugging", "internals"] }
 
 # Web server
 axum = { version = "0.8", features = ["ws", "macros"] }

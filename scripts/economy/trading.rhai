@@ -14,7 +14,7 @@
 //
 // Returns: Map { success: bool, error: String, credits_spent: i64, quantity_bought: i64 }
 fn execute_buy(player_id, ship_id, station_id, cargo_type, quantity) {
-    // Get cargo definition
+    // Get cargo definition from archetype registry
     let cargo_def = get_cargo_def(cargo_type);
     if cargo_def == () {
         return #{
@@ -120,7 +120,7 @@ fn execute_buy(player_id, ship_id, station_id, cargo_type, quantity) {
 //
 // Returns: Map { success: bool, error: String, credits_gained: i64, quantity_sold: i64 }
 fn execute_sell(player_id, ship_id, station_id, cargo_type, quantity) {
-    // Get cargo definition
+    // Get cargo definition from archetype registry
     let cargo_def = get_cargo_def(cargo_type);
     if cargo_def == () {
         return #{
@@ -316,30 +316,28 @@ fn get_player_ship_id(player_id) {
 fn get_market_prices(station_id) {
     let prices = [];
 
-    // Get all available cargo types from data
-    let cargo_types = ["fuel", "ore", "rare_earths", "electronics", "food", "medical", "luxury", "weapons", "stolen_goods"];
+    // Get all available cargo types from archetype registry
+    let cargo_defs = all_cargo_types();
 
-    for cargo_type in cargo_types {
-        let cargo_def = get_cargo_def(cargo_type);
-        if cargo_def != () {
-            let base_price = cargo_def["base_price"];
-            if base_price == () { base_price = 100; }
+    for cargo_def in cargo_defs {
+        let cargo_type = cargo_def["id"];
+        let base_price = cargo_def["base_price"];
+        if base_price == () { base_price = 100; }
 
-            let buy_price = calculate_buy_price(station_id, cargo_type, base_price);
-            let sell_price = calculate_sell_price(station_id, cargo_type, base_price);
+        let buy_price = calculate_buy_price(station_id, cargo_type, base_price);
+        let sell_price = calculate_sell_price(station_id, cargo_type, base_price);
 
-            let is_legal = cargo_def["legal"];
-            if is_legal == () { is_legal = true; }
+        let is_legal = cargo_def["legal"];
+        if is_legal == () { is_legal = true; }
 
-            prices.push(#{
-                cargo_type: cargo_type,
-                name: cargo_def["name"],
-                buy_price: buy_price,
-                sell_price: sell_price,
-                legal: is_legal,
-                weight: cargo_def["weight"]
-            });
-        }
+        prices.push(#{
+            cargo_type: cargo_type,
+            name: cargo_def["name"],
+            buy_price: buy_price,
+            sell_price: sell_price,
+            legal: is_legal,
+            weight: cargo_def["weight"]
+        });
     }
 
     prices

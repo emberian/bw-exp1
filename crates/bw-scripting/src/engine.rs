@@ -745,6 +745,30 @@ impl ScriptEngine {
         result
     }
 
+    /// Run a script function with a custom engine (e.g., debug-enabled).
+    ///
+    /// This allows executing scripts with a specially configured engine,
+    /// such as one with debugging callbacks registered.
+    pub fn call_function_dynamic_with_engine(
+        &self,
+        custom_engine: &Engine,
+        script_name: &str,
+        function: &str,
+        args: impl rhai::FuncArgs,
+    ) -> Result<Dynamic, ScriptError> {
+        let scripts = self.scripts.read();
+        let ast = scripts.get(script_name)
+            .ok_or_else(|| ScriptError::NotFound(script_name.to_string()))?;
+
+        let start = Instant::now();
+        let result = custom_engine
+            .call_fn::<Dynamic>(&mut Scope::new(), ast, function, args)
+            .map_err(|e| ScriptError::from_eval_error(script_name, e));
+        self.profiler.record(script_name, function, start.elapsed());
+
+        result
+    }
+
     /// Run a script with a scope.
     pub fn run_with_scope(
         &self,
@@ -781,6 +805,37 @@ impl ScriptEngine {
     /// Get direct access to the Rhai engine for advanced usage.
     pub fn rhai_engine(&self) -> &Engine {
         &self.engine
+    }
+
+    /// Create a new Rhai engine with all bindings registered.
+    ///
+    /// This creates a fresh engine configured identically to the internal one,
+    /// useful for scenarios like debugging where a separate engine is needed.
+    pub fn create_engine_with_bindings(&self) -> Engine {
+        let mut engine = Engine::new();
+
+        // Safety limits for untrusted scripts
+        engine.set_max_operations(100_000);
+        engine.set_max_call_levels(32);
+        engine.set_max_expr_depths(64, 64);
+        engine.set_max_string_size(10_000);
+        engine.set_max_array_size(1_000);
+        engine.set_max_map_size(500);
+        engine.set_max_modules(50);
+
+        // Set up module resolver
+        let resolver = Self::create_module_resolver(&self.scripts_dir, self.modules_dir.as_deref());
+        engine.set_module_resolver(resolver);
+
+        // Register all API bindings
+        bindings::register_all(&mut engine);
+
+        engine
+    }
+
+    /// Get the scripts directory.
+    pub fn scripts_dir(&self) -> &str {
+        &self.scripts_dir
     }
 }
 

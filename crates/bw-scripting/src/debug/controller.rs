@@ -5,11 +5,12 @@
 
 use std::sync::Arc;
 use dashmap::DashMap;
-use parking_lot::RwLock;
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
+use rhai::Engine;
 
 use super::types::*;
+use super::rhai_integration::register_debugger;
 
 /// Channel capacity for debug events
 const EVENT_CHANNEL_CAPACITY: usize = 64;
@@ -83,7 +84,7 @@ impl DebugController {
 
     /// Get a session by ID.
     pub fn get_session(&self, session_id: Uuid) -> Option<Arc<DebugSession>> {
-        self.sessions.get(&session_id).map(|r| r.clone())
+        self.sessions.get(&session_id).map(|r| Arc::clone(&*r))
     }
 
     /// Get session by owner ID.
@@ -91,7 +92,7 @@ impl DebugController {
         self.sessions
             .iter()
             .find(|r| r.owner_id == owner_id)
-            .map(|r| r.clone())
+            .map(|r| Arc::clone(&*r))
     }
 
     /// Check if there's an active debug session for a target.
@@ -110,18 +111,20 @@ impl DebugController {
 
     /// Remove a breakpoint from a session.
     pub fn remove_breakpoint(&self, session_id: Uuid, breakpoint_id: Uuid) -> bool {
-        self.sessions
-            .get(&session_id)
-            .map(|s| s.remove_breakpoint(breakpoint_id))
-            .unwrap_or(false)
+        if let Some(session) = self.sessions.get(&session_id) {
+            session.remove_breakpoint(breakpoint_id)
+        } else {
+            false
+        }
     }
 
     /// Enable/disable a breakpoint.
     pub fn set_breakpoint_enabled(&self, session_id: Uuid, breakpoint_id: Uuid, enabled: bool) -> bool {
-        self.sessions
-            .get(&session_id)
-            .map(|s| s.set_breakpoint_enabled(breakpoint_id, enabled))
-            .unwrap_or(false)
+        if let Some(session) = self.sessions.get(&session_id) {
+            session.set_breakpoint_enabled(breakpoint_id, enabled)
+        } else {
+            false
+        }
     }
 
     /// Get all breakpoints for a session.
@@ -149,23 +152,23 @@ impl DebugController {
 
     /// Get the pause notifier for a session (to send pause events).
     pub fn get_pause_notifier(&self, session_id: Uuid) -> Option<broadcast::Sender<PausedState>> {
-        self.pause_notifiers.get(&session_id).map(|r| r.clone())
+        self.pause_notifiers.get(&session_id).map(|r| (*r).clone())
     }
 
     /// Get the command receiver for a session (for the debugger callback).
     pub fn get_command_receiver(&self, session_id: Uuid) -> Option<Arc<std::sync::Mutex<mpsc::Receiver<DebugCommand>>>> {
-        self.command_receivers.get(&session_id).map(|r| r.clone())
+        self.command_receivers.get(&session_id).map(|r| Arc::clone(&*r))
     }
 
     /// Get shared breakpoints for a session (for the debugger callback).
+    /// This returns the SAME Arc that the session uses, so changes are shared.
     pub fn get_shared_breakpoints(&self, session_id: Uuid) -> Option<SharedBreakpoints> {
-        self.sessions.get(&session_id).map(|s| {
-            // Create a new Arc<RwLock> that shares the breakpoints
-            // This is a bit awkward due to how DebugSession stores them
-            // For now, we'll clone the breakpoints into a shared container
-            let bps = s.breakpoints.read().clone();
-            Arc::new(RwLock::new(bps))
-        })
+        self.sessions.get(&session_id).map(|s| s.shared_breakpoints())
+    }
+
+    /// Get shared function breakpoints for a session.
+    pub fn get_shared_function_breakpoints(&self, session_id: Uuid) -> Option<SharedFunctionBreakpoints> {
+        self.sessions.get(&session_id).map(|s| s.shared_function_breakpoints())
     }
 
     /// Update paused state for a session.
@@ -215,6 +218,60 @@ impl DebugController {
             })
             .map(|r| r.id)
             .collect()
+    }
+
+    /// Create a debug-enabled Rhai engine for a specific session.
+    ///
+    /// The returned engine will:
+    /// - Stop at breakpoints set for this session
+    /// - Send pause notifications via the session's broadcast channel
+    /// - Wait for commands from the session's command channel
+    ///
+    /// This takes an owned engine (created via `ScriptEngine::create_engine_with_bindings()`)
+    /// and registers the debugger on it.
+    ///
+    /// Returns None if the session doesn't exist.
+    pub fn create_debug_engine(
+        &self,
+        session_id: Uuid,
+        mut base_engine: Engine,
+        script_path: &str,
+        entity_context: Option<EntityContext>,
+    ) -> Option<Engine> {
+        let session = self.sessions.get(&session_id)?;
+
+        // Get the channels and shared state
+        let pause_tx = self.get_pause_notifier(session_id)?;
+        let command_rx = self.get_command_receiver(session_id)?;
+        let breakpoints = session.shared_breakpoints();
+        let function_breakpoints = session.shared_function_breakpoints();
+
+        // Register the debugger on the provided engine
+        register_debugger(
+            &mut base_engine,
+            session_id,
+            breakpoints,
+            function_breakpoints,
+            pause_tx,
+            command_rx,
+            script_path.to_string(),
+            entity_context,
+        );
+
+        Some(base_engine)
+    }
+
+    /// Check if a session has breakpoints for a specific script.
+    pub fn has_breakpoints_for_script(&self, session_id: Uuid, script_path: &str) -> bool {
+        self.sessions
+            .get(&session_id)
+            .map(|s| {
+                s.breakpoints
+                    .read()
+                    .iter()
+                    .any(|bp| bp.source == script_path && bp.enabled)
+            })
+            .unwrap_or(false)
     }
 }
 

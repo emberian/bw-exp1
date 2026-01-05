@@ -3,3 +3,4 @@ node_modules
 *.db*
 /play
 crates/bw-frontend/dist
+third_party

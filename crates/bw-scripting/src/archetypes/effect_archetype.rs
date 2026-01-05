@@ -58,6 +58,7 @@ pub enum EffectTrigger {
     OnDamage,
     OnKill,
     OnTick,
+    OnIncomingMissile,
 }
 
 impl EffectTrigger {
@@ -68,6 +69,7 @@ impl EffectTrigger {
             "on_damage" => Some(EffectTrigger::OnDamage),
             "on_kill" => Some(EffectTrigger::OnKill),
             "on_tick" => Some(EffectTrigger::OnTick),
+            "on_incoming_missile" => Some(EffectTrigger::OnIncomingMissile),
             _ => None,
         }
     }

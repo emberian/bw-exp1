@@ -51,12 +51,14 @@ pub struct AbilityCost {
     pub ammunition: i32,
     /// Credits cost.
     pub credits: i64,
+    /// Shields cost (drains from own shields to power ability).
+    pub shields: i32,
 }
 
 impl AbilityCost {
     /// Check if there's any cost.
     pub fn is_free(&self) -> bool {
-        self.energy == 0 && self.fuel == 0 && self.ammunition == 0 && self.credits == 0
+        self.energy == 0 && self.fuel == 0 && self.ammunition == 0 && self.credits == 0 && self.shields == 0
     }
 
     /// Parse from Rhai map.
@@ -71,6 +73,7 @@ impl AbilityCost {
             fuel: get_i32(&map, "fuel").unwrap_or(0),
             ammunition: get_i32(&map, "ammunition").unwrap_or(0),
             credits: get_i64(&map, "credits").unwrap_or(0),
+            shields: get_i32(&map, "shields").unwrap_or(0),
         }
     }
 }
@@ -111,6 +114,10 @@ pub struct AbilityRequirements {
     pub out_of_combat_only: bool,
     /// Must be in combat.
     pub in_combat_only: bool,
+    /// Minimum fame required.
+    pub min_fame: Option<i32>,
+    /// Minimum or maximum reputation required (can be negative for "shady" requirements).
+    pub min_reputation: Option<i32>,
 }
 
 impl AbilityRequirements {
@@ -127,6 +134,8 @@ impl AbilityRequirements {
             required_upgrades: get_string_array(&map, "required_upgrades"),
             out_of_combat_only: get_bool(&map, "out_of_combat_only").unwrap_or(false),
             in_combat_only: get_bool(&map, "in_combat_only").unwrap_or(false),
+            min_fame: get_i32(&map, "min_fame"),
+            min_reputation: get_i32(&map, "min_reputation"),
         }
     }
 }
