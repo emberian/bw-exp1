@@ -156,6 +156,17 @@ pub fn RegisterPage() -> impl IntoView {
                                text-white focus:outline-none focus:border-amber-500"
                         placeholder="Enter your callsign..."
                     />
+                    // Inline validation hint
+                    {move || {
+                        let len = username.get().len();
+                        if len == 0 {
+                            view! { <div class="mt-1 text-xs text-slate-500">"3-32 characters"</div> }.into_any()
+                        } else if len < 3 {
+                            view! { <div class="mt-1 text-xs text-red-400">{format!("{} more character{} needed", 3 - len, if len == 2 { "" } else { "s" })}</div> }.into_any()
+                        } else {
+                            view! { <div class="mt-1 text-xs text-green-400">"Valid callsign"</div> }.into_any()
+                        }
+                    }}
                 </div>
 
                 // Password field
@@ -171,6 +182,17 @@ pub fn RegisterPage() -> impl IntoView {
                                text-white focus:outline-none focus:border-amber-500"
                         placeholder="Enter password (min 8 characters)..."
                     />
+                    // Inline validation hint
+                    {move || {
+                        let len = password.get().len();
+                        if len == 0 {
+                            view! { <div class="mt-1 text-xs text-slate-500">"Minimum 8 characters"</div> }.into_any()
+                        } else if len < 8 {
+                            view! { <div class="mt-1 text-xs text-red-400">{format!("{} more character{} needed", 8 - len, if 8 - len == 1 { "" } else { "s" })}</div> }.into_any()
+                        } else {
+                            view! { <div class="mt-1 text-xs text-green-400">"Password length OK"</div> }.into_any()
+                        }
+                    }}
                 </div>
 
                 // Password confirmation field
@@ -186,6 +208,18 @@ pub fn RegisterPage() -> impl IntoView {
                                text-white focus:outline-none focus:border-amber-500"
                         placeholder="Confirm your password..."
                     />
+                    // Inline validation hint
+                    {move || {
+                        let confirm = password_confirm.get();
+                        let pass = password.get();
+                        if confirm.is_empty() {
+                            view! { <div class="mt-1 text-xs text-slate-500">"Re-enter your password"</div> }.into_any()
+                        } else if confirm != pass {
+                            view! { <div class="mt-1 text-xs text-red-400">"Passwords don't match"</div> }.into_any()
+                        } else {
+                            view! { <div class="mt-1 text-xs text-green-400">"Passwords match"</div> }.into_any()
+                        }
+                    }}
                 </div>
 
                 // Faction selection

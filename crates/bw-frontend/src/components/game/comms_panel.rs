@@ -1,6 +1,10 @@
 //! Communications panel component
 //!
 //! Displays chat messages and allows sending to different channels.
+//!
+//! Design note: Chat intentionally does NOT auto-scroll on new messages.
+//! Users control their scroll position; a "New messages" button appears
+//! when not at bottom. This prevents jarring scroll jumps while reading.
 
 use leptos::prelude::*;
 use leptos::html::Div;
@@ -108,12 +112,11 @@ pub fn CommsPanel() -> impl IntoView {
                             let sender_name = msg.sender_name.clone();
                             let message = msg.message.clone();
 
-                            // Format timestamp as HH:MM
-                            let timestamp = msg.timestamp;
+                            // Format timestamp as HH:MM in user's local timezone
                             let time_str = {
-                                let secs = (timestamp / 1000) % 86400; // seconds since midnight
-                                let hours = (secs / 3600) % 24;
-                                let mins = (secs / 60) % 60;
+                                let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(msg.timestamp as f64));
+                                let hours = date.get_hours();
+                                let mins = date.get_minutes();
                                 format!("{:02}:{:02}", hours, mins)
                             };
 

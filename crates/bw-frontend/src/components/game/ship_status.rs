@@ -48,17 +48,10 @@ pub fn ShipStatus() -> impl IntoView {
                     <div class="text-slate-200 font-medium">{move || game_state.ship_name.get()}</div>
                     <span class=move || {
                         let status = game_state.ship_status.get();
-                        let color = match status.as_str() {
-                            "Idle" => "text-green-400",
-                            "InTransit" => "text-blue-400",
-                            "Docked" => "text-amber-400",
-                            "InCombat" => "text-red-400",
-                            "Disabled" => "text-red-600",
-                            _ => "text-slate-400",
-                        };
+                        let color = status_color(&status);
                         format!("text-xs px-2 py-0.5 rounded bg-slate-700 {}", color)
                     }>
-                        {move || game_state.ship_status.get()}
+                        {move || status_display(&game_state.ship_status.get())}
                     </span>
                 </div>
                 <div class="text-sm text-slate-400">"Class: "{move || game_state.ship_class.get()}</div>
@@ -218,5 +211,43 @@ fn WeaponStatus(
                 <span class="text-amber-400">{damage}" dmg"</span>
             </div>
         </div>
+    }
+}
+
+/// Get color class for ship status.
+fn status_color(status: &str) -> &'static str {
+    if status.starts_with("Idle") {
+        "text-green-400"
+    } else if status.starts_with("InTransit") {
+        "text-blue-400"
+    } else if status.starts_with("Docked") {
+        "text-amber-400"
+    } else if status.starts_with("InCombat") {
+        "text-red-400"
+    } else if status.starts_with("Disabled") {
+        "text-red-600"
+    } else if status.starts_with("Destroyed") {
+        "text-red-800"
+    } else {
+        "text-slate-400"
+    }
+}
+
+/// Get display-friendly status text.
+fn status_display(status: &str) -> &'static str {
+    if status.starts_with("Idle") {
+        "Idle"
+    } else if status.starts_with("InTransit") {
+        "Moving"
+    } else if status.starts_with("Docked") {
+        "Docked"
+    } else if status.starts_with("InCombat") {
+        "In Combat"
+    } else if status.starts_with("Disabled") {
+        "Disabled"
+    } else if status.starts_with("Destroyed") {
+        "Destroyed"
+    } else {
+        "Unknown"
     }
 }

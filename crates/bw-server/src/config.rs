@@ -10,6 +10,11 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher, EventKind, event::Modif
 use parking_lot::RwLock;
 use serde::Deserialize;
 
+// Re-export simulation config types
+pub use crate::simulation::sim_config::{
+    SimulationConfig, NpcSpawningConfig, DangerMultipliers, CombatConfig,
+};
+
 /// Default config file path.
 pub const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
@@ -23,6 +28,8 @@ pub struct ServerConfig {
     pub admin: AdminSettings,
     /// Scripting settings
     pub scripting: ScriptingSettings,
+    /// Simulation settings (spawning, combat, etc.)
+    pub simulation: SimulationConfig,
 }
 
 /// General server settings.
@@ -35,6 +42,8 @@ pub struct ServerSettings {
     pub port: u16,
     /// Database URL (can be overridden by DATABASE_URL env var)
     pub database_url: Option<String>,
+    /// Allowed CORS origins (empty = allow all, which is insecure)
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for ServerSettings {
@@ -43,6 +52,7 @@ impl Default for ServerSettings {
             host: "0.0.0.0".to_string(),
             port: 3000,
             database_url: None,
+            cors_origins: vec![],
         }
     }
 }

@@ -16,6 +16,7 @@ use bw_shared::ServerMessage;
 
 use crate::persistence::Database;
 use crate::scripting::ScriptLogBuffer;
+use crate::simulation::metrics::MetricsStore;
 
 /// A pending squadron invitation.
 #[derive(Clone, Debug)]
@@ -115,6 +116,9 @@ pub struct GameState {
 
     /// Script execution logs (ring buffer)
     pub script_logs: RwLock<ScriptLogBuffer>,
+
+    /// Performance metrics store
+    pub metrics: MetricsStore,
 }
 
 impl GameState {
@@ -154,6 +158,7 @@ impl GameState {
             event_dispatcher: RwLock::new(event_dispatcher),
             state_accessor: RwLock::new(None),
             script_logs: RwLock::new(ScriptLogBuffer::new(1000)),
+            metrics: MetricsStore::new(),
         };
 
         // Load factions from database

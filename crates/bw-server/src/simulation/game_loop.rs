@@ -6,19 +6,22 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use bw_core::models::{ShipStatus, MissionType, Mission, MissionStatus};
-use bw_shared::{ServerMessage, dto::*, TICK_RATE, TICK_DURATION_MS, FAME_DECAY_INTERVAL, FAME_DECAY_RATE};
-use crate::GameState;
+use bw_core::models::{MissionStatus, MissionType, Mission, ShipStatus};
+use bw_scripting::EntityType;
+use bw_shared::{ServerMessage, dto::*, FAME_DECAY_INTERVAL, FAME_DECAY_RATE, TICK_DURATION_MS, TICK_RATE};
 use tokio::sync::watch;
 
-use super::npc_spawner::{try_spawn_npcs, cleanup_npcs, NpcSpawnConfig};
-use bw_scripting::EntityType;
 use super::combat_processor::process_sector_combats;
+use super::metrics::{SectorMetricsBuilder, TickMetricsBuilder};
+use super::npc_spawner::{cleanup_npcs, try_spawn_npcs};
+use super::script_hooks::ScriptHooks;
+use super::sim_config::NpcSpawningConfig;
+use crate::config::config;
+use crate::GameState;
 
 /// Run the main game loop with graceful shutdown support.
 pub async fn run_game_loop(state: Arc<GameState>, shutdown: watch::Receiver<bool>) {
     let tick_duration = Duration::from_millis(TICK_DURATION_MS);
-    let npc_config = NpcSpawnConfig::default();
     let delta_time = TICK_DURATION_MS as f64 / 1000.0; // 0.1 seconds
 
     tracing::info!("Game loop started at {} TPS", TICK_RATE);
@@ -32,15 +35,21 @@ pub async fn run_game_loop(state: Arc<GameState>, shutdown: watch::Receiver<bool
         let tick_start = Instant::now();
         let tick = state.increment_tick();
 
+        // Initialize metrics builder
+        let mut metrics = TickMetricsBuilder::new(tick);
+
         // === Scripting: Process coroutines ===
+        metrics.start_phase("coroutines");
         {
             let result = state.coroutine_scheduler.write().tick(tick);
             for (id, error) in result.failed {
                 state.log_script_error(format!("Coroutine {} failed: {}", id, error));
             }
         }
+        metrics.end_phase();
 
         // === Scripting: Update all behaviors ===
+        metrics.start_phase("behaviors");
         {
             let results = state.behavior_manager.write().update_all(tick, delta_time);
             for result in results {
@@ -53,28 +62,105 @@ pub async fn run_game_loop(state: Arc<GameState>, shutdown: watch::Receiver<bool
                 }
             }
         }
+        metrics.end_phase();
 
-        // Process each sector
+        // Process each sector (with per-sector metrics)
+        // Get simulation config from ConfigManager (supports hot-reload)
+        let sim_config = config().get();
+        let npc_config = &sim_config.simulation.npc_spawning;
+
+        metrics.start_phase("sectors_total");
         for sector_ref in state.sectors.iter() {
             let sector_id = *sector_ref.key();
-            process_sector_tick(&state, sector_id, tick, &npc_config).await;
+            let sector_name = sector_ref.sector.name.clone();
+            let sector_timing = process_sector_tick_with_metrics(
+                &state,
+                sector_id,
+                sector_name,
+                tick,
+                npc_config,
+            )
+            .await;
+            metrics.add_sector_timing(sector_timing);
         }
+        metrics.end_phase();
 
         // Global tick processing
+        metrics.start_phase("global");
         process_global_tick(&state, tick).await;
+        metrics.end_phase();
+
+        // Finalize and store metrics
+        let tick_metrics = metrics.finish();
+
+        // Log warning if over budget (keep existing behavior)
+        if tick_metrics.over_budget {
+            tracing::warn!(
+                "Tick {} took {}us (over budget by {}us)",
+                tick,
+                tick_metrics.total_us,
+                tick_metrics.total_us.saturating_sub(tick_metrics.budget_us)
+            );
+        }
+
+        // Store metrics
+        state.metrics.record(tick_metrics.clone());
+
+        // Send to subscribers
+        broadcast_metrics(&state, tick_metrics).await;
 
         // Sleep for remainder of tick
         let elapsed = tick_start.elapsed();
         if elapsed < tick_duration {
             tokio::time::sleep(tick_duration - elapsed).await;
-        } else {
-            tracing::warn!("Tick {} took {:?} (over budget)", tick, elapsed);
         }
     }
 }
 
-/// Process global game state (fame decay, etc).
+/// Broadcast metrics to subscribed players.
+async fn broadcast_metrics(state: &GameState, metrics: TickMetricsDto) {
+    let subscribers = state.metrics.get_subscribers();
+    if subscribers.is_empty() {
+        return;
+    }
+
+    let tick = metrics.tick;
+    let msg = ServerMessage::TickMetrics(metrics);
+
+    // Also send history every 10 ticks (1 second) for updated stats
+    let history_msg = if tick % 10 == 0 {
+        Some(ServerMessage::TickMetricsHistory(state.metrics.get_history()))
+    } else {
+        None
+    };
+
+    for player_id in subscribers {
+        if let Some(session) = state.players.get(&player_id) {
+            if let Some(ref conn) = session.connection {
+                let _ = conn.send(msg.clone()).await;
+                if let Some(ref hist) = history_msg {
+                    let _ = conn.send(hist.clone()).await;
+                }
+            }
+        }
+    }
+}
+
+/// Process global game state (fame decay, session cleanup, etc).
 async fn process_global_tick(state: &GameState, tick: u64) {
+    // Session cleanup every 600 ticks (1 minute at 10 TPS)
+    if tick % 600 == 0 {
+        match state.db.sessions().delete_expired().await {
+            Ok(count) if count > 0 => {
+                tracing::info!("Cleaned up {} expired sessions", count);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to cleanup expired sessions: {}", e);
+            }
+            _ => {}
+        }
+    }
+
     // Fame decay every FAME_DECAY_INTERVAL ticks
     if tick % FAME_DECAY_INTERVAL as u64 == 0 {
         // Only process online players with fame > 0
@@ -123,10 +209,19 @@ async fn process_global_tick(state: &GameState, tick: u64) {
     }
 }
 
-async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_config: &NpcSpawnConfig) {
+/// Process a sector tick with detailed timing metrics.
+async fn process_sector_tick_with_metrics(
+    state: &GameState,
+    sector_id: Uuid,
+    sector_name: String,
+    tick: u64,
+    npc_config: &NpcSpawningConfig,
+) -> SectorTimingDto {
+    let mut sector_metrics = SectorMetricsBuilder::new(sector_id, sector_name);
+
     let sector = match state.sectors.get(&sector_id) {
         Some(s) => s,
-        None => return,
+        None => return sector_metrics.finish(),
     };
 
     let mut ship_updates = Vec::new();
@@ -135,7 +230,8 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
     let mut mission_updates = Vec::new();
     let mut events = Vec::new();
 
-    // Process ship movement
+    // === Movement ===
+    sector_metrics.start_phase("movement");
     for ship_entry in sector.ship_ids.iter() {
         let ship_id = *ship_entry.key();
 
@@ -179,8 +275,10 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
             }
         }
     }
+    sector_metrics.end_phase();
 
-    // Process active combats
+    // === Combat ===
+    sector_metrics.start_phase("combat");
     let combat_result = process_sector_combats(state, &sector, tick);
 
     // Send combat updates to participants
@@ -194,10 +292,13 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
 
     // Mark destroyed ships for despawn
     ship_despawns.extend(combat_result.destroyed_ships);
+    sector_metrics.end_phase();
 
-    // Spawn NPCs (every 50 ticks = 5 seconds)
+    // === NPC Spawning (every 50 ticks) ===
     if tick % 50 == 0 {
-        let spawn_result = try_spawn_npcs(state, &sector, tick, npc_config);
+        sector_metrics.start_phase("npc_spawn");
+        let hooks = ScriptHooks::new(state.scripts.clone());
+        let spawn_result = try_spawn_npcs(state, &sector, tick, npc_config, Some(&hooks));
         ship_spawns.extend(spawn_result.ship_dtos);
 
         // Attach behaviors to newly spawned NPCs
@@ -234,22 +335,32 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
                 tracing::warn!("Failed to attach behavior to NPC {}: {}", ship_id, e);
             }
         }
+        sector_metrics.end_phase();
+    } else {
+        sector_metrics.record_skipped("npc_spawn");
     }
 
-    // Cleanup destroyed NPCs
-    let despawned = cleanup_npcs(state, &sector);
+    // === NPC Cleanup ===
+    sector_metrics.start_phase("npc_cleanup");
+    let despawned = cleanup_npcs(state, &sector, npc_config.despawn_distance);
     for &ship_id in &despawned {
         // Detach any behaviors attached to this ship
         state.behavior_manager.write().detach_for_entity(ship_id);
     }
     ship_despawns.extend(despawned);
+    sector_metrics.end_phase();
 
-    // Spawn random missions (occasionally)
+    // === Mission Spawning (every 100 ticks) ===
     if tick % 100 == 0 && sector.missions.len() < 5 {
+        sector_metrics.start_phase("mission_spawn");
         maybe_spawn_mission(state, &sector, tick).await;
+        sector_metrics.end_phase();
+    } else {
+        sector_metrics.record_skipped("mission_spawn");
     }
 
-    // Check mission expirations
+    // === Mission Expiration ===
+    sector_metrics.start_phase("mission_expire");
     let expired_missions: Vec<Uuid> = sector.missions.iter()
         .filter(|m| m.is_expired() && matches!(m.status, MissionStatus::Available))
         .map(|m| m.id)
@@ -272,8 +383,10 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
             });
         }
     }
+    sector_metrics.end_phase();
 
-    // Broadcast state update if there are any changes
+    // === Broadcasting ===
+    sector_metrics.start_phase("broadcast");
     if !ship_updates.is_empty() || !events.is_empty() || !ship_spawns.is_empty() || !ship_despawns.is_empty() || !mission_updates.is_empty() {
         let update = ServerMessage::StateUpdate {
             tick,
@@ -286,6 +399,9 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
 
         sector.broadcast(update).await;
     }
+    sector_metrics.end_phase();
+
+    sector_metrics.finish()
 }
 
 async fn maybe_spawn_mission(_state: &GameState, sector: &crate::SectorInstance, _tick: u64) {

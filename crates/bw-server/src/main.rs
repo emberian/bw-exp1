@@ -8,6 +8,7 @@ use axum::{Router, routing::get};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use axum::http::{Method, HeaderValue};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use bw_server::{
@@ -121,14 +122,30 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("No static directory found, skipping landing page serving");
     }
 
+    // Build CORS layer based on configuration
+    let cors = if server_config.server.cors_origins.is_empty() {
+        tracing::warn!("CORS configured to allow all origins - this is insecure for production!");
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+            .allow_headers(Any)
+            .allow_credentials(false)
+    } else {
+        let origins: Vec<HeaderValue> = server_config.server.cors_origins
+            .iter()
+            .filter_map(|origin| origin.parse().ok())
+            .collect();
+        tracing::info!("CORS allowed origins: {:?}", server_config.server.cors_origins);
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+            .allow_headers(Any)
+            .allow_credentials(true)
+    };
+
     // Apply middleware
     let app = app
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(cors)
         .layer(TraceLayer::new_for_http());
 
     // Start server with graceful shutdown
@@ -141,7 +158,11 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     // Run server with graceful shutdown on Ctrl+C
-    axum::serve(listener, app)
+    // Use into_make_service_with_connect_info to enable IP-based rate limiting
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
         .with_graceful_shutdown(async move {
             tokio::signal::ctrl_c()
                 .await

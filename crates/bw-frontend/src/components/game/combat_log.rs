@@ -1,8 +1,13 @@
 //! Combat log component
 //!
 //! Displays combat events and status when the player is in combat.
+//!
+//! Design note: Combat log intentionally does NOT auto-scroll on new events.
+//! Users control their scroll position; a "New events" button appears
+//! when not at bottom. This prevents jarring scroll jumps during combat.
 
 use leptos::prelude::*;
+use leptos::html::Div;
 
 use crate::api::WsService;
 use crate::state::GameState;
@@ -19,6 +24,28 @@ pub fn CombatLog() -> impl IntoView {
     let combat_winner = move || game_state.combat_winner.get();
     let selected_target = move || game_state.selected_target.get();
     let ammunition = move || game_state.ammunition.get();
+
+    // Scroll tracking - same pattern as comms panel
+    let events_ref = NodeRef::<Div>::new();
+    let is_at_bottom = RwSignal::new(true);
+
+    let handle_scroll = move |_| {
+        if let Some(el) = events_ref.get() {
+            let scroll_top = el.scroll_top();
+            let scroll_height = el.scroll_height();
+            let client_height = el.client_height();
+            // Consider "at bottom" if within 50px of bottom
+            let at_bottom = scroll_height - scroll_top - client_height < 50;
+            is_at_bottom.set(at_bottom);
+        }
+    };
+
+    let scroll_to_bottom = move |_| {
+        if let Some(el) = events_ref.get() {
+            el.set_scroll_top(el.scroll_height());
+            is_at_bottom.set(true);
+        }
+    };
 
     view! {
         <div class="h-full flex flex-col">
@@ -64,6 +91,32 @@ pub fn CombatLog() -> impl IntoView {
 
                         view! {
                             <div class="p-2 border-b border-slate-700 bg-slate-800/50">
+                                // Ammo indicator - prominently shows remaining ammunition
+                                <div class="mb-2">
+                                    <div class="flex justify-between text-xs mb-1">
+                                        <span class="text-slate-400">"Ammunition"</span>
+                                        <span class=move || {
+                                            let ammo = ammunition();
+                                            if ammo <= 0.0 { "text-red-400 font-bold" }
+                                            else if ammo < 15.0 { "text-amber-400" }
+                                            else { "text-slate-300" }
+                                        }>
+                                            {move || format!("{:.0}%", ammunition())}
+                                        </span>
+                                    </div>
+                                    <div class="h-2 bg-slate-700 rounded overflow-hidden">
+                                        <div
+                                            class=move || {
+                                                let ammo = ammunition();
+                                                if ammo <= 0.0 { "h-full bg-red-500" }
+                                                else if ammo < 15.0 { "h-full bg-amber-500 transition-all" }
+                                                else { "h-full bg-blue-500 transition-all" }
+                                            }
+                                            style=move || format!("width: {}%", ammunition())
+                                        />
+                                    </div>
+                                </div>
+
                                 <div class="text-xs text-slate-400 mb-2">"Weapons"</div>
                                 <Show
                                     when=move || has_weapons
@@ -106,47 +159,67 @@ pub fn CombatLog() -> impl IntoView {
                     }
                 }}
 
-                // Event log
-                <div class="flex-1 overflow-y-auto p-2 space-y-1 text-xs">
-                    <For
-                        each=move || {
-                            // Add index to each event for unique keys
-                            combat_events().into_iter().enumerate().collect::<Vec<_>>()
-                        }
-                        key=|(idx, _)| *idx
-                        children=move |(_, event)| {
-                            let event_color = match event.event_type.as_str() {
-                                "hit" => "text-red-400",
-                                "miss" => "text-slate-500",
-                                "critical" => "text-amber-400",
-                                "shield" => "text-blue-400",
-                                _ => "text-slate-400",
-                            };
-                            // Use the round stored with the event, not the current round
-                            let event_round = event.round;
-
-                            view! {
-                                <div class="leading-relaxed">
-                                    <span class="text-slate-600 mr-1">"[R"{event_round}"]"</span>
-                                    <span class=event_color>
-                                        {if event.hit { "HIT" } else { "MISS" }}
-                                    </span>
-                                    " "
-                                    <span class="text-slate-300">{event.attacker_name.clone()}</span>
-                                    " → "
-                                    <span class="text-slate-300">{event.target_name.clone()}</span>
-                                    {event.damage.map(|d| view! {
-                                        <span class="text-red-400">{format!(" ({:.0} dmg)", d)}</span>
-                                    })}
-                                </div>
+                // Event log (with scroll tracking)
+                <div class="flex-1 relative">
+                    <div
+                        node_ref=events_ref
+                        on:scroll=handle_scroll
+                        class="absolute inset-0 overflow-y-auto p-2 space-y-1 text-xs"
+                    >
+                        <For
+                            each=move || {
+                                // Add index to each event for unique keys
+                                combat_events().into_iter().enumerate().collect::<Vec<_>>()
                             }
-                        }
-                    />
+                            key=|(idx, _)| *idx
+                            children=move |(_, event)| {
+                                let event_color = match event.event_type.as_str() {
+                                    "hit" => "text-red-400",
+                                    "miss" => "text-slate-500",
+                                    "critical" => "text-amber-400",
+                                    "shield" => "text-blue-400",
+                                    _ => "text-slate-400",
+                                };
+                                // Use the round stored with the event, not the current round
+                                let event_round = event.round;
 
-                    <Show when=move || combat_events().is_empty()>
-                        <div class="text-slate-500 italic text-center py-4">
-                            "Waiting for combat events..."
-                        </div>
+                                view! {
+                                    <div class="leading-relaxed">
+                                        <span class="text-slate-600 mr-1">"[R"{event_round}"]"</span>
+                                        <span class=event_color>
+                                            {if event.hit { "HIT" } else { "MISS" }}
+                                        </span>
+                                        " "
+                                        <span class="text-slate-300">{event.attacker_name.clone()}</span>
+                                        " → "
+                                        <span class="text-slate-300">{event.target_name.clone()}</span>
+                                        {event.damage.map(|d| view! {
+                                            <span class="text-red-400">{format!(" ({:.0} dmg)", d)}</span>
+                                        })}
+                                    </div>
+                                }
+                            }
+                        />
+
+                        <Show when=move || combat_events().is_empty()>
+                            <div class="text-slate-500 italic text-center py-4">
+                                "Waiting for combat events..."
+                            </div>
+                        </Show>
+                    </div>
+
+                    // Jump to bottom button (when not at bottom)
+                    <Show when=move || !is_at_bottom.get() && !combat_events().is_empty()>
+                        <button
+                            on:click=scroll_to_bottom
+                            class="absolute bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 bg-red-600 hover:bg-red-500
+                                   rounded-full text-xs text-white shadow-lg flex items-center gap-1 transition-all"
+                        >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M19 12l-7 7-7-7" />
+                            </svg>
+                            "New events"
+                        </button>
                     </Show>
                 </div>
             </Show>

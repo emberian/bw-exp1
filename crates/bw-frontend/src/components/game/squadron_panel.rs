@@ -33,7 +33,6 @@ pub fn SquadronPanel() -> impl IntoView {
 /// Display when player is in a squadron.
 #[component]
 fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
-    let game_state = expect_context::<GameState>();
     let ws = expect_context::<WsService>();
 
     // Confirmation dialog state

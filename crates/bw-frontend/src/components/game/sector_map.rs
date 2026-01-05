@@ -8,6 +8,7 @@ use wasm_bindgen::JsCast;
 
 use crate::api::WsService;
 use crate::state::{GameState, LocationInfo, ShipInfo, AdjacentSectorInfo};
+use crate::utils::distance;
 
 use super::CombatIndicator;
 
@@ -518,7 +519,7 @@ where
     let on_close_clone = on_close.clone();
 
     view! {
-        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-900/95 border border-purple-500/50 rounded-lg p-4 w-80 shadow-lg z-50">
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-900/95 border border-purple-500/50 rounded-lg p-4 w-80 shadow-lg z-40">
             // Header
             <div class="flex justify-between items-center mb-4">
                 <h3 class="font-semibold text-purple-400">"Jumpgate Navigation"</h3>
@@ -578,9 +579,4 @@ where
             </div>
         </div>
     }
-}
-
-/// Calculate distance between two points.
-fn distance(x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
-    ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt()
 }

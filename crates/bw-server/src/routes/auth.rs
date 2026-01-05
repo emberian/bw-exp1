@@ -2,19 +2,32 @@
 //!
 //! Provides registration, login, logout, and token validation endpoints.
 
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::StatusCode,
+    routing::post,
+    Json, Router,
+};
 use chrono::Duration;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 use uuid::Uuid;
 
 use bw_core::models::*;
 
 use crate::{
-    auth::{generate_token, hash_password, hash_token, verify_password, AuthExtractor},
+    auth::{generate_token, hash_password, hash_token, verify_password},
+    middleware::RateLimiter,
     state::GameState,
     PlayerSession,
 };
+
+/// Shared rate limiter for auth endpoints.
+static AUTH_RATE_LIMITER: std::sync::OnceLock<RateLimiter> = std::sync::OnceLock::new();
+
+fn get_auth_rate_limiter() -> &'static RateLimiter {
+    AUTH_RATE_LIMITER.get_or_init(|| crate::middleware::auth_rate_limiter())
+}
 
 /// Build the auth router.
 pub fn router() -> Router<Arc<GameState>> {
@@ -100,9 +113,20 @@ pub struct ValidateResponse {
 
 /// Register a new player account.
 async fn register(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<GameState>>,
     Json(req): Json<RegisterRequest>,
 ) -> (StatusCode, Json<AuthResponse>) {
+    // Rate limiting
+    let ip = addr.ip().to_string();
+    if get_auth_rate_limiter().check(&ip).is_err() {
+        tracing::warn!(ip = %ip, "Rate limit exceeded on register");
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(AuthResponse::error("Too many requests. Please try again later.")),
+        );
+    }
+
     // Validate username length
     if req.username.len() < 3 || req.username.len() > 24 {
         return (
@@ -208,18 +232,19 @@ async fn register(
     let mut ship = ship;
     ship.owner_id = Some(player_id);
 
-    // Persist to database
-    if let Err(e) = state.db.players().insert(&player, &password_hash).await {
-        tracing::error!("Failed to insert player: {}", e);
+    // Persist to database atomically (player and ship together)
+    if let Err(e) = state.db.register_player_atomically(&player, &password_hash, &ship).await {
+        tracing::error!("Failed to register player: {}", e);
+        // Check if it's a unique constraint violation (username taken - race condition)
+        let error_msg = if e.to_string().contains("UNIQUE constraint") {
+            "Username already taken"
+        } else {
+            "Failed to create account"
+        };
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AuthResponse::error("Failed to create account")),
+            Json(AuthResponse::error(error_msg)),
         );
-    }
-
-    if let Err(e) = state.db.ships().insert(&ship).await {
-        tracing::error!("Failed to insert ship: {}", e);
-        // Note: player was created, ideally would rollback here
     }
 
     // Generate session token
@@ -262,9 +287,20 @@ async fn register(
 
 /// Log in to an existing account.
 async fn login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<GameState>>,
     Json(req): Json<LoginRequest>,
 ) -> (StatusCode, Json<AuthResponse>) {
+    // Rate limiting
+    let ip = addr.ip().to_string();
+    if get_auth_rate_limiter().check(&ip).is_err() {
+        tracing::warn!(ip = %ip, username = %req.username, "Rate limit exceeded on login");
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(AuthResponse::error("Too many requests. Please try again later.")),
+        );
+    }
+
     // Find player by username and get password hash
     let (player, password_hash) = match state
         .db
@@ -398,34 +434,3 @@ async fn validate_token(
     }
 }
 
-/// Get the current authenticated player (protected route example).
-pub async fn get_current_player(
-    auth: AuthExtractor,
-    State(state): State<Arc<GameState>>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    // Get player from cache or database
-    let player = if let Some(p) = state.player_data.get(&auth.player_id) {
-        p.clone()
-    } else if let Ok(Some(p)) = state.db.players().find_by_id(auth.player_id).await {
-        state.player_data.insert(auth.player_id, p.clone());
-        p
-    } else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Player not found" })),
-        );
-    };
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "id": player.id,
-            "username": player.username,
-            "reputation": player.resources.reputation,
-            "fame": player.resources.fame,
-            "faction_id": player.faction_id,
-            "active_ship_id": player.active_ship_id,
-            "squadron_id": player.squadron_id,
-        })),
-    )
-}

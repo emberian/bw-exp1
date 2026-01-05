@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod middleware;
 pub mod persistence;
 pub mod reload;
 pub mod routes;

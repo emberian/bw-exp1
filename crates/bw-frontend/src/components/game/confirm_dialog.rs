@@ -85,7 +85,7 @@ where
 
     view! {
         <Show when=move || state.visible.get()>
-            <div class="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div class="fixed inset-0 bg-black/70 flex items-center justify-center z-60">
                 <div class="bg-slate-800 rounded-lg border border-slate-600 shadow-xl max-w-md w-full mx-4">
                     // Header
                     <div class="p-4 border-b border-slate-700">

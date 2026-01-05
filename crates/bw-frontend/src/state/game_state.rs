@@ -72,6 +72,8 @@ pub struct GameState {
 
     // Chat messages
     pub chat_messages: RwSignal<Vec<ChatMessageInfo>>,
+    /// Monotonic counter for unique message IDs
+    chat_message_counter: RwSignal<u64>,
 
     // Squadron state
     pub squadron: RwSignal<Option<SquadronInfo>>,
@@ -98,6 +100,11 @@ pub struct GameState {
     // Error/notification
     pub last_error: RwSignal<Option<String>>,
     pub notification: RwSignal<Option<String>>,
+
+    // Debug panel state
+    pub show_debug_panel: RwSignal<bool>,
+    pub tick_metrics: RwSignal<Option<TickMetricsInfo>>,
+    pub tick_metrics_history: RwSignal<Option<TickMetricsHistoryInfo>>,
 }
 
 /// Location info for display.
@@ -242,6 +249,48 @@ pub struct HailInfo {
     pub received_at: f64, // timestamp in ms for auto-dismiss
 }
 
+// =============================================================================
+// Performance Metrics Info Types
+// =============================================================================
+
+/// Tick metrics info for display.
+#[derive(Clone, Debug, Default)]
+pub struct TickMetricsInfo {
+    pub tick: u64,
+    pub total_us: u64,
+    pub budget_us: u64,
+    pub over_budget: bool,
+    pub phases: Vec<PhaseTimingInfo>,
+    pub sectors: Vec<SectorTimingInfo>,
+}
+
+/// Phase timing info for display.
+#[derive(Clone, Debug, Default)]
+pub struct PhaseTimingInfo {
+    pub name: String,
+    pub duration_us: u64,
+    pub skipped: bool,
+}
+
+/// Sector timing info for display.
+#[derive(Clone, Debug, Default)]
+pub struct SectorTimingInfo {
+    pub sector_id: Uuid,
+    pub sector_name: String,
+    pub total_us: u64,
+    pub phases: Vec<PhaseTimingInfo>,
+}
+
+/// Tick metrics history info for display.
+#[derive(Clone, Debug, Default)]
+pub struct TickMetricsHistoryInfo {
+    pub ticks: Vec<TickMetricsInfo>,
+    pub avg_duration_us: u64,
+    pub p95_duration_us: u64,
+    pub max_duration_us: u64,
+    pub over_budget_count: u32,
+}
+
 impl Default for GameState {
     fn default() -> Self {
         Self::new()
@@ -296,6 +345,7 @@ impl GameState {
             mission_choice: RwSignal::new(None),
 
             chat_messages: RwSignal::new(vec![]),
+            chat_message_counter: RwSignal::new(0),
 
             squadron: RwSignal::new(None),
 
@@ -316,6 +366,10 @@ impl GameState {
 
             last_error: RwSignal::new(None),
             notification: RwSignal::new(None),
+
+            show_debug_panel: RwSignal::new(false),
+            tick_metrics: RwSignal::new(None),
+            tick_metrics_history: RwSignal::new(None),
         }
     }
 
@@ -433,7 +487,7 @@ impl GameState {
         self.ship_status.set(ship.status.clone());
 
         // Update docked state based on ship status
-        if ship.status == "Docked" {
+        if ship.status.starts_with("Docked") {
             // Find the station we're docked at by finding the nearest station to ship position
             let ship_pos = (ship.position.x, ship.position.y);
             if let Some(station) = locs.iter()
@@ -517,7 +571,7 @@ impl GameState {
                     }
                     if let Some(status) = update.status.clone() {
                         // Clear docked state if no longer docked
-                        if status != "Docked" {
+                        if !status.starts_with("Docked") {
                             self.docked_station_id.set(None);
                             self.docked_station_name.set(String::new());
                             self.docked_station_services.set(vec![]);
@@ -543,6 +597,13 @@ impl GameState {
 
             // Remove despawned ships
             ships.retain(|s| !ship_despawns.contains(&s.id));
+
+            // Clear selected target if it was despawned
+            if let Some(target_id) = self.selected_target.get_untracked() {
+                if ship_despawns.contains(&target_id) {
+                    self.selected_target.set(None);
+                }
+            }
 
             // Add spawned ships
             for spawn in ship_spawns {
@@ -703,9 +764,12 @@ impl GameState {
 
     /// Add a chat message.
     pub fn add_chat_message(&self, sender_name: String, message: String, channel: ChatChannel, timestamp: u64) {
+        // Get next unique ID
+        let id = self.chat_message_counter.get_untracked();
+        self.chat_message_counter.set(id + 1);
+
+        let is_system = channel == ChatChannel::System;
         self.chat_messages.update(|msgs| {
-            let id = msgs.len() as u64;
-            let is_system = channel == ChatChannel::System;
             msgs.push(ChatMessageInfo {
                 id,
                 sender_name,
@@ -739,6 +803,96 @@ impl GameState {
     /// Check if player can manage squadron (leader or officer).
     pub fn can_manage_squadron(&self) -> bool {
         self.squadron.get().map(|s| s.is_leader || s.is_officer).unwrap_or(false)
+    }
+
+    // =========================================================================
+    // Performance Metrics Handlers
+    // =========================================================================
+
+    /// Handle tick metrics from server.
+    pub fn handle_tick_metrics(&self, metrics: bw_shared::dto::TickMetricsDto) {
+        let info = TickMetricsInfo {
+            tick: metrics.tick,
+            total_us: metrics.total_us,
+            budget_us: metrics.budget_us,
+            over_budget: metrics.over_budget,
+            phases: metrics
+                .phases
+                .into_iter()
+                .map(|p| PhaseTimingInfo {
+                    name: p.name,
+                    duration_us: p.duration_us,
+                    skipped: p.skipped,
+                })
+                .collect(),
+            sectors: metrics
+                .sectors
+                .into_iter()
+                .map(|s| SectorTimingInfo {
+                    sector_id: s.sector_id,
+                    sector_name: s.sector_name,
+                    total_us: s.total_us,
+                    phases: s
+                        .phases
+                        .into_iter()
+                        .map(|p| PhaseTimingInfo {
+                            name: p.name,
+                            duration_us: p.duration_us,
+                            skipped: p.skipped,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        };
+        self.tick_metrics.set(Some(info));
+    }
+
+    /// Handle tick metrics history from server.
+    pub fn handle_tick_metrics_history(&self, history: bw_shared::dto::TickMetricsHistoryDto) {
+        let info = TickMetricsHistoryInfo {
+            ticks: history
+                .ticks
+                .into_iter()
+                .map(|m| TickMetricsInfo {
+                    tick: m.tick,
+                    total_us: m.total_us,
+                    budget_us: m.budget_us,
+                    over_budget: m.over_budget,
+                    phases: m
+                        .phases
+                        .into_iter()
+                        .map(|p| PhaseTimingInfo {
+                            name: p.name,
+                            duration_us: p.duration_us,
+                            skipped: p.skipped,
+                        })
+                        .collect(),
+                    sectors: m
+                        .sectors
+                        .into_iter()
+                        .map(|s| SectorTimingInfo {
+                            sector_id: s.sector_id,
+                            sector_name: s.sector_name,
+                            total_us: s.total_us,
+                            phases: s
+                                .phases
+                                .into_iter()
+                                .map(|p| PhaseTimingInfo {
+                                    name: p.name,
+                                    duration_us: p.duration_us,
+                                    skipped: p.skipped,
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            avg_duration_us: history.avg_duration_us,
+            p95_duration_us: history.p95_duration_us,
+            max_duration_us: history.max_duration_us,
+            over_budget_count: history.over_budget_count,
+        };
+        self.tick_metrics_history.set(Some(info));
     }
 }
 

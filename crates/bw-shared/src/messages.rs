@@ -60,6 +60,12 @@ pub enum ClientMessage {
 
     /// Heartbeat
     Ping { timestamp: u64 },
+
+    /// Subscribe to performance metrics updates (debug panel)
+    SubscribeMetrics,
+
+    /// Unsubscribe from performance metrics updates
+    UnsubscribeMetrics,
 }
 
 /// Messages sent from server to client.
@@ -168,6 +174,12 @@ pub enum ServerMessage {
         from_id: Uuid,
         from_name: String,
     },
+
+    /// Performance metrics update (for debug panel subscribers)
+    TickMetrics(TickMetricsDto),
+
+    /// Full metrics history (sent on subscription)
+    TickMetricsHistory(TickMetricsHistoryDto),
 }
 
 /// Chat channels.

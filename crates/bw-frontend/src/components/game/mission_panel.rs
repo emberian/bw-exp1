@@ -4,7 +4,7 @@
 
 use leptos::prelude::*;
 use uuid::Uuid;
-use wasm_bindgen::prelude::*;
+use gloo_timers::callback::Interval;
 
 use crate::api::WsService;
 use crate::state::{GameState, MissionInfo};
@@ -80,7 +80,7 @@ pub fn MissionPanel() -> impl IntoView {
 #[component]
 fn MissionCard<F>(mission: MissionInfo, on_accept: F) -> impl IntoView
 where
-    F: Fn(Uuid) + 'static + Clone,
+    F: Fn(Uuid) + 'static + Clone + Send + Sync,
 {
     let id = mission.id;
     let title = mission.title.clone();
@@ -91,12 +91,6 @@ where
     let can_accept = mission.can_accept;
     let is_high_profile = mission.is_high_profile;
     let mission_type = mission.mission_type.clone();
-
-    let handle_click = move |_| {
-        if can_accept {
-            on_accept(id);
-        }
-    };
 
     // Expiry countdown (if applicable)
     let has_expiry = expires_in.is_some();
@@ -117,7 +111,7 @@ where
             class=move || {
                 let base = "bg-slate-700/50 rounded-lg p-3 border transition-colors";
                 let border = if can_accept {
-                    "border-slate-600 hover:border-amber-500/50 cursor-pointer"
+                    "border-slate-600"
                 } else {
                     "border-slate-600/50 opacity-60"
                 };
@@ -128,7 +122,6 @@ where
                 };
                 format!("{} {}{}", base, border, high_profile)
             }
-            on:click=handle_click
         >
             <div class="flex justify-between items-start mb-2">
                 <div class="flex items-center gap-2">
@@ -147,7 +140,21 @@ where
                     <span class="text-green-400">"+"{reputation_reward}" Rep"</span>
                     <span class="text-amber-400">"+"{fame_reward}" Fame"</span>
                 </div>
-                <span class={format!("text-xs {}", type_color)}>{mission_type}</span>
+                <div class="flex items-center gap-2">
+                    <span class={format!("text-xs {}", type_color)}>{mission_type}</span>
+                    {if can_accept {
+                        view! {
+                            <button
+                                class="px-3 py-1 bg-amber-600 hover:bg-amber-500 rounded text-xs text-white font-medium transition-colors"
+                                on:click=move |_| on_accept(id)
+                            >
+                                "Accept"
+                            </button>
+                        }.into_any()
+                    } else {
+                        view! { <span /> }.into_any()
+                    }}
+                </div>
             </div>
         </div>
     }
@@ -245,42 +252,31 @@ where
 /// Countdown timer component for mission expiry.
 #[component]
 fn CountdownTimer(initial_seconds: u32) -> impl IntoView {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     let remaining = RwSignal::new(initial_seconds);
 
-    // Store interval handle in a signal for cleanup (Send+Sync compatible)
-    let interval_handle = RwSignal::new(Option::<i32>::None);
+    // Store interval in Rc<RefCell> so we can cancel it when timer reaches zero
+    let interval_handle: Rc<RefCell<Option<Interval>>> = Rc::new(RefCell::new(None));
 
-    // Create the interval callback
-    let tick = Closure::wrap(Box::new(move || {
-        remaining.update(|secs| {
-            if *secs > 0 {
-                *secs -= 1;
+    if initial_seconds > 0 {
+        let interval_handle_clone = interval_handle.clone();
+        let interval = Interval::new(1_000, move || {
+            let should_stop = remaining.try_update(|secs| {
+                if *secs > 0 {
+                    *secs -= 1;
+                }
+                *secs == 0
+            }).unwrap_or(true);
+
+            // Stop the interval when we reach zero
+            if should_stop {
+                interval_handle_clone.borrow_mut().take();
             }
         });
-    }) as Box<dyn FnMut()>);
-
-    // Start the interval (1000ms = 1 second)
-    if let Some(window) = web_sys::window()
-        && let Ok(handle) = window.set_interval_with_callback_and_timeout_and_arguments_0(
-            tick.as_ref().unchecked_ref(),
-            1000,
-        )
-    {
-        interval_handle.set(Some(handle));
+        *interval_handle.borrow_mut() = Some(interval);
     }
-
-    // Keep the closure alive - this is a known pattern in wasm-bindgen
-    // The memory "leak" is bounded since each countdown timer clears its interval on cleanup
-    tick.forget();
-
-    // Clean up interval on unmount
-    on_cleanup(move || {
-        if let Some(handle) = interval_handle.get_untracked()
-            && let Some(window) = web_sys::window()
-        {
-            window.clear_interval_with_handle(handle);
-        }
-    });
 
     // Format the time display
     let time_text = move || {

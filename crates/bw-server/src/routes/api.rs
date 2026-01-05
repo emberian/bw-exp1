@@ -187,6 +187,7 @@ async fn get_current_player(
 }
 
 async fn get_player(
+    _auth: AuthExtractor, // Require authentication to look up players
     State(state): State<Arc<GameState>>,
     Path(player_id): Path<Uuid>,
 ) -> Result<Json<PlayerDto>, StatusCode> {
@@ -250,6 +251,7 @@ async fn get_my_ships(
 }
 
 async fn get_ship(
+    _auth: AuthExtractor, // Require authentication to look up ships
     State(state): State<Arc<GameState>>,
     Path(ship_id): Path<Uuid>,
 ) -> Result<Json<ShipDto>, StatusCode> {

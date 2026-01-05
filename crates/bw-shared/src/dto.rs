@@ -162,3 +162,62 @@ pub struct FactionDto {
     pub standing: i32,
     pub rank: String,
 }
+
+// =============================================================================
+// Performance Metrics DTOs
+// =============================================================================
+
+/// Timing metrics for a single tick phase.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PhaseTimingDto {
+    /// Phase name (e.g., "coroutines", "behaviors", "global")
+    pub name: String,
+    /// Duration in microseconds
+    pub duration_us: u64,
+    /// Whether this phase was skipped (e.g., conditional phases like npc_spawn)
+    #[serde(default)]
+    pub skipped: bool,
+}
+
+/// Per-sector timing breakdown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectorTimingDto {
+    pub sector_id: Uuid,
+    pub sector_name: String,
+    /// Total time spent in this sector (microseconds)
+    pub total_us: u64,
+    /// Sub-phase breakdown within sector
+    pub phases: Vec<PhaseTimingDto>,
+}
+
+/// Complete tick metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TickMetricsDto {
+    /// Tick number
+    pub tick: u64,
+    /// Total tick duration (microseconds)
+    pub total_us: u64,
+    /// Budget (100ms = 100,000 us)
+    pub budget_us: u64,
+    /// Whether tick exceeded budget
+    pub over_budget: bool,
+    /// Top-level phase timings
+    pub phases: Vec<PhaseTimingDto>,
+    /// Per-sector breakdown
+    pub sectors: Vec<SectorTimingDto>,
+}
+
+/// Rolling window of tick metrics for historical view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TickMetricsHistoryDto {
+    /// Last N tick metrics (typically 100)
+    pub ticks: Vec<TickMetricsDto>,
+    /// Average tick duration over window (microseconds)
+    pub avg_duration_us: u64,
+    /// 95th percentile tick duration
+    pub p95_duration_us: u64,
+    /// Maximum tick duration in window
+    pub max_duration_us: u64,
+    /// Number of ticks over budget in window
+    pub over_budget_count: u32,
+}

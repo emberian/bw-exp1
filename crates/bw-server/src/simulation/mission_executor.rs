@@ -96,6 +96,19 @@ pub fn start_mission(
         return Err("Cannot accept this mission".to_string());
     }
 
+    // Check distance to mission target (if mission has a target position)
+    // Missions can be accepted from anywhere in the sector, but some may require proximity
+    if let Some(target_pos) = &mission.target_position {
+        let distance = ship.position.distance_to(target_pos);
+        // Allow accepting from reasonable distance (500 units) - can approach later
+        if distance > 500.0 {
+            return Err(format!(
+                "Too far from mission area (distance: {:.0}, need < 500)",
+                distance
+            ));
+        }
+    }
+
     // Build mission context
     let ctx = build_mission_context(state, &mission, &ship, player_id);
 

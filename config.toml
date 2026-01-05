@@ -30,3 +30,38 @@ scripts_dir = "scripts"
 hot_reload = true
 # Maximum script log entries to keep in memory
 max_log_entries = 1000
+
+# =============================================================================
+# SIMULATION SETTINGS
+# =============================================================================
+# These control NPC spawning, combat mechanics, and other simulation parameters.
+# All values have sensible defaults - only override what you want to change.
+
+[simulation.npc_spawning]
+# Base spawn chance per tick (10 TPS, so 0.02 = ~20% per second base rate)
+base_spawn_chance = 0.02
+# Minimum NPCs to maintain per sector (force-spawns if below this)
+min_npcs_per_sector = 3
+# Maximum NPCs per sector (stops spawning at this limit)
+max_npcs_per_sector = 15
+# Ticks between spawn attempts (50 = 5 seconds at 10 TPS)
+spawn_cooldown_ticks = 50
+# Distance from all players before NPC despawns
+despawn_distance = 800.0
+
+[simulation.npc_spawning.danger_multipliers]
+# Spawn chance multipliers by sector danger level
+safe = 0.5
+moderate = 1.0
+dangerous = 1.5
+hostile = 2.0
+
+[simulation.combat]
+# Experience granted per successful hit
+xp_per_hit = 1
+# Experience granted per kill
+xp_per_kill = 10
+# Maximum flee success chance (0.0 to 1.0)
+max_flee_chance = 0.70
+# Flee calculation: chance = min(speed / divisor, max_flee_chance)
+flee_speed_divisor = 100.0

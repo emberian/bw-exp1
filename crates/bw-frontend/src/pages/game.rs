@@ -3,10 +3,12 @@
 //! Full-featured game interface with WebSocket connection and reactive state.
 
 use leptos::prelude::*;
+use gloo_timers::callback::Interval;
 
 use crate::api::{ConnectionState, WsService};
 use crate::components::game::*;
 use crate::state::GameState;
+use crate::utils::distance;
 
 #[component]
 pub fn GamePage() -> impl IntoView {
@@ -28,6 +30,11 @@ pub fn GamePage() -> impl IntoView {
                 }
             }
         }
+    });
+
+    // Periodic cleanup of expired hails (every second)
+    let _hail_cleanup_interval = Interval::new(1_000, move || {
+        game_state.cleanup_expired_hails();
     });
 
     // Reactive state for UI
@@ -92,8 +99,45 @@ pub fn GamePage() -> impl IntoView {
         ws_alert.disengage_combat();
     };
 
+    // Check if initial state has been received (player_id is set after InitialState)
+    let has_initial_state = move || game_state.player_id.get().is_some();
+    let connection_state = move || ws.state.get();
+
+    // Z-index hierarchy (documented here, applied throughout frontend):
+    // z-[100]: Loading overlay (blocks everything during initial load)
+    // z-60: Modal dialogs (confirm dialog, mission choice dialog)
+    // z-50: Alert overlays (notification, error - important but not blocking)
+    // z-40: Floating panels (station, debug, notifications, jump panel)
+    // z-30/z-20/z-10: Map elements (tooltips, ships, locations)
+
     view! {
         <div class="h-screen flex flex-col bg-slate-900 text-slate-100">
+            // Loading overlay - shown while connecting or waiting for initial state
+            <Show when=move || !has_initial_state()>
+                <div class="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center z-[100]">
+                    <div class="text-4xl font-bold text-amber-500 mb-8">"BLACKWING"</div>
+                    <div class="flex flex-col items-center gap-4">
+                        // Spinner
+                        <div class="w-12 h-12 border-4 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+                        // Status text
+                        <div class="text-slate-400">
+                            {move || match connection_state() {
+                                ConnectionState::Disconnected => "Disconnected",
+                                ConnectionState::Connecting => "Connecting to server...",
+                                ConnectionState::Connected => "Loading game state...",
+                                ConnectionState::Reconnecting => "Reconnecting...",
+                            }}
+                        </div>
+                        // Show reconnect attempt count if reconnecting
+                        <Show when=move || connection_state() == ConnectionState::Reconnecting>
+                            <div class="text-xs text-slate-500">
+                                "Attempt "{move || ws.reconnect_attempt()}" of 10"
+                            </div>
+                        </Show>
+                    </div>
+                </div>
+            </Show>
+
             // Top bar with resources
             <header class="h-16 bg-slate-800 border-b border-slate-700 flex items-center px-4">
                 <div class="flex-1 flex items-center gap-4">
@@ -101,32 +145,33 @@ pub fn GamePage() -> impl IntoView {
                     <span class="text-sm text-slate-400">{sector_name}</span>
                     <span class=move || {
                         let status = ship_status();
-                        let color = match status.as_str() {
-                            "Idle" => "text-slate-500",
-                            "Moving" => "text-blue-400",
-                            "Docked" => "text-green-400",
-                            "InCombat" => "text-red-400",
-                            _ => "text-slate-400",
-                        };
+                        let color = status_color(&status);
                         format!("text-xs px-2 py-0.5 rounded bg-slate-700 {}", color)
                     }>
-                        {ship_status}
+                        {move || status_display(&ship_status())}
                     </span>
                 </div>
                 <ResourceBar />
                 <button
                     class="ml-4 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
                     on:click=move |_| {
-                        // Clear token from localStorage
-                        if let Some(storage) = web_sys::window()
-                            .and_then(|w| w.local_storage().ok())
-                            .flatten()
-                        {
-                            let _ = storage.remove_item("auth_token");
-                        }
-                        // Redirect to login
-                        if let Some(window) = web_sys::window() {
-                            let _ = window.location().set_href("/play/login");
+                        // Confirm before logging out
+                        let confirmed = web_sys::window()
+                            .and_then(|w| w.confirm_with_message("Are you sure you want to logout?").ok())
+                            .unwrap_or(false);
+
+                        if confirmed {
+                            // Clear token from localStorage
+                            if let Some(storage) = web_sys::window()
+                                .and_then(|w| w.local_storage().ok())
+                                .flatten()
+                            {
+                                let _ = storage.remove_item("auth_token");
+                            }
+                            // Redirect to login
+                            if let Some(window) = web_sys::window() {
+                                let _ = window.location().set_href("/play/login");
+                            }
                         }
                     }
                 >
@@ -171,6 +216,9 @@ pub fn GamePage() -> impl IntoView {
                     <NotificationsPanel />
 
                     // Notification overlay
+                    // Design note: Notifications intentionally do NOT auto-dismiss.
+                    // Players may be tabbed out or AFK, and need to see what happened
+                    // when they return. Manual dismiss ensures nothing is missed.
                     <Show when=move || notification().is_some()>
                         <div class="absolute top-4 left-1/2 -translate-x-1/2 z-50">
                             <div class="bg-amber-900/90 border border-amber-500 rounded-lg px-4 py-2 shadow-lg flex items-center gap-3">
@@ -242,23 +290,23 @@ pub fn GamePage() -> impl IntoView {
                 <button
                     class="px-4 py-2 bg-blue-900 hover:bg-blue-800 disabled:bg-slate-700 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
                     on:click=handle_dock
-                    disabled=move || ship_status() == "Docked" || ship_status() == "InCombat"
+                    disabled=move || is_docked(&ship_status()) || is_in_combat(&ship_status())
                 >
-                    {move || if ship_status() == "Docked" { "Docked" } else { "Dock" }}
+                    {move || if is_docked(&ship_status()) { "Docked" } else { "Dock" }}
                 </button>
                 <button
                     class="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
                     on:click=handle_stop
-                    disabled=move || ship_status() != "Moving"
+                    disabled=move || !is_moving(&ship_status())
                 >
                     "Stop"
                 </button>
                 <button
                     class="px-4 py-2 bg-red-900 hover:bg-red-800 disabled:bg-slate-700 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
                     on:click=handle_alert
-                    disabled=move || ship_status() != "InCombat"
+                    disabled=move || !is_in_combat(&ship_status())
                 >
-                    {move || if ship_status() == "InCombat" { "Disengage" } else { "Alert" }}
+                    {move || if is_in_combat(&ship_status()) { "Disengage" } else { "Alert" }}
                 </button>
 
                 <div class="flex-1" />
@@ -302,11 +350,23 @@ pub fn GamePage() -> impl IntoView {
                     <span class="text-slate-500">
                         "Tick: "{server_tick}
                     </span>
+
+                    // Debug panel toggle
+                    <button
+                        class="px-2 py-1 text-slate-500 hover:text-slate-300 hover:bg-slate-700 rounded transition-colors"
+                        on:click=move |_| game_state.show_debug_panel.update(|v| *v = !*v)
+                        title="Toggle Performance Debug Panel"
+                    >
+                        {move || if game_state.show_debug_panel.get() { "Debug ▼" } else { "Debug ▲" }}
+                    </button>
                 </div>
             </footer>
 
             // Mission choice dialog
             <MissionChoiceDialog />
+
+            // Performance debug panel
+            <DebugPanel />
         </div>
     }
 }
@@ -358,7 +418,7 @@ fn MissionChoiceDialog() -> impl IntoView {
 
     view! {
         <Show when=show_dialog>
-            <div class="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div class="fixed inset-0 bg-black/70 flex items-center justify-center z-60">
                 {move || {
                     if let Some(choice) = mission_choice() {
                         let mission_id = choice.mission_id;
@@ -435,7 +495,55 @@ fn get_auth_token() -> Option<String> {
         .flatten()
 }
 
-/// Calculate distance between two points.
-fn distance(x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
-    ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt()
+/// Get color class for ship status.
+fn status_color(status: &str) -> &'static str {
+    if status.starts_with("Idle") {
+        "text-slate-500"
+    } else if status.starts_with("InTransit") {
+        "text-blue-400"
+    } else if status.starts_with("Docked") {
+        "text-green-400"
+    } else if status.starts_with("InCombat") {
+        "text-red-400"
+    } else if status.starts_with("Disabled") {
+        "text-red-600"
+    } else if status.starts_with("Destroyed") {
+        "text-red-800"
+    } else {
+        "text-slate-400"
+    }
+}
+
+/// Get display-friendly status text.
+fn status_display(status: &str) -> &'static str {
+    if status.starts_with("Idle") {
+        "Idle"
+    } else if status.starts_with("InTransit") {
+        "Moving"
+    } else if status.starts_with("Docked") {
+        "Docked"
+    } else if status.starts_with("InCombat") {
+        "In Combat"
+    } else if status.starts_with("Disabled") {
+        "Disabled"
+    } else if status.starts_with("Destroyed") {
+        "Destroyed"
+    } else {
+        "Unknown"
+    }
+}
+
+/// Check if status indicates ship is in transit/moving.
+fn is_moving(status: &str) -> bool {
+    status.starts_with("InTransit")
+}
+
+/// Check if status indicates ship is docked.
+fn is_docked(status: &str) -> bool {
+    status.starts_with("Docked")
+}
+
+/// Check if status indicates ship is in combat.
+fn is_in_combat(status: &str) -> bool {
+    status.starts_with("InCombat")
 }

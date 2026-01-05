@@ -25,10 +25,6 @@ pub enum ConnectionState {
     Reconnecting,
 }
 
-/// Message to send via WebSocket (queued in signal)
-#[derive(Clone, Debug)]
-pub struct OutgoingMessage(pub ClientMessage);
-
 /// Maximum reconnect attempts before giving up.
 const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 /// Base delay for reconnection (in milliseconds).
@@ -41,7 +37,8 @@ const MAX_RECONNECT_DELAY_MS: u32 = 30000;
 #[derive(Clone, Copy)]
 pub struct WsService {
     pub state: RwSignal<ConnectionState>,
-    pub outgoing: RwSignal<Option<OutgoingMessage>>,
+    /// Queue of outgoing messages (supports multiple rapid sends)
+    outgoing_queue: RwSignal<Vec<ClientMessage>>,
     /// Stored auth token for reconnection
     auth_token: RwSignal<Option<String>>,
     /// Reconnect attempt counter
@@ -60,7 +57,7 @@ impl WsService {
     pub fn new() -> Self {
         Self {
             state: RwSignal::new(ConnectionState::Disconnected),
-            outgoing: RwSignal::new(None),
+            outgoing_queue: RwSignal::new(Vec::new()),
             auth_token: RwSignal::new(None),
             reconnect_attempts: RwSignal::new(0),
             auto_reconnect: RwSignal::new(true),
@@ -102,7 +99,7 @@ impl WsService {
 
     /// Queue a message to send.
     fn send(&self, msg: ClientMessage) {
-        self.outgoing.set(Some(OutgoingMessage(msg)));
+        self.outgoing_queue.update(|queue| queue.push(msg));
     }
 
     // Convenience methods for common messages
@@ -249,6 +246,16 @@ impl WsService {
         self.send(ClientMessage::Ping { timestamp });
     }
 
+    /// Subscribe to performance metrics updates.
+    pub fn subscribe_metrics(&self) {
+        self.send(ClientMessage::SubscribeMetrics);
+    }
+
+    /// Unsubscribe from performance metrics updates.
+    pub fn unsubscribe_metrics(&self) {
+        self.send(ClientMessage::UnsubscribeMetrics);
+    }
+
     /// Connect to the game server WebSocket.
     ///
     /// This establishes the WebSocket connection and sets up event handlers.
@@ -298,7 +305,7 @@ impl WsService {
 
         // Clone signals for closures
         let state_signal = self.state;
-        let outgoing_signal = self.outgoing;
+        let outgoing_queue_signal = self.outgoing_queue;
 
         // onopen handler
         let ws_open = ws_ref.clone();
@@ -409,17 +416,22 @@ impl WsService {
         ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
         onerror.forget();
 
-        // Watch outgoing signal and send messages
+        // Watch outgoing queue and send all queued messages
         let ws_send = ws_ref.clone();
         Effect::new(move |_| {
-            if let Some(OutgoingMessage(msg)) = outgoing_signal.get() {
-                if let Some(ref ws) = *ws_send.borrow()
-                    && ws.ready_state() == WebSocket::OPEN
-                        && let Ok(bytes) = serialize_message(&msg) {
+            // Drain and send all queued messages
+            let messages: Vec<ClientMessage> = outgoing_queue_signal
+                .try_update(|queue| std::mem::take(queue))
+                .unwrap_or_default();
+
+            if let Some(ref ws) = *ws_send.borrow() {
+                if ws.ready_state() == WebSocket::OPEN {
+                    for msg in messages {
+                        if let Ok(bytes) = serialize_message(&msg) {
                             let _ = ws.send_with_u8_array(&bytes);
                         }
-                // Clear the outgoing signal after sending
-                outgoing_signal.set(None);
+                    }
+                }
             }
         });
 
@@ -620,6 +632,14 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
         ServerMessage::HailReceived { from_id, from_name } => {
             // Add hail to state - UI will show indicator on ship
             game_state.add_hail(from_id, from_name);
+        }
+
+        ServerMessage::TickMetrics(metrics) => {
+            game_state.handle_tick_metrics(metrics);
+        }
+
+        ServerMessage::TickMetricsHistory(history) => {
+            game_state.handle_tick_metrics_history(history);
         }
     }
 }

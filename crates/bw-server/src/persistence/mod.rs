@@ -11,7 +11,10 @@ pub mod repositories;
 pub use error::DbError;
 pub use repositories::*;
 
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{Pool, Sqlite};
+
+use bw_core::models::{Player, Ship};
 
 /// Database connection pool and repository access.
 pub struct Database {
@@ -47,6 +50,93 @@ impl Database {
     /// Get the underlying connection pool.
     pub fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
+    }
+
+    /// Register a new player with their ship atomically.
+    ///
+    /// This ensures both player and ship are created together, or neither is.
+    pub async fn register_player_atomically(
+        &self,
+        player: &Player,
+        password_hash: &str,
+        ship: &Ship,
+    ) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+
+        // Insert player
+        let player_params = converters::player_to_insert_params(player, password_hash);
+        sqlx::query(
+            r#"
+            INSERT INTO players (
+                id, username, password_hash, reputation, fame,
+                faction_standings, stats, squadron_id, squadron_rank,
+                active_ship_id, faction_id, patrol_sector_id,
+                is_online, last_seen, offline_attacks_remaining,
+                missions_completed, missions_failed, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&player_params.id)
+        .bind(&player_params.username)
+        .bind(&player_params.password_hash)
+        .bind(player_params.reputation)
+        .bind(player_params.fame)
+        .bind(&player_params.faction_standings)
+        .bind(&player_params.stats)
+        .bind(&player_params.squadron_id)
+        .bind(&player_params.squadron_rank)
+        .bind(&player_params.active_ship_id)
+        .bind(&player_params.faction_id)
+        .bind(&player_params.patrol_sector_id)
+        .bind(player_params.is_online)
+        .bind(&player_params.last_seen)
+        .bind(player_params.offline_attacks_remaining)
+        .bind(player_params.missions_completed)
+        .bind(player_params.missions_failed)
+        .bind(&player_params.created_at)
+        .execute(&mut *tx)
+        .await?;
+
+        // Insert ship
+        let ship_params = converters::ship_to_insert_params(ship);
+        sqlx::query(
+            r#"
+            INSERT INTO ships (
+                id, owner_id, name, ship_class, sector_id,
+                position_x, position_y, position_z,
+                hull_integrity, shield_strength, ammunition, fuel,
+                morale, experience, weapons, status, status_data,
+                is_player_ship, faction_id, squadron_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&ship_params.id)
+        .bind(&ship_params.owner_id)
+        .bind(&ship_params.name)
+        .bind(&ship_params.ship_class)
+        .bind(&ship_params.sector_id)
+        .bind(ship_params.position_x)
+        .bind(ship_params.position_y)
+        .bind(ship_params.position_z)
+        .bind(ship_params.hull_integrity)
+        .bind(ship_params.shield_strength)
+        .bind(ship_params.ammunition)
+        .bind(ship_params.fuel)
+        .bind(ship_params.morale)
+        .bind(ship_params.experience)
+        .bind(&ship_params.weapons)
+        .bind(&ship_params.status)
+        .bind(&ship_params.status_data)
+        .bind(ship_params.is_player_ship)
+        .bind(&ship_params.faction_id)
+        .bind(&ship_params.squadron_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // Commit transaction
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Get the player repository.

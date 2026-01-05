@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use bw_shared::{ClientMessage, ServerMessage, deserialize_message, serialize_message};
-use crate::GameState;
+use crate::{GameState, auth::hash_token};
 
 /// WebSocket upgrade handler.
 pub async fn ws_handler(
@@ -51,47 +51,72 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                 if let Ok(client_msg) = deserialize_message::<ClientMessage>(&data) {
                     match client_msg {
                         ClientMessage::Authenticate { token } => {
-                            // Parse token
-                            let parts: Vec<&str> = token.split(':').collect();
-                            if parts.len() == 2 {
-                                if let (Ok(pid), Ok(_sid)) = (
-                                    Uuid::parse_str(parts[0]),
-                                    Uuid::parse_str(parts[1]),
-                                ) {
-                                    if state.players.contains_key(&pid) {
-                                        player_id = Some(pid);
+                            // Validate session token against database
+                            let token_hash = hash_token(&token);
 
-                                        // Get sector from player session
-                                        if let Some(session) = state.players.get(&pid) {
-                                            sector_id = Some(session.sector_id);
+                            let auth_result = match state.db.sessions().find_by_token_hash(&token_hash).await {
+                                Ok(Some(session)) if !session.is_expired() => {
+                                    // Valid session - check player exists
+                                    if state.players.contains_key(&session.player_id) {
+                                        Some(session.player_id)
+                                    } else {
+                                        // Player not in active session cache, try to load
+                                        if let Ok(Some(player)) = state.db.players().find_by_id(session.player_id).await {
+                                            // Load player into cache
+                                            let pid = player.id;
+                                            let ship_id = player.active_ship_id;
+                                            let sid = player.patrol_sector_id;
+                                            state.player_data.insert(pid, player);
+
+                                            // Create session tracking
+                                            state.players.insert(pid, crate::PlayerSession {
+                                                player_id: pid,
+                                                ship_id,
+                                                sector_id: sid,
+                                                connection: None,
+                                            });
+
+                                            Some(pid)
+                                        } else {
+                                            None
                                         }
-
-                                        // Register connection
-                                        if let Some(mut session) = state.players.get_mut(&pid) {
-                                            session.connection = Some(tx.clone());
-                                        }
-
-                                        // Send success
-                                        let _ = tx.send(ServerMessage::AuthResult {
-                                            success: true,
-                                            player_id: Some(pid),
-                                            error: None,
-                                        }).await;
-
-                                        // Send initial state
-                                        if let Some(sid) = sector_id {
-                                            send_initial_state(&state, &tx, pid, sid).await;
-                                        }
-
-                                        continue;
                                     }
                                 }
+                                _ => None,
+                            };
+
+                            if let Some(pid) = auth_result {
+                                player_id = Some(pid);
+
+                                // Get sector from player session
+                                if let Some(session) = state.players.get(&pid) {
+                                    sector_id = Some(session.sector_id);
+                                }
+
+                                // Register connection
+                                if let Some(mut session) = state.players.get_mut(&pid) {
+                                    session.connection = Some(tx.clone());
+                                }
+
+                                // Send success
+                                let _ = tx.send(ServerMessage::AuthResult {
+                                    success: true,
+                                    player_id: Some(pid),
+                                    error: None,
+                                }).await;
+
+                                // Send initial state
+                                if let Some(sid) = sector_id {
+                                    send_initial_state(&state, &tx, pid, sid).await;
+                                }
+
+                                continue;
                             }
 
                             let _ = tx.send(ServerMessage::AuthResult {
                                 success: false,
                                 player_id: None,
-                                error: Some("Invalid token".to_string()),
+                                error: Some("Invalid or expired token".to_string()),
                             }).await;
                         }
 
@@ -141,6 +166,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                 sector.connections.remove(&pid);
             }
         }
+
+        // Unsubscribe from metrics
+        state.metrics.unsubscribe(pid);
     }
 
     send_task.abort();
@@ -642,6 +670,15 @@ async fn handle_game_message(
 
         ClientMessage::EngageTarget { target_id } => {
             if let Some(sector) = state.sectors.get(&sector_id) {
+                // Verify target ship exists in the same sector
+                if !sector.ship_ids.contains_key(&target_id) {
+                    let _ = tx.send(ServerMessage::Error {
+                        code: "TARGET_NOT_IN_SECTOR".to_string(),
+                        message: "Target is not in your sector".to_string(),
+                    }).await;
+                    return;
+                }
+
                 if let Some(session) = state.players.get(&player_id) {
                     let ship_id = session.ship_id;
                     drop(session);
@@ -972,6 +1009,21 @@ async fn handle_game_message(
                     }
                 }
             }
+        }
+
+        ClientMessage::SubscribeMetrics => {
+            state.metrics.subscribe(player_id);
+
+            // Send current history immediately
+            let history = state.metrics.get_history();
+            let _ = tx.send(ServerMessage::TickMetricsHistory(history)).await;
+
+            tracing::debug!("Player {} subscribed to metrics", player_id);
+        }
+
+        ClientMessage::UnsubscribeMetrics => {
+            state.metrics.unsubscribe(player_id);
+            tracing::debug!("Player {} unsubscribed from metrics", player_id);
         }
 
         _ => {
@@ -1361,6 +1413,15 @@ async fn handle_move_to_sector(
         let _ = tx.send(ServerMessage::Error {
             code: "NO_JUMPGATE".to_string(),
             message: "No jumpgate found in this sector".to_string(),
+        }).await;
+        return;
+    }
+
+    // Verify target sector is adjacent (connected via jumpgate)
+    if !current_sector.sector.adjacent_sectors.contains(&target_sector_id) {
+        let _ = tx.send(ServerMessage::Error {
+            code: "SECTOR_NOT_ADJACENT".to_string(),
+            message: "Target sector is not accessible from this jumpgate".to_string(),
         }).await;
         return;
     }

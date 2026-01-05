@@ -1,15 +1,19 @@
 //! Game simulation / game loop
 
-mod game_loop;
-mod npc_spawner;
 mod combat_processor;
+mod game_loop;
+pub mod metrics;
 mod mission_executor;
-mod station_services;
+mod npc_spawner;
+pub mod script_hooks;
+pub mod sim_config;
 mod squadron_manager;
+mod station_services;
 
-pub use game_loop::*;
-pub use npc_spawner::*;
 pub use combat_processor::*;
+pub use game_loop::*;
 pub use mission_executor::*;
-pub use station_services::*;
+pub use npc_spawner::*;
+pub use script_hooks::ScriptHooks;
 pub use squadron_manager::*;
+pub use station_services::*;

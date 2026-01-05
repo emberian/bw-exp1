@@ -19,7 +19,7 @@ pub fn NotificationsPanel() -> impl IntoView {
 
     view! {
         <Show when=has_notifications>
-            <div class="absolute top-20 right-4 w-72 max-h-96 overflow-y-auto bg-slate-900/95 border border-amber-500/50 rounded-lg shadow-lg z-50">
+            <div class="absolute top-20 right-4 w-72 max-h-96 overflow-y-auto bg-slate-900/95 border border-amber-500/50 rounded-lg shadow-lg z-40">
                 // Header
                 <div class="p-3 border-b border-slate-700 bg-slate-800/50">
                     <h3 class="font-semibold text-amber-400 text-sm">"Pending Requests"</h3>

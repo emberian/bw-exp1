@@ -1,6 +1,7 @@
 //! Combat Processing System
 //!
 //! Processes active combat engagements each tick.
+//! Configuration is loaded from config.toml [simulation.combat].
 
 use uuid::Uuid;
 
@@ -9,6 +10,7 @@ use bw_core::systems::{calculate_attack, CombatEngagement, CombatLogEntry};
 use bw_shared::dto::CombatEventDto;
 use bw_shared::ServerMessage;
 
+use crate::config::config;
 use crate::{GameState, SectorInstance};
 
 /// Result of processing combat for a tick.
@@ -195,7 +197,8 @@ fn resolve_attack(
 
         // Grant experience for successful hit (if attacker is player ship)
         if attacker.is_player_ship {
-            attacker.crew.grant_experience(1); // 1 XP per hit
+            let combat_config = &config().get().simulation.combat;
+            attacker.crew.grant_experience(combat_config.xp_per_hit);
         }
 
         matches!(target.status, ShipStatus::Destroyed)
@@ -254,7 +257,8 @@ fn resolve_attack(
 
                     // Grant experience to crew for killing enemy
                     if let Some(mut ship) = state.ships.get_mut(&attacker_id) {
-                        ship.crew.grant_experience(10); // 10 XP per kill
+                        let combat_config = &config().get().simulation.combat;
+                        ship.crew.grant_experience(combat_config.xp_per_kill);
                     }
                 }
             }
@@ -286,6 +290,9 @@ fn resolve_attack(
     })
 }
 
+/// Maximum engagement distance for combat.
+const MAX_COMBAT_RANGE: f64 = 200.0;
+
 /// Start a new combat engagement.
 pub fn start_combat(
     state: &GameState,
@@ -296,6 +303,16 @@ pub fn start_combat(
     // Get ships
     let initiator = state.ships.get(&initiator_id)?;
     let target = state.ships.get(&target_id)?;
+
+    // Check distance - must be within combat range
+    let distance = initiator.position.distance_to(&target.position);
+    if distance > MAX_COMBAT_RANGE {
+        tracing::debug!(
+            "Combat initiation failed: distance {} exceeds max range {}",
+            distance, MAX_COMBAT_RANGE
+        );
+        return None;
+    }
 
     // Check if either is already in combat
     if matches!(initiator.status, ShipStatus::InCombat { .. }) {
@@ -355,10 +372,11 @@ pub fn flee_from_combat(
         None => return false,
     };
 
-    // Calculate flee chance based on speed
+    // Calculate flee chance based on speed (configurable)
+    let combat_config = &config().get().simulation.combat;
     let flee_chance = ship.as_ref().map(|s| {
         let stats = s.combat_effectiveness();
-        (stats.speed / 100.0).min(0.7) // Max 70% flee chance
+        (stats.speed / combat_config.flee_speed_divisor).min(combat_config.max_flee_chance)
     }).unwrap_or(0.3);
 
     drop(ship);

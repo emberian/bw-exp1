@@ -12,7 +12,7 @@ pub fn StationPanel() -> impl IntoView {
     let game_state = expect_context::<GameState>();
     let ws = expect_context::<WsService>();
 
-    let is_docked = move || game_state.ship_status.get() == "Docked";
+    let is_docked = move || game_state.ship_status.get().starts_with("Docked");
     let station_name = move || game_state.docked_station_name.get();
     let services = move || game_state.docked_station_services.get();
 
@@ -23,7 +23,7 @@ pub fn StationPanel() -> impl IntoView {
 
     view! {
         <Show when=is_docked>
-            <div class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-4 w-80 shadow-lg z-50">
+            <div class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-4 w-80 shadow-lg z-40">
                 // Header
                 <div class="flex justify-between items-center mb-4">
                     <div>
