@@ -184,7 +184,7 @@ fn persist_dirty_entities(state: &GameState) {
 async fn process_global_tick(state: &GameState, tick: u64) {
     // Session cleanup every 600 ticks (1 minute at 10 TPS)
     if tick % 600 == 0 {
-        match state.db.sessions().delete_expired().await {
+        match state.db.delete_expired_sessions().await {
             Ok(count) if count > 0 => {
                 tracing::info!("Cleaned up {} expired sessions", count);
             }

@@ -61,8 +61,7 @@ impl FromRequestParts<Arc<GameState>> for AdminAuth {
         // Look up session in database
         let session = state
             .db
-            .sessions()
-            .find_by_token_hash(&token_hash)
+            .find_session(&token_hash)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;

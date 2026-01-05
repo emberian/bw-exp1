@@ -20,7 +20,7 @@ leptos_meta.workspace = true
 # Core
 serde.workspace = true
 serde_json.workspace = true
-uuid = { version = "1.19", features = ["v4", "serde", "js"] }
+uuid.workspace = true
 
 # WebAssembly
 wasm-bindgen = "0.2"

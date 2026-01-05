@@ -5,10 +5,7 @@ use thiserror::Error;
 /// Database operation errors.
 #[derive(Debug, Error)]
 pub enum DbError {
-    #[error("Database connection failed: {0}")]
-    Connection(#[from] sqlx::Error),
-
-    #[error("SeaORM error: {0}")]
+    #[error("Database error: {0}")]
     SeaOrm(#[from] sea_orm::DbErr),
 
     #[error("Migration failed: {0}")]

@@ -215,7 +215,7 @@ impl GameState {
 
     /// Load all factions from database into memory.
     async fn load_factions(&self) -> anyhow::Result<()> {
-        let factions = self.db.factions().find_all().await?;
+        let factions = self.db.find_all_factions().await?;
         for faction in factions {
             // Index by tag for O(1) lookup
             self.faction_tags.insert(faction.tag.clone(), faction.id);
@@ -227,7 +227,7 @@ impl GameState {
 
     /// Load all sectors and their locations from database into memory.
     async fn load_sectors(&self) -> anyhow::Result<()> {
-        let sectors = self.db.sectors().find_all_with_locations().await?;
+        let sectors = self.db.find_all_sectors().await?;
         for sector in sectors {
             let instance = SectorInstance::new(sector);
             self.sectors.insert(instance.sector.id, instance);

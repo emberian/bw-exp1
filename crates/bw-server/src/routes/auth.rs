@@ -8,7 +8,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use uuid::Uuid;
@@ -158,7 +158,7 @@ async fn register(
     }
 
     // Check username availability
-    match state.db.players().username_exists(&req.username).await {
+    match state.db.username_exists(&req.username).await {
         Ok(true) => {
             return (
                 StatusCode::CONFLICT,
@@ -233,7 +233,7 @@ async fn register(
     ship.owner_id = Some(player_id);
 
     // Persist to database atomically (player and ship together)
-    if let Err(e) = state.db.register_player_atomically(&player, &password_hash, &ship).await {
+    if let Err(e) = state.db.register_player(&player, &password_hash, &ship).await {
         tracing::error!("Failed to register player: {}", e);
         // Check if it's a unique constraint violation (username taken - race condition)
         let error_msg = if e.to_string().contains("UNIQUE constraint") {
@@ -249,12 +249,12 @@ async fn register(
 
     // Generate session token
     let token = generate_token();
-    if let Err(e) = state
-        .db
-        .sessions()
-        .create(player_id, &token.hash, Duration::days(7))
-        .await
-    {
+    let session = crate::persistence::Session::new(
+        player_id,
+        token.hash.clone(),
+        Utc::now() + Duration::days(7),
+    );
+    if let Err(e) = state.db.create_session(&session).await {
         tracing::error!("Failed to create session: {}", e);
         // Continue anyway - player can log in again
     }
@@ -304,8 +304,7 @@ async fn login(
     // Find player by username and get password hash
     let (player, password_hash) = match state
         .db
-        .players()
-        .find_by_username_with_password(&req.username)
+        .find_player_with_password(&req.username)
         .await
     {
         Ok(Some(data)) => data,
@@ -334,12 +333,12 @@ async fn login(
 
     // Generate new session token
     let token = generate_token();
-    if let Err(e) = state
-        .db
-        .sessions()
-        .create(player.id, &token.hash, Duration::days(7))
-        .await
-    {
+    let session = crate::persistence::Session::new(
+        player.id,
+        token.hash.clone(),
+        Utc::now() + Duration::days(7),
+    );
+    if let Err(e) = state.db.create_session(&session).await {
         tracing::error!("Failed to create session: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -360,7 +359,7 @@ async fn login(
 
     // Load ship if not cached
     if !state.ships.contains_key(&ship_id) {
-        if let Ok(Some(ship)) = state.db.ships().find_by_id(ship_id).await {
+        if let Ok(Some(ship)) = state.db.find_ship(ship_id).await {
             state.ships.insert(ship_id, ship);
         }
     }
@@ -392,8 +391,8 @@ async fn logout(
     let token_hash = hash_token(&req.token);
 
     // Find and delete the session
-    if let Ok(Some(session)) = state.db.sessions().find_by_token_hash(&token_hash).await {
-        let _ = state.db.sessions().delete(session.id).await;
+    if let Ok(Some(session)) = state.db.find_session(&token_hash).await {
+        let _ = state.db.delete_session(session.id).await;
 
         // Mark player as offline (persistence is automatic via dirty tracking)
         if let Some(mut player) = state.player_data.get_mut(&session.player_id) {
@@ -413,7 +412,7 @@ async fn validate_token(
 ) -> Json<ValidateResponse> {
     let token_hash = hash_token(&req.token);
 
-    match state.db.sessions().find_by_token_hash(&token_hash).await {
+    match state.db.find_session(&token_hash).await {
         Ok(Some(session)) if !session.is_expired() => Json(ValidateResponse {
             valid: true,
             player_id: Some(session.player_id),

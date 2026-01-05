@@ -53,8 +53,7 @@ impl FromRequestParts<Arc<GameState>> for AuthExtractor {
         // Look up session in database
         let session = state
             .db
-            .sessions()
-            .find_by_token_hash(&token_hash)
+            .find_session(&token_hash)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
@@ -112,7 +111,7 @@ impl FromRequestParts<Arc<GameState>> for OptionalAuth {
         let token_hash = hash_token(token);
 
         // Look up session
-        let session = match state.db.sessions().find_by_token_hash(&token_hash).await {
+        let session = match state.db.find_session(&token_hash).await {
             Ok(Some(s)) if !s.is_expired() => s,
             _ => {
                 return Ok(OptionalAuth {

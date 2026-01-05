@@ -55,14 +55,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                             // Validate session token against database
                             let token_hash = hash_token(&token);
 
-                            let auth_result = match state.db.sessions().find_by_token_hash(&token_hash).await {
+                            let auth_result = match state.db.find_session(&token_hash).await {
                                 Ok(Some(session)) if !session.is_expired() => {
                                     // Valid session - check player exists
                                     if state.players.contains_key(&session.player_id) {
                                         Some(session.player_id)
                                     } else {
                                         // Player not in active session cache, try to load
-                                        if let Ok(Some(player)) = state.db.players().find_by_id(session.player_id).await {
+                                        if let Ok(Some(player)) = state.db.find_player(session.player_id).await {
                                             // Load player into cache
                                             let pid = player.id;
                                             let ship_id = player.active_ship_id;

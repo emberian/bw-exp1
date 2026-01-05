@@ -23,7 +23,6 @@ tower.workspace = true
 tower-http.workspace = true
 
 # Database
-sqlx.workspace = true
 sea-orm.workspace = true
 
 # Concurrency

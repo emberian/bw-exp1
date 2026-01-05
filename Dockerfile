@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Build stage for the server
-FROM rust:latest AS server-builder
+FROM rustlang/rust:nightly AS server-builder
 
 WORKDIR /app
 
@@ -18,16 +18,18 @@ COPY crates/bw-shared/Cargo.toml crates/bw-shared/
 COPY crates/bw-scripting/Cargo.toml crates/bw-scripting/
 COPY crates/bw-server/Cargo.toml crates/bw-server/
 COPY crates/bw-frontend/Cargo.toml crates/bw-frontend/
+COPY crates/bw-gm-editor/Cargo.toml crates/bw-gm-editor/
 
 # Create dummy source files to cache dependencies
-RUN mkdir -p crates/bw-core/src crates/bw-shared/src crates/bw-scripting/src crates/bw-server/src crates/bw-frontend/src && \
+RUN mkdir -p crates/bw-core/src crates/bw-shared/src crates/bw-scripting/src crates/bw-server/src crates/bw-frontend/src crates/bw-gm-editor/src && \
     echo "pub fn dummy() {}" > crates/bw-core/src/lib.rs && \
     echo "pub fn dummy() {}" > crates/bw-shared/src/lib.rs && \
     echo "pub fn dummy() {}" > crates/bw-scripting/src/lib.rs && \
     echo "pub fn dummy() {}" > crates/bw-server/src/lib.rs && \
     echo "fn main() {}" > crates/bw-server/src/main.rs && \
     echo "pub fn dummy() {}" > crates/bw-frontend/src/lib.rs && \
-    echo "fn main() {}" > crates/bw-frontend/src/main.rs
+    echo "fn main() {}" > crates/bw-frontend/src/main.rs && \
+    echo "pub fn dummy() {}" > crates/bw-gm-editor/src/lib.rs
 
 # Build dependencies (this layer will be cached)
 RUN cargo build --release --package bw-server 2>/dev/null || true
@@ -43,7 +45,7 @@ RUN touch crates/bw-core/src/lib.rs crates/bw-shared/src/lib.rs crates/bw-script
     cargo build --release --package bw-server
 
 # Build stage for the frontend
-FROM rust:latest AS frontend-builder
+FROM rustlang/rust:nightly AS frontend-builder
 
 WORKDIR /app
 

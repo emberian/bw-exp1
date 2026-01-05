@@ -2,7 +2,7 @@
 //!
 //! Runs SQL migrations on startup, tracking which have been applied.
 
-use sqlx::{Pool, Sqlite};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 
 use super::DbError;
 
@@ -13,10 +13,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("003_seed_sectors", include_str!("../../../../migrations/003_seed_sectors.sql")),
 ];
 
-/// Run all pending migrations.
-pub async fn run(pool: &Pool<Sqlite>) -> Result<(), DbError> {
+/// Run all pending migrations using SeaORM.
+pub async fn run_sea(conn: &DatabaseConnection) -> Result<(), DbError> {
     // Create migrations tracking table
-    sqlx::query(
+    conn.execute_unprepared(
         r#"
         CREATE TABLE IF NOT EXISTS _migrations (
             name TEXT PRIMARY KEY,
@@ -24,17 +24,26 @@ pub async fn run(pool: &Pool<Sqlite>) -> Result<(), DbError> {
         )
         "#,
     )
-    .execute(pool)
     .await?;
 
     for (name, sql) in MIGRATIONS {
         // Check if already applied
-        let applied: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _migrations WHERE name = ?")
-            .bind(name)
-            .fetch_one(pool)
+        let result = conn
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) as count FROM _migrations WHERE name = ?",
+                [(*name).into()],
+            ))
             .await?;
 
-        if applied.0 == 0 {
+        let applied = result
+            .map(|row| {
+                use sea_orm::TryGetable;
+                i64::try_get(&row, "", "count").unwrap_or(0)
+            })
+            .unwrap_or(0);
+
+        if applied == 0 {
             tracing::info!("Running migration: {}", name);
 
             // Execute migration - split by semicolons and run each statement
@@ -55,7 +64,7 @@ pub async fn run(pool: &Pool<Sqlite>) -> Result<(), DbError> {
                 let statement = statement.trim();
 
                 if !statement.is_empty() {
-                    if let Err(e) = sqlx::query(statement).execute(pool).await {
+                    if let Err(e) = conn.execute_unprepared(statement).await {
                         return Err(DbError::Migration(format!(
                             "Failed to run migration '{}': {} (statement: {})",
                             name,
@@ -67,10 +76,12 @@ pub async fn run(pool: &Pool<Sqlite>) -> Result<(), DbError> {
             }
 
             // Mark as applied
-            sqlx::query("INSERT INTO _migrations (name) VALUES (?)")
-                .bind(name)
-                .execute(pool)
-                .await?;
+            conn.execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "INSERT INTO _migrations (name) VALUES (?)",
+                [(*name).into()],
+            ))
+            .await?;
 
             tracing::info!("Migration '{}' applied successfully", name);
         }

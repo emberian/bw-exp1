@@ -46,3 +46,4 @@ rmp-serde.workspace = true
 console_error_panic_hook = "0.1"
 tracing.workspace = true
 tracing-wasm = "0.2"
+getrandom = { version = "0.2", features = ["js"] }
