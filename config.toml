@@ -1,0 +1,32 @@
+# BLACKWING Server Configuration
+#
+# Reload options:
+#   - SIGHUP signal:    kill -HUP $(pidof blackwing-server)
+#   - Admin API:        POST /api/admin/reload
+#   - File watcher:     Automatic when hot_reload = true
+#
+# Changes to [admin] take effect immediately on reload.
+
+[server]
+# Server bind address
+host = "0.0.0.0"
+# Server port
+port = 3000
+# Database URL (can be overridden by DATABASE_URL env var)
+# database_url = "sqlite:./blackwing.db"
+
+[admin]
+# Usernames with admin/GM privileges (case-insensitive)
+# These users can access /api/admin/* endpoints
+usernames = [
+    # "admin",
+    # "gm",
+]
+
+[scripting]
+# Path to scripts directory
+scripts_dir = "scripts"
+# Enable hot-reload of scripts (debug builds only)
+hot_reload = true
+# Maximum script log entries to keep in memory
+max_log_entries = 1000
