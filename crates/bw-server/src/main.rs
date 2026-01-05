@@ -96,15 +96,26 @@ async fn main() -> anyhow::Result<()> {
         // State
         .with_state(state);
 
-    // Serve static frontend files if the directory exists
+    // Serve WASM app at /play (SPA with fallback to index.html)
+    let play_dir = Path::new("play");
+    if play_dir.exists() {
+        tracing::info!("Serving WASM app from ./play at /play/*");
+        let play_service = ServeDir::new(play_dir)
+            .not_found_service(ServeFile::new(play_dir.join("index.html")));
+        app = app.nest_service("/play", play_service);
+    } else {
+        tracing::info!("No play directory found, skipping WASM app serving");
+    }
+
+    // Serve static landing page at root
     let static_dir = Path::new("static");
     if static_dir.exists() {
-        tracing::info!("Serving static files from ./static");
-        let serve_dir = ServeDir::new(static_dir)
+        tracing::info!("Serving landing page from ./static");
+        let static_service = ServeDir::new(static_dir)
             .not_found_service(ServeFile::new(static_dir.join("index.html")));
-        app = app.fallback_service(serve_dir);
+        app = app.fallback_service(static_service);
     } else {
-        tracing::info!("No static directory found, skipping static file serving");
+        tracing::info!("No static directory found, skipping landing page serving");
     }
 
     // Apply middleware

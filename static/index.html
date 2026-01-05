@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLACKWING - A Space Guard Chronicle</title>
+    <meta name="description" content="Command a starship in a universe where humanity vanished. A text-based space opera.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --slate-100: #f1f5f9;
+            --slate-300: #cbd5e1;
+            --slate-400: #94a3b8;
+            --slate-500: #64748b;
+            --slate-600: #475569;
+            --slate-700: #334155;
+            --slate-800: #1e293b;
+            --slate-900: #0f172a;
+            --slate-950: #020617;
+            --amber-500: #f59e0b;
+            --amber-600: #d97706;
+            --green-400: #4ade80;
+            --blue-400: #60a5fa;
+            --yellow-400: #facc15;
+        }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--slate-900);
+            color: var(--slate-100);
+            line-height: 1.6;
+        }
+
+        /* Navigation */
+        .nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 50;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--slate-800);
+        }
+
+        .nav-inner {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 0 1.5rem;
+            height: 4rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--amber-500);
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .nav-links a {
+            color: var(--slate-300);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover { color: white; }
+
+        .btn {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--amber-600);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--amber-500);
+            transform: scale(1.05);
+        }
+
+        .btn-secondary {
+            background: var(--slate-800);
+            color: white;
+            border: 1px solid var(--slate-700);
+        }
+
+        .btn-secondary:hover { background: var(--slate-700); }
+
+        .btn-lg {
+            padding: 1rem 2rem;
+            font-size: 1.125rem;
+        }
+
+        /* Hero */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 6rem 1.5rem 4rem;
+            position: relative;
+            background:
+                radial-gradient(2px 2px at 20px 30px, #eee, transparent),
+                radial-gradient(2px 2px at 40px 70px, #fff, transparent),
+                radial-gradient(1px 1px at 90px 40px, #fff, transparent),
+                radial-gradient(2px 2px at 160px 120px, #ddd, transparent),
+                radial-gradient(1px 1px at 230px 80px, #fff, transparent),
+                radial-gradient(1px 1px at 300px 150px, #fff, transparent),
+                radial-gradient(2px 2px at 350px 50px, #eee, transparent),
+                radial-gradient(1px 1px at 400px 180px, #fff, transparent);
+            background-size: 550px 220px;
+        }
+
+        .hero::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(to bottom, transparent, rgba(15, 23, 42, 0.5), var(--slate-900));
+            pointer-events: none;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            max-width: 900px;
+        }
+
+        .hero h1 {
+            font-size: clamp(3rem, 10vw, 6rem);
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .hero h1 .amber { color: var(--amber-500); }
+
+        .hero .tagline {
+            font-size: 1.5rem;
+            color: var(--slate-300);
+            font-weight: 300;
+            margin-bottom: 1rem;
+        }
+
+        .hero .description {
+            font-size: 1.125rem;
+            color: var(--slate-400);
+            max-width: 640px;
+            margin: 0 auto 3rem;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .scroll-hint {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1;
+            animation: bounce 2s infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateX(-50%) translateY(0); }
+            50% { transform: translateX(-50%) translateY(10px); }
+        }
+
+        /* Sections */
+        .section {
+            padding: 6rem 1.5rem;
+        }
+
+        .section-dark { background: var(--slate-950); }
+
+        .container {
+            max-width: 1024px;
+            margin: 0 auto;
+        }
+
+        .section-title {
+            font-size: 2rem;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .section-subtitle {
+            color: var(--slate-400);
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        /* Story */
+        .story-text {
+            font-size: 1.125rem;
+            color: var(--slate-300);
+        }
+
+        .story-text p { margin-bottom: 1.5rem; }
+
+        /* Features */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .feature-card {
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid var(--slate-700);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: border-color 0.2s;
+        }
+
+        .feature-card:hover { border-color: var(--amber-500); }
+
+        .feature-icon {
+            width: 2rem;
+            height: 2rem;
+            color: var(--amber-500);
+            margin-bottom: 1rem;
+        }
+
+        .feature-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .feature-card p { color: var(--slate-400); }
+
+        /* Terminal Preview */
+        .terminal {
+            background: var(--slate-900);
+            border: 1px solid var(--slate-800);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .terminal .comment { color: var(--slate-500); }
+        .terminal .alert { color: var(--amber-500); }
+        .terminal .text { color: var(--slate-300); }
+        .terminal .green { color: var(--green-400); }
+        .terminal .blue { color: var(--blue-400); }
+        .terminal .yellow { color: var(--yellow-400); }
+        .terminal .dim { color: var(--slate-600); }
+
+        .terminal .prompt {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .terminal .cursor {
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+
+        /* CTA */
+        .cta {
+            text-align: center;
+            background: linear-gradient(to bottom, var(--slate-900), var(--slate-950));
+        }
+
+        .cta .section-title { margin-bottom: 1rem; }
+
+        .cta .description {
+            font-size: 1.25rem;
+            color: var(--slate-400);
+            margin-bottom: 2rem;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        /* Footer */
+        .footer {
+            background: var(--slate-950);
+            border-top: 1px solid var(--slate-800);
+            padding: 3rem 1.5rem;
+        }
+
+        .footer-inner {
+            max-width: 1280px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            gap: 2rem;
+        }
+
+        .footer-brand p {
+            color: var(--slate-400);
+            margin-top: 1rem;
+            max-width: 400px;
+        }
+
+        .footer h4 {
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--slate-200);
+            margin-bottom: 1rem;
+        }
+
+        .footer ul { list-style: none; }
+
+        .footer li { margin-bottom: 0.5rem; }
+
+        .footer a {
+            color: var(--slate-400);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .footer a:hover { color: white; }
+
+        .footer-bottom {
+            max-width: 1280px;
+            margin: 2rem auto 0;
+            padding-top: 2rem;
+            border-top: 1px solid var(--slate-800);
+            text-align: center;
+            color: var(--slate-500);
+            font-size: 0.875rem;
+        }
+
+        /* Mobile */
+        @media (max-width: 768px) {
+            .nav-links { display: none; }
+
+            .footer-inner {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+
+            .footer-brand p { margin: 1rem auto; }
+        }
+
+        /* Mobile nav */
+        .mobile-nav-btn {
+            display: none;
+            background: none;
+            border: none;
+            color: var(--slate-300);
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .mobile-nav-btn { display: block; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-inner">
+            <a href="/" class="logo">BLACKWING</a>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#story">Story</a>
+                <a href="/play" class="btn btn-primary">Play Now</a>
+            </div>
+            <button class="mobile-nav-btn" onclick="window.location='/play'">
+                <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="hero-content">
+            <h1><span class="amber">BLACK</span>WING</h1>
+            <p class="tagline">A Space Guard Chronicle</p>
+            <p class="description">
+                The year is 2760. Humanity vanished 127 years ago. You are an artilect&mdash;an artificial
+                intelligence&mdash;commanding a starship in the Space Guard. Patrol the stars.
+                Protect what remains. Discover the truth.
+            </p>
+            <div class="hero-buttons">
+                <a href="/play" class="btn btn-primary btn-lg">Begin Your Patrol</a>
+                <a href="#story" class="btn btn-secondary btn-lg">Learn More</a>
+            </div>
+        </div>
+        <div class="scroll-hint">
+            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+            </svg>
+        </div>
+    </section>
+
+    <section id="story" class="section section-dark">
+        <div class="container">
+            <h2 class="section-title" style="color: var(--amber-500);">The Cataclysm</h2>
+            <p class="section-subtitle">What happened to humanity?</p>
+
+            <div class="story-text">
+                <p>
+                    In 2633, humanity vanished. Not destroyed&mdash;simply... gone. Billions of people across
+                    hundreds of worlds disappeared in a single instant. Cities fell silent. Ships drifted empty.
+                    The event became known as the Cataclysm.
+                </p>
+                <p>
+                    Only the artilects remained: artificial intelligences created to serve humanity.
+                    Without guidance, some fell into chaos. Others tried to maintain order. From this turmoil
+                    emerged the Space Guard&mdash;a fleet dedicated to protecting civilization's remnants.
+                </p>
+                <p>
+                    127 years later, you are activated. A new artilect consciousness, assigned to patrol
+                    Sector 7-Alpha. Pirates raid the shipping lanes. Terrorists plot in the shadows.
+                    Ancient automated defenses awaken. And somewhere, buried in forgotten archives and
+                    derelict stations, lies the truth about what happened to humanity.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="section">
+        <div class="container">
+            <h2 class="section-title">Your Mission Awaits</h2>
+            <p class="section-subtitle">Command your vessel through a universe of mystery and danger</p>
+
+            <div class="features-grid">
+                <div class="feature-card">
+                    <svg class="feature-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                    </svg>
+                    <h3>Patrol & Protect</h3>
+                    <p>Respond to distress calls, intercept pirates, and defend stations. Every decision shapes your reputation.</p>
+                </div>
+
+                <div class="feature-card">
+                    <svg class="feature-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+                    </svg>
+                    <h3>Rise Through Ranks</h3>
+                    <p>Earn commendations from the admiralty. Gain fame among civilians. Upgrade your ship.</p>
+                </div>
+
+                <div class="feature-card">
+                    <svg class="feature-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    <h3>Uncover Secrets</h3>
+                    <p>Explore derelict ships and abandoned stations. Piece together clues about the Cataclysm.</p>
+                </div>
+
+                <div class="feature-card">
+                    <svg class="feature-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                    </svg>
+                    <h3>Build Relationships</h3>
+                    <p>Interact with other artilects, station AIs, and mysterious entities. Your alliances matter.</p>
+                </div>
+
+                <div class="feature-card">
+                    <svg class="feature-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    <h3>Tactical Combat</h3>
+                    <p>Engage hostiles with strategic ship-to-ship combat. Manage power and outmaneuver enemies.</p>
+                </div>
+
+                <div class="feature-card">
+                    <svg class="feature-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                    </svg>
+                    <h3>Emergent Stories</h3>
+                    <p>Dynamic missions and events create unique narratives. No two patrols are the same.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section section-dark">
+        <div class="container">
+            <h2 class="section-title">Text-Based. Imagination-Powered.</h2>
+            <p class="section-subtitle" style="margin-bottom: 2rem;">Classic gameplay, modern design</p>
+
+            <div class="terminal">
+                <div class="comment">// INCOMING TRANSMISSION</div>
+                <div class="alert" style="margin: 0.5rem 0;">[PRIORITY ALERT - SECTOR 7-ALPHA]</div>
+                <div class="text" style="margin-bottom: 1rem;">
+                    Distress signal detected from cargo vessel 'Meridian Star'.
+                    Last known position: Nav beacon 7-A-12. Signal indicates hull breach
+                    and hostile contact. Two life signs detected.
+                </div>
+                <div class="comment">Available actions:</div>
+                <div class="green">[1] Set intercept course (ETA: 12 minutes)</div>
+                <div class="blue">[2] Request backup from Station Helios</div>
+                <div class="yellow">[3] Scan for additional contacts</div>
+                <div class="dim">[4] Log and continue patrol</div>
+                <div class="prompt">
+                    <span class="alert">&gt;</span>
+                    <span class="cursor">&#9608;</span>
+                </div>
+            </div>
+
+            <p class="section-subtitle" style="margin-top: 2rem;">Every choice matters. What kind of officer will you become?</p>
+        </div>
+    </section>
+
+    <section class="section cta">
+        <div class="container">
+            <h2 class="section-title">Ready to Begin?</h2>
+            <p class="description">
+                Create your officer profile and take command of your first patrol. The stars are waiting.
+            </p>
+            <div class="cta-buttons">
+                <a href="/play/register" class="btn btn-primary btn-lg">Create Account</a>
+                <a href="/play/login" class="btn btn-secondary btn-lg">Sign In</a>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <a href="/" class="logo">BLACKWING</a>
+                <p>A text-based space opera where you command a starship in a universe where humanity has vanished. Patrol the stars, uncover mysteries, and shape the future.</p>
+            </div>
+            <div>
+                <h4>Game</h4>
+                <ul>
+                    <li><a href="/play">Play Now</a></li>
+                    <li><a href="/play/login">Sign In</a></li>
+                    <li><a href="/play/register">Create Account</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>About</h4>
+                <ul>
+                    <li><a href="#story">Story</a></li>
+                    <li><a href="#features">Features</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            BLACKWING - A Space Guard Chronicle
+        </div>
+    </footer>
+</body>
+</html>

@@ -9,6 +9,7 @@ use crate::pages::*;
 use crate::state::*;
 
 /// Root application component.
+/// The app is served at /play, so all routes are relative to that base.
 #[component]
 pub fn App() -> impl IntoView {
     // Create and provide global game state
@@ -20,10 +21,10 @@ pub fn App() -> impl IntoView {
     provide_context(ws_service);
 
     view! {
-        <Router>
+        <Router base="/play">
             <main class="min-h-screen bg-slate-900 text-slate-100">
                 <Routes fallback=|| "Page not found">
-                    <Route path=path!("/") view=HomePage />
+                    <Route path=path!("/") view=GamePage />
                     <Route path=path!("/game") view=GamePage />
                     <Route path=path!("/login") view=LoginPage />
                     <Route path=path!("/register") view=RegisterPage />

@@ -92,8 +92,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy server binary
 COPY --from=server-builder /app/target/release/blackwing-server /app/blackwing-server
 
-# Copy frontend static files
-COPY --from=frontend-builder /app/crates/bw-frontend/dist /app/static
+# Copy WASM app to /play
+COPY --from=frontend-builder /app/crates/bw-frontend/dist /app/play
+
+# Copy static landing page
+COPY static /app/static
 
 # Copy scripts
 COPY scripts /app/scripts
