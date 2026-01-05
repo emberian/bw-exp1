@@ -183,11 +183,12 @@ impl ConfigManager {
         })?;
 
         // Watch the config file's parent directory (watching single file can be unreliable)
-        if let Some(parent) = path.parent() {
-            watcher.watch(parent, RecursiveMode::NonRecursive)?;
-        } else {
-            watcher.watch(&path, RecursiveMode::NonRecursive)?;
-        }
+        // Note: path.parent() returns Some("") for "config.toml", so check if parent is non-empty
+        let watch_path = path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        watcher.watch(&watch_path, RecursiveMode::NonRecursive)?;
 
         tracing::info!("Config hot-reload enabled for {:?}", path);
 

@@ -18,14 +18,14 @@ pub fn router() -> Router<Arc<GameState>> {
     Router::new()
         .route("/factions", get(list_factions))
         .route("/sectors", get(list_sectors))
-        .route("/sector/:id", get(get_sector))
-        .route("/sector/:id/missions", get(list_sector_missions))
+        .route("/sector/{id}", get(get_sector))
+        .route("/sector/{id}/missions", get(list_sector_missions))
         .route("/player/me", get(get_current_player))
-        .route("/player/:id", get(get_player))
+        .route("/player/{id}", get(get_player))
         .route("/player/me/ships", get(get_my_ships))
-        .route("/ship/:id", get(get_ship))
+        .route("/ship/{id}", get(get_ship))
         .route("/squadrons", get(list_squadrons))
-        .route("/squadron/:id", get(get_squadron))
+        .route("/squadron/{id}", get(get_squadron))
 }
 
 #[derive(Serialize)]

@@ -16,6 +16,8 @@ use bw_server::{
     init_config, config, spawn_sighup_handler,
 };
 
+use anyhow::Context;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load environment
@@ -34,7 +36,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Load configuration
     // File watching for auto-reload is controlled by config, SIGHUP always works
-    let config_manager = init_config("config.toml", true)?;
+    let config_manager = init_config("config.toml", true)
+        .context("Failed to load config.toml")?;
     let server_config = config().get();
 
     // Initialize database (env var overrides config)
@@ -43,7 +46,8 @@ async fn main() -> anyhow::Result<()> {
         .or_else(|| server_config.server.database_url.clone())
         .unwrap_or_else(|| "sqlite:./blackwing.db".to_string());
     tracing::info!("Connecting to database: {}", database_url);
-    let db = Database::new(&database_url).await?;
+    let db = Database::new(&database_url).await
+        .context(format!("Failed to connect to database: {}", database_url))?;
     tracing::info!("Database connected and migrations applied");
 
     // Seed default admin user if it doesn't exist
@@ -54,7 +58,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize game state
-    let state = Arc::new(GameState::new(db).await?);
+    let state = Arc::new(GameState::new(db).await
+        .context("Failed to initialize GameState")?);
 
     // Load scripts
     let scripts_dir = &server_config.scripting.scripts_dir;

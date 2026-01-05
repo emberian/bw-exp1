@@ -75,6 +75,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                                                 ship_id,
                                                 sector_id: sid,
                                                 connection: None,
+                                                playtest_id: None,
                                             });
 
                                             Some(pid)

@@ -11,6 +11,7 @@ use bw_shared::{
     AdminClientMessage, AdminServerMessage, EntityFilter, EntitySummary, EntityType,
     ScriptFileInfo, SectorSummaryAdmin, ServerMessage, StagedChange, ChangePreview,
     ValidationError, SimConfigSection,
+    ForkConfigDto, PromoteConfigDto, PlaytestSummaryDto, PlaytestDetailDto, PlaytestParticipantDto,
 };
 use crate::{config::config, GameState};
 
@@ -68,6 +69,56 @@ pub async fn handle_admin_message(
 
         AdminClientMessage::CommitStaged { changes } => {
             handle_commit_staged(state, tx, username, changes).await;
+        }
+
+        // === Playtest Management ===
+
+        AdminClientMessage::CreatePlaytest { name, fork_config } => {
+            handle_create_playtest(state, tx, _player_id, name, fork_config).await;
+        }
+
+        AdminClientMessage::ListPlaytests => {
+            handle_list_playtests(state, tx).await;
+        }
+
+        AdminClientMessage::GetPlaytest { playtest_id } => {
+            handle_get_playtest(state, tx, playtest_id).await;
+        }
+
+        AdminClientMessage::JoinPlaytest { playtest_id } => {
+            handle_join_playtest(state, tx, _player_id, playtest_id).await;
+        }
+
+        AdminClientMessage::LeavePlaytest => {
+            handle_leave_playtest(state, tx, _player_id).await;
+        }
+
+        AdminClientMessage::InviteToPlaytest { playtest_id, player_id } => {
+            handle_invite_to_playtest(state, tx, _player_id, playtest_id, player_id).await;
+        }
+
+        AdminClientMessage::KickFromPlaytest { playtest_id, player_id } => {
+            handle_kick_from_playtest(state, tx, _player_id, playtest_id, player_id).await;
+        }
+
+        AdminClientMessage::SetPlaytestPaused { playtest_id, paused } => {
+            handle_set_playtest_paused(state, tx, _player_id, playtest_id, paused).await;
+        }
+
+        AdminClientMessage::SetPlaytestTimeScale { playtest_id, scale } => {
+            handle_set_playtest_time_scale(state, tx, _player_id, playtest_id, scale).await;
+        }
+
+        AdminClientMessage::DestroyPlaytest { playtest_id } => {
+            handle_destroy_playtest(state, tx, _player_id, playtest_id).await;
+        }
+
+        AdminClientMessage::PromotePlaytest { playtest_id, promote_config } => {
+            handle_promote_playtest(state, tx, _player_id, playtest_id, promote_config).await;
+        }
+
+        AdminClientMessage::PreviewPromote { playtest_id, promote_config } => {
+            handle_preview_promote(state, tx, _player_id, playtest_id, promote_config).await;
         }
     }
 
@@ -906,4 +957,680 @@ async fn apply_change(state: &GameState, change: &StagedChange) -> Result<(), St
             Ok(())
         }
     }
+}
+
+// =============================================================================
+// Playtest Operations
+// =============================================================================
+
+async fn handle_create_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    owner_id: Uuid,
+    name: String,
+    fork_config_dto: ForkConfigDto,
+) {
+    use crate::playtest::{ForkConfig, PlaytestBuilder};
+
+    // Validate owner has an active session
+    let Some(session) = state.players.get(&owner_id) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "NO_SESSION".to_string(),
+            message: "You must be connected to create a playtest".to_string(),
+        })).await;
+        return;
+    };
+
+    // Check if already in a playtest
+    if session.playtest_id.is_some() {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "ALREADY_IN_PLAYTEST".to_string(),
+            message: "Leave your current playtest first".to_string(),
+        })).await;
+        return;
+    }
+
+    let ship_id = session.ship_id;
+    let sector_id = session.sector_id;
+    drop(session); // Release lock before further operations
+
+    // Convert DTO to internal config
+    let fork_config = ForkConfig {
+        sectors: fork_config_dto.sectors,
+        include_ships: fork_config_dto.include_ships,
+        specific_ships: fork_config_dto.specific_ships,
+        include_missions: fork_config_dto.include_missions,
+        include_npcs: fork_config_dto.include_npcs,
+        include_other_players: fork_config_dto.include_other_players,
+    };
+
+    // Validate fork config - check specified sectors exist
+    for sector_id in &fork_config.sectors {
+        if !state.sectors.contains_key(sector_id) {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "INVALID_SECTOR".to_string(),
+                message: format!("Sector {} does not exist", sector_id),
+            })).await;
+            return;
+        }
+    }
+
+    // Create playtest builder
+    let builder = PlaytestBuilder::new(
+        owner_id,
+        name.clone(),
+        state.get_tick(),
+        fork_config.clone(),
+    );
+    let playtest_id = builder.id();
+
+    // Build the instance with shared faction data
+    let factions = state.get_factions_arc();
+    let faction_tags = state.get_faction_tags_arc();
+    let instance = builder.build(factions, faction_tags);
+
+    // Fork state into the instance
+    state.fork_to_playtest(&instance, &fork_config);
+
+    // Add owner as participant
+    let _ = instance.add_participant(owner_id, true, ship_id, sector_id);
+
+    // Update session BEFORE registering to avoid race condition where
+    // messages could be routed before session knows about playtest
+    if let Some(mut session) = state.players.get_mut(&owner_id) {
+        session.playtest_id = Some(playtest_id);
+    }
+
+    // Register with manager
+    match state.playtest_manager.register(instance) {
+        Ok(instance) => {
+            // Spawn the simulation loop for this playtest
+            let handle = crate::playtest::spawn_playtest_loop(instance);
+            state.playtest_manager.register_simulation_task(playtest_id, handle);
+
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestCreated {
+                playtest_id,
+                name,
+            })).await;
+        }
+        Err(e) => {
+            // Rollback session update on failure
+            if let Some(mut session) = state.players.get_mut(&owner_id) {
+                session.playtest_id = None;
+            }
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "PLAYTEST_CREATE_FAILED".to_string(),
+                message: format!("{}", e),
+            })).await;
+        }
+    }
+}
+
+async fn handle_list_playtests(state: &GameState, tx: &mpsc::Sender<ServerMessage>) {
+    let playtests: Vec<PlaytestSummaryDto> = state.playtest_manager.list_all()
+        .iter()
+        .map(|instance| {
+            let owner_name = state.player_data.get(&instance.owner_id)
+                .map(|p| p.username.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            PlaytestSummaryDto {
+                id: instance.id,
+                name: instance.name.clone(),
+                owner_id: instance.owner_id,
+                owner_name,
+                participant_count: instance.participant_count(),
+                created_at_tick: instance.created_at_tick,
+                current_tick: instance.get_tick(),
+                paused: instance.is_paused(),
+                time_scale: instance.get_time_scale(),
+            }
+        })
+        .collect();
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestList { playtests })).await;
+}
+
+async fn handle_get_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    playtest_id: Uuid,
+) {
+    match state.playtest_manager.get(playtest_id) {
+        Some(instance) => {
+            let owner_name = state.player_data.get(&instance.owner_id)
+                .map(|p| p.username.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            let participants: Vec<PlaytestParticipantDto> = instance.participants.iter()
+                .map(|p| {
+                    let player_name = state.player_data.get(&p.player_id)
+                        .map(|pl| pl.username.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+
+                    PlaytestParticipantDto {
+                        player_id: p.player_id,
+                        player_name,
+                        is_gm: p.is_gm,
+                        ship_id: p.playtest_ship_id,
+                        sector_id: p.playtest_sector_id,
+                        is_connected: p.connection.is_some(),
+                    }
+                })
+                .collect();
+
+            let playtest = PlaytestDetailDto {
+                id: instance.id,
+                name: instance.name.clone(),
+                owner_id: instance.owner_id,
+                owner_name,
+                participants,
+                created_at_tick: instance.created_at_tick,
+                current_tick: instance.get_tick(),
+                paused: instance.is_paused(),
+                time_scale: instance.get_time_scale(),
+                sector_count: instance.sector_count(),
+                ship_count: instance.ship_count(),
+                player_count: instance.player_data.len(),
+            };
+
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestDetails { playtest })).await;
+        }
+        None => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "NOT_FOUND".to_string(),
+                message: "Playtest not found".to_string(),
+            })).await;
+        }
+    }
+}
+
+async fn handle_join_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    playtest_id: Uuid,
+) {
+    // Get player's current ship and sector - require active session
+    let Some(session) = state.players.get(&player_id) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "NO_SESSION".to_string(),
+            message: "You must be connected to join a playtest".to_string(),
+        })).await;
+        return;
+    };
+    let ship_id = session.ship_id;
+    let sector_id = session.sector_id;
+    drop(session);
+
+    match state.playtest_manager.join_playtest(playtest_id, player_id, ship_id, sector_id) {
+        Ok(_) => {
+            // Update player session
+            if let Some(mut session) = state.players.get_mut(&player_id) {
+                session.playtest_id = Some(playtest_id);
+            }
+
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestJoined {
+                playtest_id,
+                ship_id,
+                sector_id,
+            })).await;
+        }
+        Err(e) => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "JOIN_FAILED".to_string(),
+                message: format!("{}", e),
+            })).await;
+        }
+    }
+}
+
+async fn handle_leave_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+) {
+    match state.playtest_manager.leave_playtest(player_id) {
+        Ok(()) => {
+            // Update player session
+            if let Some(mut session) = state.players.get_mut(&player_id) {
+                session.playtest_id = None;
+            }
+
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestLeft)).await;
+        }
+        Err(e) => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "LEAVE_FAILED".to_string(),
+                message: format!("{}", e),
+            })).await;
+        }
+    }
+}
+
+async fn handle_invite_to_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    inviter_id: Uuid,
+    playtest_id: Uuid,
+    invitee_id: Uuid,
+) {
+    // Check authorization
+    if !state.playtest_manager.is_authorized(playtest_id, inviter_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "UNAUTHORIZED".to_string(),
+            message: "Only the playtest owner can invite players".to_string(),
+        })).await;
+        return;
+    }
+
+    // Get invitee's ship and sector - require active session
+    let Some(invitee_session) = state.players.get(&invitee_id) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "PLAYER_NOT_CONNECTED".to_string(),
+            message: "Invitee must be connected to be invited".to_string(),
+        })).await;
+        return;
+    };
+    let ship_id = invitee_session.ship_id;
+    let sector_id = invitee_session.sector_id;
+    drop(invitee_session);
+
+    // Add them to the playtest
+    match state.playtest_manager.join_playtest(playtest_id, invitee_id, ship_id, sector_id) {
+        Ok(_) => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestInviteSent {
+                playtest_id,
+                player_id: invitee_id,
+            })).await;
+        }
+        Err(e) => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "INVITE_FAILED".to_string(),
+                message: format!("{}", e),
+            })).await;
+        }
+    }
+}
+
+async fn handle_kick_from_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    kicker_id: Uuid,
+    playtest_id: Uuid,
+    kickee_id: Uuid,
+) {
+    // Check authorization
+    if !state.playtest_manager.is_authorized(playtest_id, kicker_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "UNAUTHORIZED".to_string(),
+            message: "Only the playtest owner can kick players".to_string(),
+        })).await;
+        return;
+    }
+
+    // Can't kick yourself (use leave instead)
+    if kicker_id == kickee_id {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "INVALID_OPERATION".to_string(),
+            message: "Cannot kick yourself, use leave instead".to_string(),
+        })).await;
+        return;
+    }
+
+    // Remove from playtest manager
+    let _ = state.playtest_manager.leave_playtest(kickee_id);
+
+    // Update kicked player's session
+    if let Some(mut session) = state.players.get_mut(&kickee_id) {
+        session.playtest_id = None;
+    }
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestPlayerKicked {
+        playtest_id,
+        player_id: kickee_id,
+    })).await;
+}
+
+async fn handle_set_playtest_paused(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    playtest_id: Uuid,
+    paused: bool,
+) {
+    // Check authorization
+    if !state.playtest_manager.is_authorized(playtest_id, player_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "UNAUTHORIZED".to_string(),
+            message: "Only the playtest owner can change pause state".to_string(),
+        })).await;
+        return;
+    }
+
+    if let Some(instance) = state.playtest_manager.get(playtest_id) {
+        instance.set_paused(paused);
+
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestStateChanged {
+            playtest_id,
+            paused,
+            time_scale: instance.get_time_scale(),
+            tick: instance.get_tick(),
+        })).await;
+    }
+}
+
+async fn handle_set_playtest_time_scale(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    playtest_id: Uuid,
+    scale: f32,
+) {
+    // Check authorization
+    if !state.playtest_manager.is_authorized(playtest_id, player_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "UNAUTHORIZED".to_string(),
+            message: "Only the playtest owner can change time scale".to_string(),
+        })).await;
+        return;
+    }
+
+    if let Some(instance) = state.playtest_manager.get(playtest_id) {
+        instance.set_time_scale(scale);
+
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestStateChanged {
+            playtest_id,
+            paused: instance.is_paused(),
+            time_scale: instance.get_time_scale(),
+            tick: instance.get_tick(),
+        })).await;
+    }
+}
+
+async fn handle_destroy_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    playtest_id: Uuid,
+) {
+    // Check authorization
+    if !state.playtest_manager.is_authorized(playtest_id, player_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "UNAUTHORIZED".to_string(),
+            message: "Only the playtest owner can destroy it".to_string(),
+        })).await;
+        return;
+    }
+
+    // Notify all participants and clear their sessions
+    if let Some(instance) = state.playtest_manager.get(playtest_id) {
+        let destroy_msg = ServerMessage::Admin(AdminServerMessage::PlaytestDestroyed {
+            playtest_id,
+        });
+
+        for participant in instance.participants.iter() {
+            // Notify participant via their playtest connection
+            if let Some(ref conn) = participant.connection {
+                let _ = conn.send(destroy_msg.clone()).await;
+            }
+
+            // Also notify via their live session connection (in case they're viewing both)
+            if let Some(session) = state.players.get(&participant.player_id) {
+                if let Some(ref conn) = session.connection {
+                    let _ = conn.send(destroy_msg.clone()).await;
+                }
+            }
+
+            // Clear playtest_id from session
+            if let Some(mut session) = state.players.get_mut(&participant.player_id) {
+                session.playtest_id = None;
+            }
+        }
+    }
+
+    match state.playtest_manager.destroy(playtest_id) {
+        Ok(()) => {
+            // Owner already notified above, but send confirmation
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PlaytestDestroyed {
+                playtest_id,
+            })).await;
+        }
+        Err(e) => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "DESTROY_FAILED".to_string(),
+                message: format!("{}", e),
+            })).await;
+        }
+    }
+}
+
+async fn handle_promote_playtest(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    playtest_id: Uuid,
+    promote_config: PromoteConfigDto,
+) {
+    // Check authorization
+    if !state.playtest_manager.is_authorized(playtest_id, player_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "UNAUTHORIZED".to_string(),
+            message: "Only the playtest owner can promote changes".to_string(),
+        })).await;
+        return;
+    }
+
+    // Get the playtest instance
+    let Some(instance) = state.playtest_manager.get(playtest_id) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "NOT_FOUND".to_string(),
+            message: "Playtest not found".to_string(),
+        })).await;
+        return;
+    };
+
+    let mut applied_count = 0;
+    let mut errors = Vec::new();
+
+    // Promote ship changes
+    let ships_to_update: Vec<Uuid> = if promote_config.ships.is_empty() {
+        // All modified ships in playtest (that exist in live)
+        instance.ships.iter()
+            .filter(|s| state.ships.contains_key(&s.id))
+            .map(|s| s.id)
+            .collect()
+    } else {
+        promote_config.ships.clone()
+    };
+
+    for ship_id in ships_to_update {
+        if let Some(playtest_ship) = instance.ships.get(&ship_id) {
+            if let Some(mut live_ship) = state.ships.get_mut(&ship_id) {
+                // Validate and clamp values before applying
+                let hull = playtest_ship.hull_integrity.clamp(0.0, 100.0);
+                let shield = playtest_ship.shield_strength.clamp(0.0, 100.0);
+
+                // Skip if ship was destroyed in playtest (hull <= 0)
+                if hull <= 0.0 {
+                    errors.push(format!("Ship {} was destroyed in playtest, skipping", ship_id));
+                    continue;
+                }
+
+                // Check if ship changed sectors - skip position/status if so to prevent data corruption
+                let sector_changed = playtest_ship.sector_id != live_ship.sector_id;
+                if sector_changed {
+                    errors.push(format!("Ship {} changed sectors in playtest, skipping position/status", ship_id));
+                }
+
+                // Copy relevant fields from playtest to live with validation
+                live_ship.hull_integrity = hull;
+                live_ship.shield_strength = shield;
+                live_ship.resources = playtest_ship.resources.clone();
+                live_ship.crew = playtest_ship.crew.clone();
+                live_ship.combat_stance = playtest_ship.combat_stance;
+                live_ship.cargo = playtest_ship.cargo.clone();
+                live_ship.upgrades = playtest_ship.upgrades.clone();
+
+                // Only promote position/status if sector didn't change
+                if !sector_changed {
+                    live_ship.position = playtest_ship.position;
+                    live_ship.status = playtest_ship.status.clone();
+                }
+                applied_count += 1;
+            } else {
+                errors.push(format!("Ship {} not found in live state", ship_id));
+            }
+        }
+    }
+
+    // Promote player changes
+    let players_to_update: Vec<Uuid> = if promote_config.players.is_empty() {
+        // All modified players in playtest (that exist in live)
+        instance.player_data.iter()
+            .filter(|p| state.player_data.contains_key(&p.id))
+            .map(|p| p.id)
+            .collect()
+    } else {
+        promote_config.players.clone()
+    };
+
+    for player_id in players_to_update {
+        if let Some(playtest_player) = instance.player_data.get(&player_id) {
+            if let Some(mut live_player) = state.player_data.get_mut(&player_id) {
+                // Copy relevant fields from playtest to live
+                live_player.resources = playtest_player.resources.clone();
+                live_player.credits = playtest_player.credits;
+                applied_count += 1;
+            } else {
+                errors.push(format!("Player {} not found in live state", player_id));
+            }
+        }
+    }
+
+    // Spawn new entities created in playtest
+    if promote_config.spawn_new_entities {
+        for entry in instance.created_ship_ids.iter() {
+            let ship_id = *entry.key();
+            if let Some(playtest_ship) = instance.ships.get(&ship_id) {
+                // Verify the target sector exists to prevent orphaned ships
+                if !state.sectors.contains_key(&playtest_ship.sector_id) {
+                    errors.push(format!(
+                        "Cannot spawn ship {} - sector {} doesn't exist in live",
+                        ship_id, playtest_ship.sector_id
+                    ));
+                    continue;
+                }
+
+                let ship_clone = (*playtest_ship).clone();
+                state.ships.insert(ship_id, ship_clone.clone());
+
+                // Add to sector (guaranteed to exist from check above)
+                if let Some(sector) = state.sectors.get(&ship_clone.sector_id) {
+                    sector.ship_ids.insert(ship_id, ());
+                }
+                applied_count += 1;
+            }
+        }
+    }
+
+    // Apply deletions
+    if promote_config.apply_deletions {
+        for entry in instance.deleted_ship_ids.iter() {
+            let ship_id = *entry.key();
+            if let Some((_, ship)) = state.ships.remove(&ship_id) {
+                // Remove from sector
+                if let Some(sector) = state.sectors.get(&ship.sector_id) {
+                    sector.ship_ids.remove(&ship_id);
+                }
+                applied_count += 1;
+            }
+        }
+    }
+
+    tracing::info!(
+        playtest_id = %playtest_id,
+        applied_count = applied_count,
+        error_count = errors.len(),
+        "Promoted playtest changes to live"
+    );
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PromoteResult {
+        success: errors.is_empty(),
+        applied_count,
+        errors,
+    })).await;
+}
+
+async fn handle_preview_promote(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    playtest_id: Uuid,
+    promote_config: PromoteConfigDto,
+) {
+    // Check authorization
+    if !state.playtest_manager.is_authorized(playtest_id, player_id) {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "UNAUTHORIZED".to_string(),
+            message: "Only the playtest owner can preview promotion".to_string(),
+        })).await;
+        return;
+    }
+
+    // Get the playtest instance
+    let Some(instance) = state.playtest_manager.get(playtest_id) else {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "NOT_FOUND".to_string(),
+            message: "Playtest not found".to_string(),
+        })).await;
+        return;
+    };
+
+    // Count ships that would be updated
+    let ships_to_update = if promote_config.ships.is_empty() {
+        // Count all ships in playtest that exist in live
+        instance.ships.iter()
+            .filter(|s| state.ships.contains_key(&s.id))
+            .count()
+    } else {
+        // Count specified ships that exist in both playtest and live
+        promote_config.ships.iter()
+            .filter(|id| instance.ships.contains_key(id) && state.ships.contains_key(id))
+            .count()
+    };
+
+    // Count players that would be updated
+    let players_to_update = if promote_config.players.is_empty() {
+        // Count all players in playtest that exist in live
+        instance.player_data.iter()
+            .filter(|p| state.player_data.contains_key(&p.id))
+            .count()
+    } else {
+        // Count specified players that exist in both playtest and live
+        promote_config.players.iter()
+            .filter(|id| instance.player_data.contains_key(id) && state.player_data.contains_key(id))
+            .count()
+    };
+
+    // Count new entities that would be spawned
+    let new_entities = if promote_config.spawn_new_entities {
+        instance.created_ship_ids.len()
+    } else {
+        0
+    };
+
+    // Count deletions that would be applied
+    let deletions = if promote_config.apply_deletions {
+        instance.deleted_ship_ids.len()
+    } else {
+        0
+    };
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::PromotePreview {
+        ships_to_update,
+        players_to_update,
+        new_entities,
+        deletions,
+    })).await;
 }

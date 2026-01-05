@@ -9,6 +9,7 @@ pub mod auth;
 pub mod config;
 pub mod middleware;
 pub mod persistence;
+pub mod playtest;
 pub mod reload;
 pub mod routes;
 pub mod scripting;

@@ -31,7 +31,21 @@ impl Database {
     ///
     /// URL format: `sqlite:./path/to/database.db` or `sqlite::memory:` for in-memory.
     pub async fn new(database_url: &str) -> Result<Self, DbError> {
-        let conn = sea_orm::Database::connect(database_url).await?;
+        // Ensure SQLite creates the file if it doesn't exist
+        let url = if database_url.starts_with("sqlite:")
+            && !database_url.contains("mode=")
+            && !database_url.contains(":memory:")
+        {
+            if database_url.contains('?') {
+                format!("{}&mode=rwc", database_url)
+            } else {
+                format!("{}?mode=rwc", database_url)
+            }
+        } else {
+            database_url.to_string()
+        };
+
+        let conn = sea_orm::Database::connect(&url).await?;
 
         // Enable WAL mode for better durability and concurrent reads
         use sea_orm::ConnectionTrait;

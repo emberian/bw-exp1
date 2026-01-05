@@ -26,22 +26,22 @@ pub fn router() -> Router<Arc<GameState>> {
         // Script management
         .route("/scripts", get(list_scripts))
         .route("/scripts/reload", post(reload_all_scripts))
-        .route("/scripts/reload/*path", post(reload_script))
+        .route("/scripts/reload/{*path}", post(reload_script))
         .route("/scripts/eval", post(eval_script))
         // Behavior management
         .route("/behaviors", get(list_behaviors))
-        .route("/behaviors/:id", get(get_behavior))
-        .route("/behaviors/:id/pause", post(pause_behavior))
-        .route("/behaviors/:id/resume", post(resume_behavior))
-        .route("/behaviors/:id", delete(detach_behavior))
-        .route("/behaviors/:id/data", get(get_behavior_data))
-        .route("/behaviors/:id/data", post(set_behavior_data))
+        .route("/behaviors/{id}", get(get_behavior))
+        .route("/behaviors/{id}/pause", post(pause_behavior))
+        .route("/behaviors/{id}/resume", post(resume_behavior))
+        .route("/behaviors/{id}", delete(detach_behavior))
+        .route("/behaviors/{id}/data", get(get_behavior_data))
+        .route("/behaviors/{id}/data", post(set_behavior_data))
         // Coroutine management
         .route("/coroutines", get(list_coroutines))
-        .route("/coroutines/:id/cancel", post(cancel_coroutine))
+        .route("/coroutines/{id}/cancel", post(cancel_coroutine))
         // Event subscriptions
         .route("/events/subscriptions", get(list_subscriptions))
-        .route("/events/subscriptions/:id", delete(unsubscribe))
+        .route("/events/subscriptions/{id}", delete(unsubscribe))
         // Script logs
         .route("/logs", get(get_logs))
         .route("/logs/clear", post(clear_logs))

@@ -1,6 +1,7 @@
 //! Server state management
 
 use std::sync::Arc;
+use anyhow::Context;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
@@ -15,6 +16,7 @@ use bw_scripting::{
 use bw_shared::ServerMessage;
 
 use crate::persistence::{Database, Persistence, TrackedDashMap};
+use crate::playtest::{ForkConfig, PlaytestInstance, PlaytestSectorInstance, PlaytestManager};
 use crate::scripting::ScriptLogBuffer;
 use crate::simulation::metrics::MetricsStore;
 
@@ -125,6 +127,9 @@ pub struct GameState {
 
     /// Performance metrics store
     pub metrics: MetricsStore,
+
+    /// Playtest manager for GM testing sessions
+    pub playtest_manager: PlaytestManager,
 }
 
 impl GameState {
@@ -169,13 +174,16 @@ impl GameState {
             state_accessor: RwLock::new(None),
             script_logs: RwLock::new(ScriptLogBuffer::new(1000)),
             metrics: MetricsStore::new(),
+            playtest_manager: PlaytestManager::new(10), // Max 10 concurrent playtests
         };
 
         // Load factions from database
-        state.load_factions().await?;
+        state.load_factions().await
+            .context("Failed to load factions from database")?;
 
         // Load sectors from database
-        state.load_sectors().await?;
+        state.load_sectors().await
+            .context("Failed to load sectors from database")?;
 
         Ok(state)
     }
@@ -510,6 +518,131 @@ impl GameState {
             }
         }
     }
+
+    // === Playtest Forking ===
+
+    /// Fork state from this GameState into a PlaytestInstance.
+    ///
+    /// This populates the playtest with copies of ships, sectors, and other
+    /// mutable state according to the ForkConfig.
+    pub fn fork_to_playtest(&self, playtest: &PlaytestInstance, config: &ForkConfig) {
+        // Determine which sectors to fork
+        let sector_ids: Vec<Uuid> = if config.sectors.is_empty() {
+            self.sectors.iter().map(|s| s.sector.id).collect()
+        } else {
+            config.sectors.clone()
+        };
+
+        // Fork sectors
+        for sector_id in &sector_ids {
+            if let Some(live_sector) = self.sectors.get(sector_id) {
+                // Create playtest sector instance
+                let playtest_sector = PlaytestSectorInstance::new(live_sector.sector.clone());
+
+                // Fork missions if configured
+                if config.include_missions {
+                    for mission in live_sector.missions.iter() {
+                        playtest_sector.missions.insert(mission.id, mission.clone());
+                    }
+                }
+
+                playtest.sectors.insert(*sector_id, playtest_sector);
+            }
+        }
+
+        // Fork ships
+        for ship_entry in self.ships.iter() {
+            let ship = ship_entry.value();
+
+            // Check if ship is in a forked sector
+            if !sector_ids.contains(&ship.sector_id) {
+                continue;
+            }
+
+            // Check specific ships filter first
+            if !config.specific_ships.is_empty() {
+                if !config.specific_ships.contains(&ship.id) {
+                    continue;
+                }
+            } else if config.include_ships {
+                // Apply NPC filter
+                if !config.include_npcs && !ship.is_player_ship {
+                    continue;
+                }
+
+                // Apply other players filter
+                if !config.include_other_players && ship.is_player_ship {
+                    // Only include owner's ship
+                    if ship.owner_id != Some(playtest.owner_id) {
+                        continue;
+                    }
+                }
+            } else {
+                // include_ships is false and not in specific_ships
+                continue;
+            }
+
+            // Clone ship
+            playtest.ships.insert(ship.id, ship.clone());
+
+            // Add to sector
+            if let Some(sector) = playtest.sectors.get(&ship.sector_id) {
+                sector.ship_ids.insert(ship.id, ());
+            }
+        }
+
+        // Fork player data for any player ships we included
+        for ship in playtest.ships.iter() {
+            if ship.is_player_ship {
+                if let Some(owner_id) = ship.owner_id {
+                    if !playtest.player_data.contains_key(&owner_id) {
+                        if let Some(player) = self.player_data.get(&owner_id) {
+                            playtest.player_data.insert(owner_id, player.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fork squadrons that have members in the playtest
+        let squadron_ids: std::collections::HashSet<Uuid> = playtest.player_data.iter()
+            .filter_map(|p| p.squadron_id)
+            .collect();
+        for squadron_id in squadron_ids {
+            if let Some(squadron) = self.squadrons.get(&squadron_id) {
+                playtest.squadrons.insert(squadron_id, squadron.clone());
+            }
+        }
+
+        tracing::info!(
+            playtest_id = %playtest.id,
+            sectors = playtest.sectors.len(),
+            ships = playtest.ships.len(),
+            players = playtest.player_data.len(),
+            "Forked state to playtest"
+        );
+    }
+
+    /// Get Arc-wrapped faction data for sharing with playtests.
+    ///
+    /// Note: This creates a new Arc with cloned data. For true sharing without
+    /// cloning, the factions field would need to be Arc<DashMap<...>> in GameState.
+    pub fn get_factions_arc(&self) -> Arc<DashMap<Uuid, Faction>> {
+        let factions = Arc::new(DashMap::new());
+        for entry in self.factions.iter() {
+            factions.insert(*entry.key(), entry.value().clone());
+        }
+        factions
+    }
+
+    /// Get Arc-wrapped faction tag index for sharing with playtests.
+    pub fn get_faction_tags_arc(&self) -> Arc<DashMap<String, Uuid>> {
+        let tags = Arc::new(DashMap::new());
+        for entry in self.faction_tags.iter() {
+            tags.insert(entry.key().clone(), *entry.value());
+        }
+        tags
+    }
 }
 
 // === StateProvider Implementation ===
@@ -614,4 +747,6 @@ pub struct PlayerSession {
     pub ship_id: Uuid,
     pub sector_id: Uuid,
     pub connection: Option<tokio::sync::mpsc::Sender<ServerMessage>>,
+    /// If Some, player is currently in a playtest instance
+    pub playtest_id: Option<Uuid>,
 }
