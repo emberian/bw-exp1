@@ -74,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
     // Initialize scripting systems (must be after Arc<GameState> is created)
     state.initialize_scripting();
 
+    // Initialize action scripts (registers handlers from scripts/actions/)
+    state.initialize_action_scripts();
+
     // Start SIGHUP handler for manual reload (kill -HUP <pid>)
     spawn_sighup_handler(config_manager, state.clone());
 

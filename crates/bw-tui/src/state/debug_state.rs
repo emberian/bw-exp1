@@ -161,6 +161,9 @@ impl DebugState {
             ServerMessage::ChoiceRequired { choice_id, .. } => {
                 ("ChoiceRequired".into(), choice_id.clone())
             }
+            ServerMessage::ScriptActionResult { action, success, .. } => {
+                ("ScriptActionResult".into(), format!("action={} success={}", action, success))
+            }
         }
     }
 

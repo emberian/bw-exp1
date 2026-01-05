@@ -162,22 +162,20 @@ impl InputHandler {
                     .iter()
                     .find(|l| l.location_type == "Station")
                 {
-                    return Some(ClientMessage::DockAtStation {
-                        station_id: station.id,
-                    });
+                    return Some(ClientMessage::dock(station.id));
                 }
                 state.ui.add_notification("No station nearby".into());
             }
             "undock" => {
-                return Some(ClientMessage::Undock);
+                return Some(ClientMessage::undock());
             }
             "stop" => {
-                return Some(ClientMessage::StopMovement);
+                return Some(ClientMessage::stop_movement());
             }
             "goto" => {
                 if parts.len() >= 3 {
                     if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
-                        return Some(ClientMessage::MoveToPosition { x, y, z: 0.0 });
+                        return Some(ClientMessage::move_to_position(x, y, 0.0));
                     }
                 }
                 state.ui.add_notification("Usage: goto <x> <y>".into());
@@ -216,16 +214,14 @@ impl InputHandler {
                     return match on_confirm {
                         crate::state::ConfirmAction::AbandonMission => {
                             if let Some(mission) = &state.game.active_mission {
-                                Some(ClientMessage::AbandonMission {
-                                    mission_id: mission.id,
-                                })
+                                Some(ClientMessage::abandon_mission(mission.id))
                             } else {
                                 None
                             }
                         }
-                        crate::state::ConfirmAction::Undock => Some(ClientMessage::Undock),
+                        crate::state::ConfirmAction::Undock => Some(ClientMessage::undock()),
                         crate::state::ConfirmAction::Disengage => {
-                            Some(ClientMessage::DisengageCombat)
+                            Some(ClientMessage::disengage_combat())
                         }
                     };
                 }
@@ -262,10 +258,7 @@ impl InputHandler {
                                 let choice_id = selected.id.clone();
                                 // Clear the choice dialog
                                 state.game.mission_choice = None;
-                                return Some(ClientMessage::MakeMissionChoice {
-                                    mission_id,
-                                    choice_id,
-                                });
+                                return Some(ClientMessage::mission_choice(mission_id, choice_id));
                             } else {
                                 state.ui.add_notification("That choice is not available".into());
                             }
@@ -309,7 +302,7 @@ impl InputHandler {
         if SELECT.matches(code, modifiers) {
             // Move to cursor position
             if let Some((x, y)) = state.ui.map_cursor {
-                return Some(ClientMessage::MoveToPosition { x, y, z: 0.0 });
+                return Some(ClientMessage::move_to_position(x, y, 0.0));
             }
         }
 
@@ -321,30 +314,28 @@ impl InputHandler {
                 .iter()
                 .find(|l| l.location_type == "Station")
             {
-                return Some(ClientMessage::DockAtStation {
-                    station_id: station.id,
-                });
+                return Some(ClientMessage::dock(station.id));
             }
             state.ui.add_notification("No station nearby".into());
         }
 
         if UNDOCK.matches(code, modifiers) {
-            return Some(ClientMessage::Undock);
+            return Some(ClientMessage::undock());
         }
 
         if STOP.matches(code, modifiers) {
-            return Some(ClientMessage::StopMovement);
+            return Some(ClientMessage::stop_movement());
         }
 
         if ENGAGE.matches(code, modifiers) {
             // Engage selected ship
             if let Some(ship) = state.game.ships.get(state.ui.ship_selected) {
-                return Some(ClientMessage::EngageTarget { target_id: ship.id });
+                return Some(ClientMessage::engage_target(ship.id));
             }
         }
 
         if DISENGAGE.matches(code, modifiers) {
-            return Some(ClientMessage::DisengageCombat);
+            return Some(ClientMessage::disengage_combat());
         }
 
         if CHAT.matches(code, modifiers) || INSERT.matches(code, modifiers) {
@@ -365,9 +356,7 @@ impl InputHandler {
                 // Jump to first adjacent sector
                 if let Some(sector) = state.game.adjacent_sectors.first() {
                     state.ui.add_notification(format!("Jumping to {}...", sector.name));
-                    return Some(ClientMessage::MoveToSector {
-                        sector_id: sector.id,
-                    });
+                    return Some(ClientMessage::move_to_sector(sector.id));
                 } else {
                     state.ui.add_notification("No adjacent sectors".into());
                 }
@@ -391,7 +380,7 @@ impl InputHandler {
         if HAIL.matches(code, modifiers) {
             if let Some(ship) = state.game.ships.get(state.ui.ship_selected) {
                 state.ui.add_notification(format!("Hailing {}...", ship.name));
-                return Some(ClientMessage::Hail { target_id: ship.id });
+                return Some(ClientMessage::hail(ship.id));
             } else {
                 state.ui.add_notification("No target selected".into());
             }
@@ -448,9 +437,7 @@ impl InputHandler {
         if ACCEPT.matches(code, modifiers) {
             if let Some(mission) = state.game.available_missions.get(state.ui.mission_selected) {
                 if mission.can_accept {
-                    return Some(ClientMessage::AcceptMission {
-                        mission_id: mission.id,
-                    });
+                    return Some(ClientMessage::accept_mission(mission.id));
                 }
             }
         }

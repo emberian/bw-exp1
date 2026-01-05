@@ -594,6 +594,18 @@ impl GameState {
             } => {
                 // TODO: Handle non-mission choices
             }
+
+            ServerMessage::ScriptActionResult {
+                action: _,
+                success: _,
+                error,
+                data: _,
+            } => {
+                // Log errors from script actions
+                if let Some(err) = error {
+                    tracing::warn!("Script action error: {}", err);
+                }
+            }
         }
     }
 }

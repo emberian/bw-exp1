@@ -3,6 +3,9 @@
 use bw_shared::ClientMessage;
 
 /// Validate a client message.
+///
+/// Note: Most validation is now handled in action scripts for ScriptAction messages.
+/// This function only validates infrastructure messages that stay in Rust.
 pub fn validate_message(msg: &ClientMessage) -> Result<(), &'static str> {
     match msg {
         ClientMessage::SendChat { message, .. } => {
@@ -14,15 +17,7 @@ pub fn validate_message(msg: &ClientMessage) -> Result<(), &'static str> {
             }
             Ok(())
         }
-        ClientMessage::CreateSquadron { name, tag } => {
-            if name.len() < 3 || name.len() > 32 {
-                return Err("Squadron name must be 3-32 characters");
-            }
-            if tag.len() < 2 || tag.len() > 5 {
-                return Err("Squadron tag must be 2-5 characters");
-            }
-            Ok(())
-        }
+        // ScriptAction validation is handled by action scripts
         _ => Ok(()),
     }
 }

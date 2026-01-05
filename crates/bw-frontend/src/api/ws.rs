@@ -111,68 +111,62 @@ impl WsService {
 
     /// Request to move to a position.
     pub fn move_to_position(&self, x: f64, y: f64) {
-        self.send(ClientMessage::MoveToPosition { x, y, z: 0.0 });
+        self.send(ClientMessage::move_to_position(x, y, 0.0));
     }
 
     /// Request to move to a location.
     pub fn move_to_location(&self, location_id: Uuid) {
-        self.send(ClientMessage::MoveToLocation { location_id });
+        self.send(ClientMessage::move_to_location(location_id));
     }
 
     /// Stop current movement.
     pub fn stop_movement(&self) {
-        self.send(ClientMessage::StopMovement);
+        self.send(ClientMessage::stop_movement());
     }
 
     /// Dock at a station.
     pub fn dock(&self, station_id: Uuid) {
-        self.send(ClientMessage::DockAtStation { station_id });
+        self.send(ClientMessage::dock(station_id));
     }
 
     /// Undock from current station.
     pub fn undock(&self) {
-        self.send(ClientMessage::Undock);
+        self.send(ClientMessage::undock());
     }
 
     /// Use a station service.
     pub fn use_service(&self, service: String) {
-        self.send(ClientMessage::UseService { service });
+        self.send(ClientMessage::use_service(service));
     }
 
     /// Accept a mission.
     pub fn accept_mission(&self, mission_id: Uuid) {
-        self.send(ClientMessage::AcceptMission { mission_id });
+        self.send(ClientMessage::accept_mission(mission_id));
     }
 
     /// Abandon a mission.
     pub fn abandon_mission(&self, mission_id: Uuid) {
-        self.send(ClientMessage::AbandonMission { mission_id });
+        self.send(ClientMessage::abandon_mission(mission_id));
     }
 
     /// Make a mission choice.
     pub fn make_mission_choice(&self, mission_id: Uuid, choice_id: String) {
-        self.send(ClientMessage::MakeMissionChoice {
-            mission_id,
-            choice_id,
-        });
+        self.send(ClientMessage::mission_choice(mission_id, choice_id));
     }
 
     /// Engage a target in combat.
     pub fn engage_target(&self, target_id: Uuid) {
-        self.send(ClientMessage::EngageTarget { target_id });
+        self.send(ClientMessage::engage_target(target_id));
     }
 
     /// Disengage from combat.
     pub fn disengage_combat(&self) {
-        self.send(ClientMessage::DisengageCombat);
+        self.send(ClientMessage::disengage_combat());
     }
 
     /// Fire a weapon at a target.
     pub fn fire_weapon(&self, weapon_index: usize, target_id: Uuid) {
-        self.send(ClientMessage::FireWeapon {
-            weapon_index,
-            target_id,
-        });
+        self.send(ClientMessage::fire_weapon(weapon_index, target_id));
     }
 
     /// Send a chat message.
@@ -182,52 +176,85 @@ impl WsService {
 
     /// Create a squadron.
     pub fn create_squadron(&self, name: String, tag: String) {
-        self.send(ClientMessage::CreateSquadron { name, tag });
+        self.send(ClientMessage::create_squadron(name, tag));
     }
 
     /// Leave current squadron.
     pub fn leave_squadron(&self) {
-        self.send(ClientMessage::LeaveSquadron);
+        self.send(ClientMessage::leave_squadron());
     }
 
     /// Perform a squadron action.
     pub fn squadron_action(&self, action: SquadronAction) {
-        self.send(ClientMessage::SquadronAction { action });
+        // Convert SquadronAction enum to script action
+        let (action_type, params) = match action {
+            SquadronAction::PromoteToOfficer { player_id } => {
+                ("promote_to_officer", serde_json::json!({ "player_id": player_id }))
+            }
+            SquadronAction::DemoteOfficer { player_id } => {
+                ("demote_officer", serde_json::json!({ "player_id": player_id }))
+            }
+            SquadronAction::KickMember { player_id } => {
+                ("kick_member", serde_json::json!({ "player_id": player_id }))
+            }
+            SquadronAction::TransferLeadership { player_id } => {
+                ("transfer_leadership", serde_json::json!({ "player_id": player_id }))
+            }
+            SquadronAction::SetMotto { motto } => {
+                ("set_motto", serde_json::json!({ "motto": motto }))
+            }
+            SquadronAction::EnableWargames { enabled } => {
+                ("enable_wargames", serde_json::json!({ "enabled": enabled }))
+            }
+            SquadronAction::EnablePrivateering { enabled } => {
+                ("enable_privateering", serde_json::json!({ "enabled": enabled }))
+            }
+            SquadronAction::DeclareWar { squadron_id } => {
+                ("declare_war", serde_json::json!({ "squadron_id": squadron_id }))
+            }
+            SquadronAction::MakePeace { squadron_id } => {
+                ("make_peace", serde_json::json!({ "squadron_id": squadron_id }))
+            }
+            SquadronAction::FormAlliance { squadron_id } => {
+                ("form_alliance", serde_json::json!({ "squadron_id": squadron_id }))
+            }
+        };
+        self.send(ClientMessage::squadron_action(action_type, params));
     }
 
     /// Invite a player to your squadron.
     pub fn invite_to_squadron(&self, player_id: Uuid) {
-        self.send(ClientMessage::InviteToSquadron { player_id });
+        self.send(ClientMessage::invite_to_squadron(player_id));
     }
 
     /// Accept a squadron invitation.
     pub fn accept_squadron_invite(&self, invite_id: Uuid) {
-        self.send(ClientMessage::AcceptSquadronInvite { invite_id });
+        self.send(ClientMessage::accept_squadron_invite(invite_id));
     }
 
     /// Decline a squadron invitation.
     pub fn decline_squadron_invite(&self, invite_id: Uuid) {
-        self.send(ClientMessage::DeclineSquadronInvite { invite_id });
+        self.send(ClientMessage::decline_squadron_invite(invite_id));
     }
 
     /// Accept an alliance proposal.
     pub fn accept_alliance(&self, proposal_id: Uuid) {
-        self.send(ClientMessage::AcceptAlliance { proposal_id });
+        self.send(ClientMessage::accept_alliance(proposal_id));
     }
 
     /// Decline an alliance proposal.
     pub fn decline_alliance(&self, proposal_id: Uuid) {
-        self.send(ClientMessage::DeclineAlliance { proposal_id });
+        self.send(ClientMessage::decline_alliance(proposal_id));
     }
 
     /// Send a quick "Yo" style hail to another ship.
     pub fn hail(&self, target_id: Uuid) {
-        self.send(ClientMessage::Hail { target_id });
+        self.send(ClientMessage::hail(target_id));
     }
 
     /// Request to move to another sector.
     pub fn move_to_sector(&self, sector_id: Uuid) {
-        self.send(ClientMessage::MoveToSector { sector_id });
+        self.send(ClientMessage::move_to_sector(sector_id));
     }
 
     /// Join a specific sector.
@@ -662,6 +689,18 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
             // TODO: Implement generic choice dialog UI
             // For now, show as notification
             game_state.notification.set(Some(format!("Choice required: {}", description)));
+        }
+
+        ServerMessage::ScriptActionResult {
+            action: _,
+            success: _,
+            error,
+            data: _,
+        } => {
+            // Script action results - show error if any
+            if let Some(err) = error {
+                game_state.set_error(err);
+            }
         }
     }
 }

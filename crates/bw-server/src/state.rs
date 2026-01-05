@@ -10,6 +10,7 @@ use uuid::Uuid;
 use bw_core::models::*;
 use bw_scripting::{
     ScriptEngine, BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher,
+    ActionRegistry, ActionDispatcher,
     StateAccessor, StateProvider, ShipSnapshot, PlayerSnapshot, SectorSnapshot,
     StateMutation, MutationResult, FileStore,
 };
@@ -119,6 +120,12 @@ pub struct GameState {
     /// Event dispatcher for triggering handlers
     pub event_dispatcher: RwLock<EventDispatcher>,
 
+    /// Action registry for script-handled client actions
+    pub action_registry: Arc<ActionRegistry>,
+
+    /// Action dispatcher for routing ScriptAction messages
+    pub action_dispatcher: RwLock<ActionDispatcher>,
+
     /// State accessor for scripts (set after initialization)
     pub state_accessor: RwLock<Option<Arc<StateAccessor>>>,
 
@@ -146,9 +153,11 @@ impl GameState {
 
         // Create scripting systems
         let event_registry = Arc::new(EventRegistry::new());
+        let action_registry = Arc::new(ActionRegistry::new());
         let behavior_manager = BehaviorManager::new(scripts.clone());
         let coroutine_scheduler = CoroutineScheduler::new(scripts.clone());
         let event_dispatcher = EventDispatcher::new(event_registry.clone(), scripts.clone());
+        let action_dispatcher = ActionDispatcher::new(action_registry.clone(), scripts.clone());
 
         let state = Self {
             db,
@@ -171,6 +180,8 @@ impl GameState {
             coroutine_scheduler: RwLock::new(coroutine_scheduler),
             event_registry,
             event_dispatcher: RwLock::new(event_dispatcher),
+            action_registry,
+            action_dispatcher: RwLock::new(action_dispatcher),
             state_accessor: RwLock::new(None),
             script_logs: RwLock::new(ScriptLogBuffer::new(1000)),
             metrics: MetricsStore::new(),
@@ -227,10 +238,100 @@ impl GameState {
             ed.set_state_accessor(accessor.clone());
         }
 
+        // Wire up action dispatcher
+        {
+            let mut ad = self.action_dispatcher.write();
+            ad.set_state_accessor(accessor.clone());
+        }
+
         // Store accessor for direct access
         *self.state_accessor.write() = Some(accessor);
 
         tracing::info!("Scripting systems initialized");
+    }
+
+    /// Initialize action scripts by calling their init() functions.
+    ///
+    /// This registers action handlers defined in scripts under `scripts/actions/`.
+    /// Must be called after `initialize_scripting()`.
+    pub fn initialize_action_scripts(self: &Arc<Self>) {
+        use bw_scripting::{ScriptExecutionContext, ExecutionGuard};
+
+        let accessor = match self.state_accessor.read().clone() {
+            Some(a) => a,
+            None => {
+                tracing::error!("Cannot initialize action scripts: state accessor not set");
+                return;
+            }
+        };
+
+        // Find action scripts
+        let action_scripts: Vec<String> = self.scripts.loaded_scripts()
+            .into_iter()
+            .filter(|name| name.starts_with("actions/"))
+            .collect();
+
+        if action_scripts.is_empty() {
+            tracing::info!("No action scripts found to initialize");
+            return;
+        }
+
+        let mut initialized = 0;
+        let mut failed = 0;
+
+        for script_name in &action_scripts {
+            // Set up execution context with action registry
+            let ctx = ScriptExecutionContext::new(accessor.clone())
+                .with_script_path(script_name)
+                .with_action_registry(self.action_registry.clone());
+
+            // Enter execution context
+            let _guard = match ExecutionGuard::enter(ctx) {
+                Ok(g) => g,
+                Err(e) => {
+                    tracing::warn!(
+                        script = %script_name,
+                        error = %e,
+                        "Failed to enter execution context for action script"
+                    );
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            // Call init() if it exists
+            match self.scripts.call_function::<()>(script_name, "init", ()) {
+                Ok(()) => {
+                    tracing::debug!(script = %script_name, "Action script initialized");
+                    initialized += 1;
+                }
+                Err(e) => {
+                    // Check if it's just "function not found" - that's okay
+                    let err_str = format!("{}", e);
+                    if err_str.contains("not found") || err_str.contains("Function not found") {
+                        tracing::debug!(
+                            script = %script_name,
+                            "Action script has no init() function, skipping"
+                        );
+                    } else {
+                        tracing::warn!(
+                            script = %script_name,
+                            error = %e,
+                            "Failed to initialize action script"
+                        );
+                        failed += 1;
+                    }
+                }
+            }
+        }
+
+        let registered = self.action_registry.count();
+        tracing::info!(
+            scripts = initialized,
+            failed = failed,
+            actions = registered,
+            "Action scripts initialized"
+        );
     }
 
     /// Load all factions from database into memory.

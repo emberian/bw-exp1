@@ -32,6 +32,7 @@ use thiserror::Error;
 
 use crate::state::{StateAccessor, WatchRegistry};
 use crate::events::EventRegistry;
+use crate::actions::ActionRegistry;
 use crate::persistence::ScriptStateStore;
 
 /// Error during script execution context setup.
@@ -59,6 +60,9 @@ pub struct ScriptExecutionContext {
     /// Event registry for event subscriptions (optional).
     pub event_registry: Option<Arc<EventRegistry>>,
 
+    /// Action registry for action handlers (optional).
+    pub action_registry: Option<Arc<ActionRegistry>>,
+
     /// Persistence store for script state (optional).
     pub persistence_store: Option<Arc<dyn ScriptStateStore>>,
 
@@ -82,6 +86,7 @@ impl ScriptExecutionContext {
             accessor,
             watch_registry: None,
             event_registry: None,
+            action_registry: None,
             persistence_store: None,
             script_path: String::new(),
             owner_entity_id: None,
@@ -123,6 +128,12 @@ impl ScriptExecutionContext {
     /// Set the event registry.
     pub fn with_event_registry(mut self, registry: Arc<EventRegistry>) -> Self {
         self.event_registry = Some(registry);
+        self
+    }
+
+    /// Set the action registry.
+    pub fn with_action_registry(mut self, registry: Arc<ActionRegistry>) -> Self {
+        self.action_registry = Some(registry);
         self
     }
 
@@ -250,6 +261,11 @@ pub fn with_watch_registry<T>(f: impl FnOnce(&WatchRegistry) -> T) -> Option<T> 
 /// Get the current event registry.
 pub fn with_event_registry<T>(f: impl FnOnce(&EventRegistry) -> T) -> Option<T> {
     with_context(|ctx| ctx.event_registry.as_ref().map(|r| f(r))).flatten()
+}
+
+/// Get the current action registry.
+pub fn with_action_registry<T>(f: impl FnOnce(&ActionRegistry) -> T) -> Option<T> {
+    with_context(|ctx| ctx.action_registry.as_ref().map(|r| f(r))).flatten()
 }
 
 /// Get the current persistence store.

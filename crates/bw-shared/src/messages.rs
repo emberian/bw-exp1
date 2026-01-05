@@ -8,8 +8,13 @@ use uuid::Uuid;
 use crate::dto::*;
 
 /// Messages sent from client to server.
+///
+/// Infrastructure messages are handled directly by Rust.
+/// All game logic is handled via ScriptAction, routed to Rhai scripts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
+    // === Infrastructure (Rust-handled) ===
+
     /// Authenticate with token
     Authenticate { token: String },
 
@@ -19,44 +24,8 @@ pub enum ClientMessage {
     /// Leave current sector
     LeaveSector,
 
-    /// Movement commands
-    MoveToPosition { x: f64, y: f64, z: f64 },
-    MoveToLocation { location_id: Uuid },
-    MoveToSector { sector_id: Uuid },
-    StopMovement,
-
-    /// Station commands
-    DockAtStation { station_id: Uuid },
-    Undock,
-    UseService { service: String },
-
-    /// Mission commands
-    AcceptMission { mission_id: Uuid },
-    AbandonMission { mission_id: Uuid },
-    MakeMissionChoice { mission_id: Uuid, choice_id: String },
-
-    /// Combat commands
-    EngageTarget { target_id: Uuid },
-    DisengageCombat,
-    FireWeapon { weapon_index: usize, target_id: Uuid },
-
     /// Chat/comms
     SendChat { message: String, channel: ChatChannel },
-
-    /// Squadron commands
-    CreateSquadron { name: String, tag: String },
-    InviteToSquadron { player_id: Uuid },
-    AcceptSquadronInvite { invite_id: Uuid },
-    DeclineSquadronInvite { invite_id: Uuid },
-    LeaveSquadron,
-    SquadronAction { action: SquadronAction },
-
-    /// Alliance commands
-    AcceptAlliance { proposal_id: Uuid },
-    DeclineAlliance { proposal_id: Uuid },
-
-    /// Quick "Yo" style hail to another ship
-    Hail { target_id: Uuid },
 
     /// Heartbeat
     Ping { timestamp: u64 },
@@ -70,13 +39,148 @@ pub enum ClientMessage {
     /// Admin/GM message (requires admin privileges)
     Admin(AdminClientMessage),
 
-    /// Script-handled action (game logic delegated to scripts)
+    // === Game Logic (Script-handled) ===
+
+    /// All game actions are routed to Rhai scripts via this variant.
+    ///
+    /// Common actions:
+    /// - Movement: "move_to_position", "move_to_location", "move_to_sector", "stop_movement"
+    /// - Station: "dock", "undock", "use_service"
+    /// - Missions: "accept_mission", "abandon_mission", "mission_choice"
+    /// - Combat: "engage_target", "disengage_combat", "fire_weapon"
+    /// - Squadron: "create_squadron", "invite_to_squadron", "accept_squadron_invite", etc.
+    /// - Social: "hail"
     ScriptAction {
-        /// Action identifier (e.g., "dock", "accept_mission", "attack")
+        /// Action identifier (e.g., "dock", "accept_mission", "engage_target")
         action: String,
         /// JSON parameters for the action
         params: serde_json::Value,
     },
+}
+
+impl ClientMessage {
+    /// Create a ScriptAction message.
+    pub fn action(name: impl Into<String>, params: serde_json::Value) -> Self {
+        Self::ScriptAction {
+            action: name.into(),
+            params,
+        }
+    }
+
+    // === Movement Actions ===
+
+    pub fn move_to_position(x: f64, y: f64, z: f64) -> Self {
+        Self::action("move_to_position", serde_json::json!({ "x": x, "y": y, "z": z }))
+    }
+
+    pub fn move_to_location(location_id: Uuid) -> Self {
+        Self::action("move_to_location", serde_json::json!({ "location_id": location_id }))
+    }
+
+    pub fn move_to_sector(sector_id: Uuid) -> Self {
+        Self::action("move_to_sector", serde_json::json!({ "sector_id": sector_id }))
+    }
+
+    pub fn stop_movement() -> Self {
+        Self::action("stop_movement", serde_json::json!({}))
+    }
+
+    // === Station Actions ===
+
+    pub fn dock(station_id: Uuid) -> Self {
+        Self::action("dock", serde_json::json!({ "station_id": station_id }))
+    }
+
+    pub fn undock() -> Self {
+        Self::action("undock", serde_json::json!({}))
+    }
+
+    pub fn use_service(service: impl Into<String>) -> Self {
+        Self::action("use_service", serde_json::json!({ "service": service.into() }))
+    }
+
+    // === Mission Actions ===
+
+    pub fn accept_mission(mission_id: Uuid) -> Self {
+        Self::action("accept_mission", serde_json::json!({ "mission_id": mission_id }))
+    }
+
+    pub fn abandon_mission(mission_id: Uuid) -> Self {
+        Self::action("abandon_mission", serde_json::json!({ "mission_id": mission_id }))
+    }
+
+    pub fn mission_choice(mission_id: Uuid, choice_id: impl Into<String>) -> Self {
+        Self::action("mission_choice", serde_json::json!({
+            "mission_id": mission_id,
+            "choice_id": choice_id.into()
+        }))
+    }
+
+    // === Combat Actions ===
+
+    pub fn engage_target(target_id: Uuid) -> Self {
+        Self::action("engage_target", serde_json::json!({ "target_id": target_id }))
+    }
+
+    pub fn disengage_combat() -> Self {
+        Self::action("disengage_combat", serde_json::json!({}))
+    }
+
+    pub fn fire_weapon(weapon_index: usize, target_id: Uuid) -> Self {
+        Self::action("fire_weapon", serde_json::json!({
+            "weapon_index": weapon_index,
+            "target_id": target_id
+        }))
+    }
+
+    // === Squadron Actions ===
+
+    pub fn create_squadron(name: impl Into<String>, tag: impl Into<String>) -> Self {
+        Self::action("create_squadron", serde_json::json!({
+            "name": name.into(),
+            "tag": tag.into()
+        }))
+    }
+
+    pub fn invite_to_squadron(player_id: Uuid) -> Self {
+        Self::action("invite_to_squadron", serde_json::json!({ "player_id": player_id }))
+    }
+
+    pub fn accept_squadron_invite(invite_id: Uuid) -> Self {
+        Self::action("accept_squadron_invite", serde_json::json!({ "invite_id": invite_id }))
+    }
+
+    pub fn decline_squadron_invite(invite_id: Uuid) -> Self {
+        Self::action("decline_squadron_invite", serde_json::json!({ "invite_id": invite_id }))
+    }
+
+    pub fn leave_squadron() -> Self {
+        Self::action("leave_squadron", serde_json::json!({}))
+    }
+
+    pub fn squadron_action(action_type: impl Into<String>, params: serde_json::Value) -> Self {
+        let mut p = params;
+        if let Some(obj) = p.as_object_mut() {
+            obj.insert("action_type".to_string(), serde_json::Value::String(action_type.into()));
+        }
+        Self::action("squadron_action", p)
+    }
+
+    // === Alliance Actions ===
+
+    pub fn accept_alliance(proposal_id: Uuid) -> Self {
+        Self::action("accept_alliance", serde_json::json!({ "proposal_id": proposal_id }))
+    }
+
+    pub fn decline_alliance(proposal_id: Uuid) -> Self {
+        Self::action("decline_alliance", serde_json::json!({ "proposal_id": proposal_id }))
+    }
+
+    // === Social Actions ===
+
+    pub fn hail(target_id: Uuid) -> Self {
+        Self::action("hail", serde_json::json!({ "target_id": target_id }))
+    }
 }
 
 /// Messages sent from server to client.
