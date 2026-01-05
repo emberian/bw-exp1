@@ -206,13 +206,8 @@ async fn register(
         }
     };
 
-    // Get starting sector
-    let sector_id = state
-        .sectors
-        .iter()
-        .next()
-        .map(|s| s.sector.id)
-        .unwrap_or_else(Uuid::new_v4);
+    // Get a safe starting sector (prefer safe/core sectors with naval stations)
+    let sector_id = find_starting_sector(&state);
 
     // Create ship first (need ship ID for player)
     let ship = Ship::new_player_ship(
@@ -228,9 +223,10 @@ async fn register(
     let player = Player::new(req.username.clone(), ship_id, sector_id, faction_id);
     let player_id = player.id;
 
-    // Update ship owner
+    // Update ship owner and spawn position
     let mut ship = ship;
     ship.owner_id = Some(player_id);
+    ship.position = find_spawn_position(&state, sector_id);
 
     // Persist to database atomically (player and ship together)
     if let Err(e) = state.db.register_player(&player, &password_hash, &ship).await {
@@ -378,6 +374,11 @@ async fn login(
         },
     );
 
+    // Add ship to sector's ship list so it's visible to other players
+    if let Some(sector) = state.sectors.get(&sector_id) {
+        sector.ship_ids.insert(ship_id, ());
+    }
+
     tracing::info!("Player logged in: {}", player_id);
 
     (
@@ -425,5 +426,93 @@ async fn validate_token(
             player_id: None,
         }),
     }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Find a spawn position for a new player in the given sector.
+/// Prefers positions near NavalStations > other stations > sector center
+fn find_spawn_position(state: &GameState, sector_id: Uuid) -> Position {
+    use bw_core::models::LocationType;
+
+    let Some(sector_entry) = state.sectors.get(&sector_id) else {
+        return Position::default();
+    };
+
+    let sector = &sector_entry.sector;
+
+    // First try to find a NavalStation
+    if let Some(station) = sector.locations.iter().find(|loc| loc.location_type == LocationType::NavalStation) {
+        return spawn_position_near(&station.position);
+    }
+
+    // Second try any dockable station
+    if let Some(station) = sector.locations.iter().find(|loc| loc.location_type.is_dockable()) {
+        return spawn_position_near(&station.position);
+    }
+
+    // Fallback to sector center with small random offset
+    spawn_position_near(&Position::default())
+}
+
+/// Generate a spawn position near a reference point with small random offset.
+fn spawn_position_near(reference: &Position) -> Position {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    // Spawn 50-100 units away from the reference point in a random direction
+    let distance = rng.gen_range(50.0..100.0);
+    let angle = rng.gen_range(0.0..std::f64::consts::TAU);
+    Position::new(
+        reference.x + distance * angle.cos(),
+        reference.y + distance * angle.sin(),
+        reference.z + rng.gen_range(-10.0..10.0),
+    )
+}
+
+/// Find a safe starting sector for new players.
+/// Prefers: Safe sectors with naval stations > Safe sectors > Core sectors > Any sector
+fn find_starting_sector(state: &GameState) -> Uuid {
+    use bw_core::models::{DangerLevel, LocationType};
+
+    // First pass: Find a Safe sector with a NavalStation
+    for sector_entry in state.sectors.iter() {
+        let sector = &sector_entry.sector;
+        if sector.danger_level == DangerLevel::Safe {
+            if sector.locations.iter().any(|loc| loc.location_type == LocationType::NavalStation) {
+                return sector.id;
+            }
+        }
+    }
+
+    // Second pass: Find any Safe sector
+    for sector_entry in state.sectors.iter() {
+        if sector_entry.sector.danger_level == DangerLevel::Safe {
+            return sector_entry.sector.id;
+        }
+    }
+
+    // Third pass: Find any core sector (even if not Safe)
+    for sector_entry in state.sectors.iter() {
+        if sector_entry.sector.is_core_sector {
+            return sector_entry.sector.id;
+        }
+    }
+
+    // Fourth pass: Find any Moderate danger sector
+    for sector_entry in state.sectors.iter() {
+        if sector_entry.sector.danger_level == DangerLevel::Moderate {
+            return sector_entry.sector.id;
+        }
+    }
+
+    // Fallback: Just use the first sector, or generate a new UUID if none exist
+    state
+        .sectors
+        .iter()
+        .next()
+        .map(|s| s.sector.id)
+        .unwrap_or_else(Uuid::new_v4)
 }
 

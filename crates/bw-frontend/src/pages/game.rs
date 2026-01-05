@@ -799,14 +799,18 @@ fn MissionChoiceDialog() -> impl IntoView {
     let show_dialog = move || game_state.show_mission_dialog.get();
     let mission_choice = move || game_state.mission_choice.get();
 
+    let ws_for_dialog = ws.clone();
     view! {
         <Show when=show_dialog>
             <div class="fixed inset-0 bg-black/70 flex items-center justify-center z-60">
-                {move || {
+                {
+                    let ws = ws_for_dialog.clone();
+                    move || {
                     if let Some(choice) = mission_choice() {
                         let mission_id = choice.mission_id;
                         let description = choice.description.clone();
                         let choices = choice.choices.clone();
+                        let ws = ws.clone();
 
                         view! {
                             <div class="bg-slate-800 rounded-lg border border-slate-600 shadow-xl max-w-lg w-full mx-4">
@@ -828,7 +832,7 @@ fn MissionChoiceDialog() -> impl IntoView {
                                         let is_available = c.is_available;
                                         let requirement_text = c.requirement_text.clone();
 
-                                        let ws_clone = ws;
+                                        let ws_clone = ws.clone();
                                         let game_state_clone = game_state;
                                         let handle_choice = move |_| {
                                             if is_available {

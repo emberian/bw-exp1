@@ -37,7 +37,7 @@ ln -sf crates/bw-frontend/dist play
 mkdir -p static
 
 # Run server in background
-cargo run -p bw-server &
+cargo run -p bw-runtime &
 SERVER_PID=$!
 
 # Wait for server to start

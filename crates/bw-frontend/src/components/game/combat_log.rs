@@ -82,12 +82,15 @@ pub fn CombatLog() -> impl IntoView {
                 </div>
 
                 // Weapon controls (only show when in active combat)
-                {move || {
+                {
+                    let ws = ws.clone();
+                    move || {
                     if in_combat() && !combat_resolved() {
                         let has_target = move || selected_target().is_some();
                         let no_target = move || selected_target().is_none();
                         let weapons = game_state.ship_weapons.get();
                         let has_weapons = !weapons.is_empty();
+                        let ws = ws.clone();
 
                         view! {
                             <div class="p-2 border-b border-slate-700 bg-slate-800/50">
@@ -132,6 +135,7 @@ pub fn CombatLog() -> impl IntoView {
                                             let ammo_cost = weapon.ammo_cost;
                                             let damage = weapon.damage;
                                             let has_ammo = move || ammunition() >= ammo_cost;
+                                            let ws = ws.clone();
                                             view! {
                                                 <WeaponButton
                                                     name=weapon_name.clone()

@@ -697,36 +697,44 @@ impl GameState {
             });
         }
 
-        // Process mission updates
-        for update in mission_updates {
-            // Clone status for use in both closures
-            let status_for_available = update.status.clone();
-            let status_for_active = update.status.clone();
-            let update_id = update.id;
-            let update_progress = update.progress;
+        // Process mission updates - batch both available and active mission updates together
+        // to avoid potential render inconsistencies between the two signal updates
+        if !mission_updates.is_empty() {
+            // First, collect all updates we need to apply
+            let updates: Vec<_> = mission_updates
+                .into_iter()
+                .map(|u| (u.id, u.status, u.progress))
+                .collect();
 
+            // Update available missions
             self.available_missions.update(|missions| {
-                if let Some(mission) = missions.iter_mut().find(|m| m.id == update_id) {
-                    if let Some(status) = status_for_available {
-                        mission.status = status;
-                    }
-                    if let Some(progress) = update_progress {
-                        mission.progress = progress;
+                for (update_id, status, progress) in &updates {
+                    if let Some(mission) = missions.iter_mut().find(|m| m.id == *update_id) {
+                        if let Some(s) = status {
+                            mission.status = s.clone();
+                        }
+                        if let Some(p) = progress {
+                            mission.progress = *p;
+                        }
                     }
                 }
             });
 
-            // Also update active mission if it matches
+            // Update active mission if it matches any update
             self.active_mission.update(|active| {
-                if let Some(mission) = active
-                    && mission.id == update_id {
-                        if let Some(status) = status_for_active {
-                            mission.status = status;
-                        }
-                        if let Some(progress) = update_progress {
-                            mission.progress = progress;
+                if let Some(mission) = active {
+                    for (update_id, status, progress) in &updates {
+                        if mission.id == *update_id {
+                            if let Some(s) = status {
+                                mission.status = s.clone();
+                            }
+                            if let Some(p) = progress {
+                                mission.progress = *p;
+                            }
+                            break;
                         }
                     }
+                }
             });
         }
 
@@ -816,20 +824,13 @@ impl GameState {
         // Append new events to existing list (max 50 events)
         self.combat_events.update(|existing| {
             const MAX_EVENTS: usize = 50;
-            let new_count = event_infos.len();
 
-            // Make room for new events if needed (trim from front)
-            if existing.len() + new_count > MAX_EVENTS {
-                let to_remove = (existing.len() + new_count).saturating_sub(MAX_EVENTS);
-                existing.drain(0..to_remove.min(existing.len()));
-            }
+            // Add all new events
+            existing.extend(event_infos);
 
-            // Add new events (if more than MAX_EVENTS, only keep last MAX_EVENTS)
-            if new_count > MAX_EVENTS {
-                existing.clear();
-                existing.extend(event_infos.into_iter().skip(new_count - MAX_EVENTS));
-            } else {
-                existing.extend(event_infos);
+            // Trim from front if over limit (keep most recent events)
+            if existing.len() > MAX_EVENTS {
+                existing.drain(0..existing.len() - MAX_EVENTS);
             }
         });
 
@@ -865,9 +866,10 @@ impl GameState {
 
     /// Add a chat message.
     pub fn add_chat_message(&self, sender_name: String, message: String, channel: ChatChannel, timestamp: u64) {
-        // Get next unique ID
+        // Get next unique ID using wrapping_add to handle overflow safely
+        // (theoretically impossible to overflow u64 in practice, but explicit is better)
         let id = self.chat_message_counter.get_untracked();
-        self.chat_message_counter.set(id + 1);
+        self.chat_message_counter.set(id.wrapping_add(1));
 
         let is_system = channel == ChatChannel::System;
         self.chat_messages.update(|msgs| {

@@ -70,6 +70,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                                             let sid = player.patrol_sector_id;
                                             state.player_data.insert(pid, player);
 
+                                            // Load ship if not cached
+                                            if !state.ships.contains_key(&ship_id) {
+                                                if let Ok(Some(ship)) = state.db.find_ship(ship_id).await {
+                                                    state.ships.insert(ship_id, ship);
+                                                }
+                                            }
+
                                             // Create session tracking
                                             state.players.insert(pid, crate::PlayerSession {
                                                 player_id: pid,
@@ -79,6 +86,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                                                 connection_id: None,
                                                 playtest_id: None,
                                             });
+
+                                            // Add ship to sector so it's visible to other players
+                                            if let Some(sector) = state.sectors.get(&sid) {
+                                                sector.ship_ids.insert(ship_id, ());
+                                            }
 
                                             Some(pid)
                                         } else {

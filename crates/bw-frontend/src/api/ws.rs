@@ -17,21 +17,6 @@ use bw_shared::{ChatChannel, deserialize_message, serialize_message};
 
 use crate::state::{GameState, SquadronInfo, SquadronInviteInfo, AllianceProposalInfo};
 
-/// Container for WebSocket closures to prevent memory leaks.
-/// When this is dropped, the closures are properly freed.
-struct WsClosures {
-    _onopen: Closure<dyn FnMut(web_sys::Event)>,
-    _onmessage: Closure<dyn FnMut(MessageEvent)>,
-    _onclose: Closure<dyn FnMut(web_sys::CloseEvent)>,
-    _onerror: Closure<dyn FnMut(web_sys::ErrorEvent)>,
-}
-
-/// Shared state for WebSocket connection, properly managing closure lifetimes.
-struct WsConnection {
-    ws: WebSocket,
-    _closures: WsClosures,
-}
-
 /// WebSocket connection state
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConnectionState {
@@ -48,12 +33,9 @@ const BASE_RECONNECT_DELAY_MS: u32 = 1000;
 /// Maximum delay between reconnect attempts.
 const MAX_RECONNECT_DELAY_MS: u32 = 30000;
 
-/// Shared WebSocket connection state (stored in Rc<RefCell> for closure access).
-type SharedConnection = Rc<RefCell<Option<WsConnection>>>;
-
 /// WebSocket service for game communication.
 /// Uses signals for thread-safe state management.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct WsService {
     pub state: RwSignal<ConnectionState>,
     /// Queue of outgoing messages (supports multiple rapid sends)
@@ -68,8 +50,6 @@ pub struct WsService {
     effects_initialized: RwSignal<bool>,
     /// Generation counter to prevent stale reconnection timeouts from firing
     reconnect_generation: RwSignal<u32>,
-    /// Active WebSocket connection (closures are dropped when connection is replaced)
-    connection: SharedConnection,
 }
 
 impl Default for WsService {
@@ -88,7 +68,6 @@ impl WsService {
             auto_reconnect: RwSignal::new(true),
             effects_initialized: RwSignal::new(false),
             reconnect_generation: RwSignal::new(0),
-            connection: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -331,6 +310,10 @@ impl WsService {
     }
 
     /// Internal connect method used for both initial connection and reconnection.
+    ///
+    /// Note: Closures are leaked using `.forget()` which is standard for WASM callbacks.
+    /// The old closures become inert when the WebSocket they reference is closed.
+    /// This leak is bounded by MAX_RECONNECT_ATTEMPTS (max ~40 closures over 10 attempts).
     fn connect_internal(&self, game_state: GameState, token: String) {
         // Set connecting state (but keep Reconnecting if already reconnecting)
         if self.state.get() != ConnectionState::Reconnecting {
@@ -501,17 +484,38 @@ impl WsService {
         Effect::new(move |_| {
             // First check if WS is open - only drain queue if we can actually send
             // This prevents message loss when multiple effects exist from reconnections
-            if let Some(ref ws) = *ws_send.borrow()
-                && ws.ready_state() == WebSocket::OPEN
-            {
-                // Drain and send all queued messages
-                let messages: Vec<ClientMessage> = outgoing_queue_signal
-                    .try_update(std::mem::take)
-                    .unwrap_or_default();
+            if let Some(ref ws) = *ws_send.borrow() {
+                if ws.ready_state() == WebSocket::OPEN {
+                    // Drain all queued messages
+                    let messages: Vec<ClientMessage> = outgoing_queue_signal
+                        .try_update(std::mem::take)
+                        .unwrap_or_default();
 
-                for msg in messages {
-                    if let Ok(bytes) = serialize_message(&msg) {
-                        let _ = ws.send_with_u8_array(&bytes);
+                    // Track failed messages to re-queue
+                    let mut failed_messages = Vec::new();
+
+                    for msg in messages {
+                        if let Ok(bytes) = serialize_message(&msg) {
+                            // Check ready state again before each send (connection could close mid-loop)
+                            if ws.ready_state() == WebSocket::OPEN {
+                                if ws.send_with_u8_array(&bytes).is_err() {
+                                    // Send failed, re-queue the message
+                                    failed_messages.push(msg);
+                                }
+                            } else {
+                                // Connection closed, re-queue remaining message
+                                failed_messages.push(msg);
+                            }
+                        }
+                    }
+
+                    // Re-queue any failed messages for retry on reconnection
+                    if !failed_messages.is_empty() {
+                        outgoing_queue_signal.update(|queue| {
+                            // Prepend failed messages to maintain order
+                            failed_messages.append(queue);
+                            *queue = failed_messages;
+                        });
                     }
                 }
             }
