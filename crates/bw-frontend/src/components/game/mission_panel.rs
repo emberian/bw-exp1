@@ -106,6 +106,9 @@ where
         _ => "text-slate-400",
     };
 
+    // Clone mission_type for icon
+    let mission_type_for_icon = mission_type.clone();
+
     view! {
         <div
             class=move || {
@@ -125,9 +128,10 @@ where
         >
             <div class="flex justify-between items-start mb-2">
                 <div class="flex items-center gap-2">
+                    <MissionTypeIcon mission_type=mission_type_for_icon.clone() />
                     <h3 class="font-semibold text-slate-200">{title}</h3>
                     <Show when=move || is_high_profile>
-                        <span class="text-xs text-amber-500 font-bold">"HIGH PROFILE"</span>
+                        <HighProfileBadge />
                     </Show>
                 </div>
                 <Show when=move || has_expiry>
@@ -172,6 +176,7 @@ where
     let fame_reward = mission.fame_reward;
     let progress = mission.progress;
     let status = mission.status.clone();
+    let mission_type = mission.mission_type.clone();
 
     // Confirmation dialog state
     let confirm_state = ConfirmDialogState::new();
@@ -208,7 +213,10 @@ where
     view! {
         <div class="bg-slate-700/70 rounded-lg p-4 border border-amber-500/50">
             <div class="flex justify-between items-start mb-2">
-                <h3 class="font-semibold text-amber-400">{title}</h3>
+                <div class="flex items-center gap-2">
+                    <MissionTypeIcon mission_type=mission_type />
+                    <h3 class="font-semibold text-amber-400">{title}</h3>
+                </div>
                 <span class={format!("text-xs {}", status_color)}>{status}</span>
             </div>
             <p class="text-sm text-slate-400 mb-3">{description}</p>
@@ -305,5 +313,92 @@ fn CountdownTimer(initial_seconds: u32) -> impl IntoView {
 
     view! {
         <span class=time_class>{time_text}</span>
+    }
+}
+
+// =============================================================================
+// Asset Placeholder Components
+// =============================================================================
+
+/// Mission type icon placeholder - displays icon based on mission type.
+#[component]
+fn MissionTypeIcon(mission_type: String) -> impl IntoView {
+    let icon_content = match mission_type.as_str() {
+        "PirateIntercept" => view! {
+            <svg width="18" height="18" viewBox="0 0 18 18" class="text-red-400">
+                // Skull/pirate icon placeholder
+                <circle cx="9" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <circle cx="7" cy="6" r="1" fill="currentColor" />
+                <circle cx="11" cy="6" r="1" fill="currentColor" />
+                <path d="M7 9 L9 10 L11 9" fill="none" stroke="currentColor" stroke-width="1" />
+                <line x1="9" y1="12" x2="9" y2="16" stroke="currentColor" stroke-width="1.5" />
+                <line x1="6" y1="14" x2="12" y2="14" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+        }.into_any(),
+        "DistressSignal" => view! {
+            <svg width="18" height="18" viewBox="0 0 18 18" class="text-yellow-400">
+                // SOS/beacon icon placeholder
+                <circle cx="9" cy="9" r="3" fill="currentColor" opacity="0.5" />
+                <circle cx="9" cy="9" r="5" fill="none" stroke="currentColor" stroke-width="1" opacity="0.7" />
+                <circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4" />
+                <path d="M9 2 L9 4" stroke="currentColor" stroke-width="1.5" />
+                <path d="M9 14 L9 16" stroke="currentColor" stroke-width="1.5" />
+                <path d="M2 9 L4 9" stroke="currentColor" stroke-width="1.5" />
+                <path d="M14 9 L16 9" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+        }.into_any(),
+        "AsteroidThreat" => view! {
+            <svg width="18" height="18" viewBox="0 0 18 18" class="text-orange-400">
+                // Asteroid icon placeholder
+                <polygon points="9,2 14,5 16,10 13,15 6,16 3,11 4,6" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <circle cx="8" cy="8" r="1.5" fill="currentColor" opacity="0.3" />
+                <circle cx="11" cy="11" r="1" fill="currentColor" opacity="0.3" />
+                <circle cx="6" cy="12" r="0.8" fill="currentColor" opacity="0.3" />
+            </svg>
+        }.into_any(),
+        "TerroristPlot" => view! {
+            <svg width="18" height="18" viewBox="0 0 18 18" class="text-purple-400">
+                // Conspiracy/bomb icon placeholder
+                <circle cx="9" cy="10" r="5" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <path d="M9 5 L9 2 L11 1" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <circle cx="12" cy="1" r="1" fill="currentColor" class="animate-pulse" />
+                <line x1="7" y1="9" x2="11" y2="9" stroke="currentColor" stroke-width="1" />
+                <line x1="7" y1="11" x2="11" y2="11" stroke="currentColor" stroke-width="1" />
+            </svg>
+        }.into_any(),
+        "Investigation" => view! {
+            <svg width="18" height="18" viewBox="0 0 18 18" class="text-blue-400">
+                // Magnifying glass icon placeholder
+                <circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <line x1="12" y1="12" x2="16" y2="16" stroke="currentColor" stroke-width="2" />
+                <circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1" opacity="0.5" />
+            </svg>
+        }.into_any(),
+        _ => view! {
+            <svg width="18" height="18" viewBox="0 0 18 18" class="text-slate-400">
+                <rect x="3" y="3" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <text x="9" y="12" text-anchor="middle" font-size="8" fill="currentColor">"M"</text>
+            </svg>
+        }.into_any(),
+    };
+
+    view! {
+        <div class="w-5 h-5 flex-shrink-0">
+            {icon_content}
+        </div>
+    }
+}
+
+/// High profile mission badge placeholder.
+#[component]
+fn HighProfileBadge() -> impl IntoView {
+    view! {
+        <div class="flex items-center gap-1 px-1.5 py-0.5 bg-amber-500/20 border border-amber-500/50 rounded text-xs text-amber-400 font-bold">
+            // Star icon
+            <svg width="10" height="10" viewBox="0 0 10 10" class="text-amber-500">
+                <polygon points="5,0 6,3.5 10,4 7,6.5 8,10 5,8 2,10 3,6.5 0,4 4,3.5" fill="currentColor" />
+            </svg>
+            "HIGH PROFILE"
+        </div>
     }
 }

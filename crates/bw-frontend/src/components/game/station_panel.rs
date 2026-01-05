@@ -135,7 +135,7 @@ fn StationServiceButton(
                 view! {
                     <button
                         class=move || {
-                            let base = "px-3 py-2 rounded text-center transition-colors";
+                            let base = "px-3 py-3 rounded text-center transition-colors flex flex-col items-center gap-1";
                             if is_enabled_class() {
                                 format!("{} bg-slate-700 hover:bg-amber-600 cursor-pointer", base)
                             } else {
@@ -145,18 +145,80 @@ fn StationServiceButton(
                         disabled=move || !is_enabled_disabled()
                         on:click=handle_click_inner
                     >
-                        <div class="text-xs text-slate-200">{name}</div>
-                        <div class="text-[10px] text-slate-400">{description}</div>
+                        <ServiceIcon service=service />
+                        <div class="text-xs text-slate-200 font-medium">{name}</div>
+                        <div class="text-[10px] text-slate-400 leading-tight">{description}</div>
                     </button>
                 }.into_any()
             } else {
                 view! {
-                    <div class="px-3 py-2 bg-slate-800/50 rounded text-center">
+                    <div class="px-3 py-3 bg-slate-800/50 rounded text-center flex flex-col items-center gap-1">
+                        <ServiceIcon service=service disabled=true />
                         <div class="text-xs text-slate-600">{name}</div>
                         <div class="text-[10px] text-slate-700">"Not available"</div>
                     </div>
                 }.into_any()
             }
         }}
+    }
+}
+
+// =============================================================================
+// Asset Placeholder Components
+// =============================================================================
+
+/// Service icon placeholder - displays icon for station services.
+#[component]
+fn ServiceIcon(service: &'static str, #[prop(optional)] disabled: bool) -> impl IntoView {
+    let color_class = if disabled { "text-slate-600" } else { "text-amber-400" };
+
+    let icon_content = match service {
+        "Refuel" => view! {
+            <svg width="24" height="24" viewBox="0 0 24 24" class=color_class>
+                // Fuel pump icon placeholder
+                <rect x="6" y="4" width="8" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <path d="M14 8 L18 8 L18 14 L16 14" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <circle cx="18" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <rect x="8" y="6" width="4" height="4" fill="currentColor" opacity="0.3" />
+            </svg>
+        }.into_any(),
+        "Rearm" => view! {
+            <svg width="24" height="24" viewBox="0 0 24 24" class=color_class>
+                // Missile/ammo icon placeholder
+                <path d="M12 2 L14 6 L14 18 L12 22 L10 18 L10 6 Z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <line x1="10" y1="10" x2="14" y2="10" stroke="currentColor" stroke-width="1" />
+                <line x1="10" y1="14" x2="14" y2="14" stroke="currentColor" stroke-width="1" />
+                <circle cx="12" cy="5" r="1" fill="currentColor" />
+            </svg>
+        }.into_any(),
+        "Repair" => view! {
+            <svg width="24" height="24" viewBox="0 0 24 24" class=color_class>
+                // Wrench icon placeholder
+                <path d="M6 6 L10 10 L8 12 L4 8 C2 10 2 14 4 16 C6 18 10 18 12 16 L20 16 L20 20 L16 20 L16 16" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <circle cx="7" cy="7" r="3" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <rect x="14" y="14" width="6" height="6" rx="1" fill="currentColor" opacity="0.3" />
+            </svg>
+        }.into_any(),
+        "ShoreLeave" => view! {
+            <svg width="24" height="24" viewBox="0 0 24 24" class=color_class>
+                // Recreation/drink icon placeholder
+                <path d="M8 4 L16 4 L14 12 L14 20 L10 20 L10 12 Z" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <ellipse cx="12" cy="4" rx="4" ry="1" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <line x1="8" y1="20" x2="16" y2="20" stroke="currentColor" stroke-width="1.5" />
+                <path d="M10 8 Q12 10 14 8" fill="none" stroke="currentColor" stroke-width="1" opacity="0.5" />
+            </svg>
+        }.into_any(),
+        _ => view! {
+            <svg width="24" height="24" viewBox="0 0 24 24" class=color_class>
+                <rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+                <text x="12" y="15" text-anchor="middle" font-size="10" fill="currentColor">"?"</text>
+            </svg>
+        }.into_any(),
+    };
+
+    view! {
+        <div class="w-6 h-6">
+            {icon_content}
+        </div>
     }
 }
