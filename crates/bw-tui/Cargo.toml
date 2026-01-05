@@ -1,0 +1,41 @@
+[package]
+name = "bw-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Terminal UI client for Blackwing"
+
+[[bin]]
+name = "bw-tui"
+path = "src/main.rs"
+
+[dependencies]
+# Shared types
+bw-shared = { path = "../bw-shared" }
+
+# TUI
+ratatui = { version = "0.29", features = ["crossterm"] }
+crossterm = "0.28"
+
+# Async runtime
+tokio.workspace = true
+futures.workspace = true
+
+# WebSocket
+tokio-tungstenite = { workspace = true, features = ["native-tls"] }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+
+# Core types
+uuid.workspace = true
+chrono.workspace = true
+
+# Utilities
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap = { version = "4", features = ["derive"] }
