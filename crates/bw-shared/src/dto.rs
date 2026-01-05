@@ -16,6 +16,9 @@ pub struct PlayerDto {
     pub faction_tag: String,
     pub squadron_tag: Option<String>,
     pub is_online: bool,
+    /// Whether this player has admin/GM privileges
+    #[serde(default)]
+    pub is_admin: bool,
 }
 
 /// Ship DTO (what clients see about ships).

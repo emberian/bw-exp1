@@ -641,5 +641,9 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
         ServerMessage::TickMetricsHistory(history) => {
             game_state.handle_tick_metrics_history(history);
         }
+
+        ServerMessage::Admin(_) => {
+            // Admin messages not handled in regular client
+        }
     }
 }

@@ -105,6 +105,10 @@ pub struct GameState {
     pub show_debug_panel: RwSignal<bool>,
     pub tick_metrics: RwSignal<Option<TickMetricsInfo>>,
     pub tick_metrics_history: RwSignal<Option<TickMetricsHistoryInfo>>,
+
+    // Admin state
+    pub is_admin: RwSignal<bool>,
+    pub show_gm_editor: RwSignal<bool>,
 }
 
 /// Location info for display.
@@ -370,6 +374,9 @@ impl GameState {
             show_debug_panel: RwSignal::new(false),
             tick_metrics: RwSignal::new(None),
             tick_metrics_history: RwSignal::new(None),
+
+            is_admin: RwSignal::new(false),
+            show_gm_editor: RwSignal::new(false),
         }
     }
 
@@ -451,6 +458,7 @@ impl GameState {
         self.username.set(player.username);
         self.reputation.set(player.reputation);
         self.fame.set(player.fame);
+        self.is_admin.set(player.is_admin);
 
         // Sector info
         self.sector_id.set(Some(sector.id));

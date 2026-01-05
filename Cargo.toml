@@ -6,6 +6,7 @@ members = [
     "crates/bw-scripting",
     "crates/bw-server",
     "crates/bw-frontend",
+    "crates/bw-gm-editor",
 ]
 
 [workspace.package]
@@ -66,6 +67,7 @@ leptos_meta = { version = "0.8" }
 rand = "0.8"
 dotenvy = "0.15"
 toml = "0.8"
+derivative = "2.2"
 
 [profile.dev]
 opt-level = 1

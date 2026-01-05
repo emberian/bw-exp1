@@ -355,11 +355,7 @@ async fn login(
     let mut player = player;
     player.set_online(true);
 
-    if let Err(e) = state.db.players().set_online(player_id, true).await {
-        tracing::warn!("Failed to update online status: {}", e);
-    }
-
-    // Load into cache
+    // Load into cache (persistence is automatic via dirty tracking)
     state.player_data.insert(player_id, player);
 
     // Load ship if not cached
@@ -399,12 +395,7 @@ async fn logout(
     if let Ok(Some(session)) = state.db.sessions().find_by_token_hash(&token_hash).await {
         let _ = state.db.sessions().delete(session.id).await;
 
-        // Mark player as offline
-        if let Err(e) = state.db.players().set_online(session.player_id, false).await {
-            tracing::warn!("Failed to update online status: {}", e);
-        }
-
-        // Update cache
+        // Mark player as offline (persistence is automatic via dirty tracking)
         if let Some(mut player) = state.player_data.get_mut(&session.player_id) {
             player.set_online(false);
         }

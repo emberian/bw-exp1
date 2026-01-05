@@ -8,10 +8,13 @@
 //! - Morale: Crew belief (percentage, affects combat)
 //! - Experience: Crew skill (integer, always increases)
 
+use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 
+use crate::hash_helpers::hash_f32;
+
 /// Player-level resources (Reputation, Fame)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, Default)]
 pub struct PlayerResources {
     /// Standing with the admiralty. Can be spent for upgrades/favors.
     /// If it hits 0, the player is disgraced (game over).
@@ -55,14 +58,17 @@ impl PlayerResources {
 }
 
 /// Ship-level resources (Ammunition, Fuel)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct ShipResources {
     /// Percentage of ammunition remaining (0.0 - 100.0).
     /// Below 15%: attack debuff. At 0%: cannot attack.
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub ammunition: f32,
 
     /// Percentage of fuel remaining (0.0 - 100.0).
     /// Below 10%: half-speed movement only.
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub fuel: f32,
 }
 
@@ -137,12 +143,14 @@ impl ShipResources {
 }
 
 /// Crew-level resources (Morale, Experience)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct CrewResources {
     /// Crew morale as percentage (0.0 - 100.0).
     /// Above 50%: positive combat modifier.
     /// Below 50%: negative combat modifier.
     /// Always boosted by player Fame.
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub morale: f32,
 
     /// Crew experience (integer, cumulative).

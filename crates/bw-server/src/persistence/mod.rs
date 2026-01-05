@@ -3,14 +3,20 @@
 //! Provides SQLite-based persistence for all game entities.
 
 pub mod converters;
+pub mod entities;
 pub mod error;
 mod migrations;
 pub mod models;
 pub mod repositories;
+pub mod tracked;
+pub mod worker;
 
 pub use error::DbError;
 pub use repositories::*;
+pub use tracked::TrackedDashMap;
+pub use worker::{Persistence, spawn_persistence_worker};
 
+use sea_orm::DatabaseConnection;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Pool, Sqlite};
 
@@ -18,7 +24,10 @@ use bw_core::models::{Player, Ship};
 
 /// Database connection pool and repository access.
 pub struct Database {
+    /// SQLx pool for legacy repositories
     pool: Pool<Sqlite>,
+    /// SeaORM connection for new persistence layer
+    sea_conn: DatabaseConnection,
 }
 
 impl Database {
@@ -26,12 +35,24 @@ impl Database {
     ///
     /// URL format: `sqlite:./path/to/database.db` or `sqlite::memory:` for in-memory.
     pub async fn new(database_url: &str) -> Result<Self, DbError> {
+        // Create SQLx pool for legacy repositories
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect(database_url)
             .await?;
 
-        let db = Self { pool };
+        // Create SeaORM connection for new persistence layer
+        let sea_conn = sea_orm::Database::connect(database_url).await?;
+
+        // Enable WAL mode for better durability and concurrent reads
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA synchronous=NORMAL")
+            .execute(&pool)
+            .await?;
+
+        let db = Self { pool, sea_conn };
         db.run_migrations().await?;
 
         Ok(db)
@@ -47,9 +68,21 @@ impl Database {
         migrations::run(&self.pool).await
     }
 
-    /// Get the underlying connection pool.
+    /// Get the underlying SQLx connection pool.
     pub fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
+    }
+
+    /// Get the SeaORM database connection.
+    pub fn sea_connection(&self) -> &DatabaseConnection {
+        &self.sea_conn
+    }
+
+    /// Spawn the persistence worker and return a handle.
+    ///
+    /// The worker runs in the background, batching and persisting entity changes.
+    pub fn spawn_persistence(&self) -> Persistence {
+        spawn_persistence_worker(self.sea_conn.clone())
     }
 
     /// Register a new player with their ship atomically.

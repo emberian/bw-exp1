@@ -7,11 +7,15 @@
 //! - Provide collective bonuses to members
 
 use chrono::{DateTime, Utc};
+use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::hash_helpers::hash_f32;
+
 /// A player squadron (alliance).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct Squadron {
     /// Unique identifier
     pub id: Uuid,
@@ -53,9 +57,11 @@ pub struct Squadron {
     pub treasury: i64,
 
     /// Collective reputation bonus for members
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub reputation_bonus: f32,
 
     /// Collective fame bonus for members
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub fame_bonus: f32,
 
     /// Allied squadrons
@@ -233,7 +239,8 @@ impl Squadron {
 }
 
 /// Squadron settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct SquadronSettings {
     /// Whether to accept join requests automatically
     pub auto_accept: bool,
@@ -242,11 +249,12 @@ pub struct SquadronSettings {
     /// Whether members can invite
     pub members_can_invite: bool,
     /// Tax rate on member mission rewards (0.0 - 0.5)
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub tax_rate: f32,
 }
 
 /// Squadron statistics.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Hash, Serialize, Deserialize)]
 pub struct SquadronStats {
     /// Total missions completed by all members
     pub total_missions: i32,
@@ -261,7 +269,7 @@ pub struct SquadronStats {
 }
 
 /// Types of things a squadron can build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SquadronBuildingType {
     /// Small presence in a sector
     Outpost,

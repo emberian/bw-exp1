@@ -47,25 +47,37 @@ FROM rust:latest AS frontend-builder
 
 WORKDIR /app
 
-# Install trunk and wasm target
+# Install trunk, wasm-pack, and wasm target
 RUN rustup target add wasm32-unknown-unknown && \
-    cargo install trunk --locked
+    cargo install trunk --locked && \
+    cargo install wasm-pack --locked
+
+# Install Node.js for GM editor JS bundle
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs
 
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
 COPY crates/bw-shared/Cargo.toml crates/bw-shared/
 COPY crates/bw-frontend/Cargo.toml crates/bw-frontend/
+COPY crates/bw-gm-editor/Cargo.toml crates/bw-gm-editor/
 
 # Create dummy files for dependency caching
-RUN mkdir -p crates/bw-shared/src crates/bw-frontend/src && \
+RUN mkdir -p crates/bw-shared/src crates/bw-frontend/src crates/bw-gm-editor/src && \
     echo "pub fn dummy() {}" > crates/bw-shared/src/lib.rs && \
     echo "pub fn dummy() {}" > crates/bw-frontend/src/lib.rs && \
-    echo "fn main() {}" > crates/bw-frontend/src/main.rs
+    echo "fn main() {}" > crates/bw-frontend/src/main.rs && \
+    echo "pub fn dummy() {}" > crates/bw-gm-editor/src/lib.rs
 
 # Copy frontend build files
 COPY crates/bw-frontend/index.html crates/bw-frontend/
 COPY crates/bw-frontend/Trunk.toml crates/bw-frontend/
 COPY crates/bw-frontend/style crates/bw-frontend/style
+
+# Copy GM editor build files
+COPY crates/bw-gm-editor/package.json crates/bw-gm-editor/
+COPY crates/bw-gm-editor/vite.config.js crates/bw-gm-editor/
+COPY crates/bw-gm-editor/js crates/bw-gm-editor/js
 
 # Pre-build dependencies
 RUN cd crates/bw-frontend && trunk build --release 2>/dev/null || true
@@ -73,10 +85,18 @@ RUN cd crates/bw-frontend && trunk build --release 2>/dev/null || true
 # Copy actual source
 COPY crates/bw-shared/src crates/bw-shared/src
 COPY crates/bw-frontend/src crates/bw-frontend/src
+COPY crates/bw-gm-editor/src crates/bw-gm-editor/src
 
 # Build frontend
 RUN touch crates/bw-shared/src/lib.rs crates/bw-frontend/src/lib.rs crates/bw-frontend/src/main.rs && \
     cd crates/bw-frontend && trunk build --release
+
+# Build GM editor (WASM + JS bundle)
+RUN cd crates/bw-gm-editor && \
+    npm install && \
+    wasm-pack build --target web --out-dir dist --out-name bw_gm_editor && \
+    npm run build:js && \
+    mv dist/js/editor.js dist/editor.js 2>/dev/null || true
 
 # Runtime stage
 FROM debian:bookworm-slim AS runtime
@@ -94,6 +114,9 @@ COPY --from=server-builder /app/target/release/blackwing-server /app/blackwing-s
 
 # Copy WASM app to /play
 COPY --from=frontend-builder /app/crates/bw-frontend/dist /app/play
+
+# Copy GM editor to /play/gm-editor
+COPY --from=frontend-builder /app/crates/bw-gm-editor/dist /app/play/gm-editor
 
 # Copy static landing page
 COPY static /app/static

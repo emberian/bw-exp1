@@ -359,6 +359,23 @@ pub fn GamePage() -> impl IntoView {
                     >
                         {move || if game_state.show_debug_panel.get() { "Debug ▼" } else { "Debug ▲" }}
                     </button>
+
+                    // GM Editor toggle (admin only)
+                    <Show when=move || game_state.is_admin.get()>
+                        <button
+                            class="px-2 py-1 text-amber-500 hover:text-amber-300 hover:bg-slate-700 rounded transition-colors font-medium"
+                            on:click=move |_| {
+                                let show = !game_state.show_gm_editor.get();
+                                game_state.show_gm_editor.set(show);
+                                if show {
+                                    spawn_gm_editor();
+                                }
+                            }
+                            title="Toggle GM Editor"
+                        >
+                            {move || if game_state.show_gm_editor.get() { "GM ▼" } else { "GM ▲" }}
+                        </button>
+                    </Show>
                 </div>
             </footer>
 
@@ -367,8 +384,78 @@ pub fn GamePage() -> impl IntoView {
 
             // Performance debug panel
             <DebugPanel />
+
+            // GM Editor container (dynamically loaded)
+            <div id="gm-editor-container" class="hidden" />
         </div>
     }
+}
+
+/// Spawn the GM editor by dynamically loading the WASM module.
+fn spawn_gm_editor() {
+    use wasm_bindgen_futures::spawn_local;
+
+    spawn_local(async move {
+        // Get WS URL and auth token
+        let ws_url = get_ws_url();
+        let auth_token = get_auth_token().unwrap_or_default();
+
+        // Dynamically import and mount the GM editor
+        let result = load_gm_editor_module(&ws_url, &auth_token).await;
+        if let Err(e) = result {
+            tracing::error!("[gm-editor] Failed to load: {:?}", e);
+        }
+    });
+}
+
+/// Get the WebSocket URL for the GM editor.
+fn get_ws_url() -> String {
+    let window = web_sys::window().expect("window");
+    let location = window.location();
+    let protocol = location.protocol().unwrap_or_else(|_| "https:".to_string());
+    let host = location.host().unwrap_or_else(|_| "localhost:3000".to_string());
+
+    let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
+    format!("{}//{}/ws", ws_protocol, host)
+}
+
+/// Dynamically load the GM editor WASM module.
+async fn load_gm_editor_module(ws_url: &str, auth_token: &str) -> Result<(), wasm_bindgen::JsValue> {
+    use wasm_bindgen::prelude::*;
+    use js_sys::{Function, Promise, Reflect};
+    use wasm_bindgen_futures::JsFuture;
+
+    // Load both the CodeMirror editor bundle and the WASM module
+    // Note: Files are served at /play/gm-editor/ since the app is at /play/
+    let import_code = r#"
+        (async function() {
+            // Load CodeMirror editor bundle first (sets up window.initCodeMirror etc)
+            await import('/play/gm-editor/editor.js');
+
+            // Then load the WASM module
+            const module = await import('/play/gm-editor/bw_gm_editor.js');
+            await module.default();
+            return module;
+        })()
+    "#;
+
+    // Execute the dynamic imports
+    let eval_fn = js_sys::eval(import_code)?;
+    let promise = Promise::from(eval_fn);
+    let module = JsFuture::from(promise).await?;
+
+    // Call mount_gm_editor
+    let mount_fn = Reflect::get(&module, &"mount_gm_editor".into())?;
+    let mount_fn: Function = mount_fn.dyn_into()?;
+    mount_fn.call3(
+        &JsValue::NULL,
+        &"gm-editor-container".into(),
+        &ws_url.into(),
+        &auth_token.into(),
+    )?;
+
+    tracing::info!("[gm-editor] Loaded successfully");
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

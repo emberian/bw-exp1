@@ -1,0 +1,60 @@
+[package]
+name = "bw-gm-editor"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+hydrate = ["leptos/hydrate"]
+
+[dependencies]
+bw-shared = { path = "../bw-shared" }
+
+# Leptos
+leptos.workspace = true
+leptos_meta.workspace = true
+
+# Core
+serde.workspace = true
+serde_json.workspace = true
+uuid = { version = "1.19", features = ["v4", "serde", "js"] }
+
+# WebAssembly
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "HtmlSelectElement",
+    "Window",
+    "Event",
+    "MouseEvent",
+    "KeyboardEvent",
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+    "CloseEvent",
+    "ErrorEvent",
+] }
+
+# Utils
+gloo-timers = "0.3"
+console_error_panic_hook = "0.1"
+futures.workspace = true
+rmp-serde.workspace = true
+getrandom = { version = "0.2", features = ["js"] }
+
+# Logging
+tracing.workspace = true
+tracing-wasm = "0.2"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

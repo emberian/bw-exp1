@@ -269,6 +269,21 @@ impl LocationType {
                 | Self::Archive
         )
     }
+
+    /// Whether this is a station (provides services).
+    pub fn is_station(&self) -> bool {
+        matches!(
+            self,
+            Self::NavalStation
+                | Self::CivilianStation
+                | Self::MiningFacility
+                | Self::ProcessingPlant
+                | Self::OrbitalFactory
+                | Self::FreePort
+                | Self::Shipyard
+                | Self::Archive
+        )
+    }
 }
 
 /// Services available at a location.

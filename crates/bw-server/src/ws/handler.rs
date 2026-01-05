@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use bw_shared::{ClientMessage, ServerMessage, deserialize_message, serialize_message};
-use crate::{GameState, auth::hash_token};
+use crate::{GameState, auth::hash_token, config::config};
 
 /// WebSocket upgrade handler.
 pub async fn ws_handler(
@@ -32,6 +32,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
     // Player ID (set after authentication)
     let mut player_id: Option<Uuid> = None;
     let mut sector_id: Option<Uuid> = None;
+    let mut username: Option<String> = None;
 
     // Task to forward server messages to client
     let send_task = tokio::spawn(async move {
@@ -88,9 +89,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                             if let Some(pid) = auth_result {
                                 player_id = Some(pid);
 
-                                // Get sector from player session
+                                // Get sector and username from player session
                                 if let Some(session) = state.players.get(&pid) {
                                     sector_id = Some(session.sector_id);
+                                }
+                                if let Some(player) = state.player_data.get(&pid) {
+                                    username = Some(player.username.clone());
                                 }
 
                                 // Register connection
@@ -129,7 +133,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
 
                         // Other messages require authentication
                         _ => {
-                            let (Some(pid), Some(sid)) = (player_id, sector_id) else {
+                            let (Some(pid), Some(sid), Some(ref uname)) = (player_id, sector_id, username.as_ref()) else {
                                 let _ = tx.send(ServerMessage::Error {
                                     code: "UNAUTHORIZED".to_string(),
                                     message: "Not authenticated".to_string(),
@@ -143,6 +147,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                                 &tx,
                                 pid,
                                 sid,
+                                uname,
                                 client_msg,
                             ).await;
                         }
@@ -214,6 +219,9 @@ async fn send_initial_state(
     };
     drop(player_ref);
 
+    // Check if admin
+    let is_admin = config().is_admin(&username);
+
     // Build DTOs
     let player_dto = PlayerDto {
         id: player_id,
@@ -223,6 +231,7 @@ async fn send_initial_state(
         faction_tag,
         squadron_tag,
         is_online: true,
+        is_admin,
     };
 
     let ship_dto = ShipDto {
@@ -333,12 +342,14 @@ async fn send_initial_state(
 }
 
 async fn handle_game_message(
-    state: &GameState,
+    state: &Arc<GameState>,
     tx: &mpsc::Sender<ServerMessage>,
     player_id: Uuid,
     sector_id: Uuid,
+    username: &str,
     msg: ClientMessage,
 ) {
+    use super::admin_handler::handle_admin_message;
     use crate::simulation::{
         dock_at_station, undock, use_service, start_mission, process_mission_choice,
         apply_resource_changes, start_combat, flee_from_combat,
@@ -708,7 +719,7 @@ async fn handle_game_message(
                     let ship_id = session.ship_id;
                     drop(session);
 
-                    if flee_from_combat(state, &sector, ship_id) {
+                    if flee_from_combat(state, &sector, ship_id, &state.scripts) {
                         let _ = tx.send(ServerMessage::ChatMessage {
                             sender_id: player_id,
                             sender_name: "System".to_string(),
@@ -1026,6 +1037,10 @@ async fn handle_game_message(
             tracing::debug!("Player {} unsubscribed from metrics", player_id);
         }
 
+        ClientMessage::Admin(admin_msg) => {
+            handle_admin_message(state, tx, player_id, username, admin_msg).await;
+        }
+
         _ => {
             tracing::debug!("Unhandled message from player {}: {:?}", player_id, msg);
         }
@@ -1157,6 +1172,7 @@ async fn handle_join_sector(
             state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
         }),
         is_online: player.is_online,
+        is_admin: config().is_admin(&player.username),
     };
 
     let ship_dto = ShipDto {

@@ -83,7 +83,7 @@ pub fn dock_at_station(
         ));
     }
 
-    // Dock
+    // Dock (persistence is automatic via dirty tracking)
     ship.status = ShipStatus::Docked {
         station_id: station_id,
     };
@@ -114,7 +114,7 @@ pub fn undock(state: &GameState, player_id: Uuid) -> Result<String, String> {
         return Err("Not currently docked".to_string());
     }
 
-    // Undock - move slightly away from station
+    // Undock - move slightly away from station (persistence is automatic)
     ship.status = ShipStatus::Idle;
     ship.position.x += 10.0;
     ship.position.y += 10.0;
@@ -262,6 +262,8 @@ pub fn use_service(
             }
 
             ship.resources.fuel = 100.0;
+            // Persistence is automatic via TrackedDashMap dirty tracking
+
             ServiceResult {
                 success: true,
                 message: format!("Refueled {:.1}% fuel", fuel_needed),
@@ -301,6 +303,8 @@ pub fn use_service(
             }
 
             ship.resources.ammunition = 100.0;
+            // Persistence is automatic via TrackedDashMap dirty tracking
+
             ServiceResult {
                 success: true,
                 message: format!("Rearmed {:.1}% ammunition", ammo_needed),
@@ -331,6 +335,7 @@ pub fn use_service(
             if matches!(ship.status, ShipStatus::Disabled) {
                 ship.status = ShipStatus::Docked { station_id };
             }
+            // Persistence is automatic via TrackedDashMap dirty tracking
 
             ServiceResult {
                 success: true,
@@ -370,6 +375,8 @@ pub fn use_service(
             }
 
             ship.crew.morale = 100.0;
+            // Persistence is automatic via TrackedDashMap dirty tracking
+
             ServiceResult {
                 success: true,
                 message: format!("Shore leave boosted crew morale by {:.1}%", morale_boost),

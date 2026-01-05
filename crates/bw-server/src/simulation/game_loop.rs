@@ -90,6 +90,11 @@ pub async fn run_game_loop(state: Arc<GameState>, shutdown: watch::Receiver<bool
         process_global_tick(&state, tick).await;
         metrics.end_phase();
 
+        // Persist dirty entities (automatic change detection)
+        metrics.start_phase("persistence");
+        persist_dirty_entities(&state);
+        metrics.end_phase();
+
         // Finalize and store metrics
         let tick_metrics = metrics.finish();
 
@@ -146,6 +151,35 @@ async fn broadcast_metrics(state: &GameState, metrics: TickMetricsDto) {
     }
 }
 
+/// Persist all dirty entities to the database.
+///
+/// This is called once per tick after all mutations have been applied.
+/// Only entities that have actually changed (detected via hash comparison) are persisted.
+fn persist_dirty_entities(state: &GameState) {
+    // Persist dirty ships (only player ships)
+    for ship_id in state.ships.drain_dirty() {
+        if let Some(ship) = state.ships.get(&ship_id) {
+            if ship.is_player_ship {
+                state.persist.persist_ship((*ship).clone());
+            }
+        }
+    }
+
+    // Persist dirty players
+    for player_id in state.player_data.drain_dirty() {
+        if let Some(player) = state.player_data.get(&player_id) {
+            state.persist.persist_player((*player).clone());
+        }
+    }
+
+    // Persist dirty squadrons
+    for squadron_id in state.squadrons.drain_dirty() {
+        if let Some(squadron) = state.squadrons.get(&squadron_id) {
+            state.persist.persist_squadron((*squadron).clone());
+        }
+    }
+}
+
 /// Process global game state (fame decay, session cleanup, etc).
 async fn process_global_tick(state: &GameState, tick: u64) {
     // Session cleanup every 600 ticks (1 minute at 10 TPS)
@@ -180,7 +214,7 @@ async fn process_global_tick(state: &GameState, tick: u64) {
 
         // Now process each player
         for (player_id, ship_id) in online_players_with_fame {
-            // Decay fame
+            // Decay fame (persistence is automatic via dirty tracking)
             let updated_resources = if let Some(mut player) = state.player_data.get_mut(&player_id) {
                 player.resources.decay_fame(FAME_DECAY_RATE);
                 Some((player.resources.reputation, player.resources.fame))
@@ -272,6 +306,7 @@ async fn process_sector_tick_with_metrics(
                         None
                     },
                 });
+                // Persistence is automatic via TrackedDashMap dirty tracking
             }
         }
     }
@@ -279,7 +314,7 @@ async fn process_sector_tick_with_metrics(
 
     // === Combat ===
     sector_metrics.start_phase("combat");
-    let combat_result = process_sector_combats(state, &sector, tick);
+    let combat_result = process_sector_combats(state, &sector, tick, &state.scripts);
 
     // Send combat updates to participants
     for (player_id, msg) in combat_result.updates {

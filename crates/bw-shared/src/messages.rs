@@ -66,6 +66,9 @@ pub enum ClientMessage {
 
     /// Unsubscribe from performance metrics updates
     UnsubscribeMetrics,
+
+    /// Admin/GM message (requires admin privileges)
+    Admin(AdminClientMessage),
 }
 
 /// Messages sent from server to client.
@@ -180,6 +183,9 @@ pub enum ServerMessage {
 
     /// Full metrics history (sent on subscription)
     TickMetricsHistory(TickMetricsHistoryDto),
+
+    /// Admin/GM response message
+    Admin(AdminServerMessage),
 }
 
 /// Chat channels.
@@ -218,4 +224,237 @@ pub fn serialize_message<T: Serialize>(msg: &T) -> Result<Vec<u8>, rmp_serde::en
 /// Deserialize a message from MessagePack bytes.
 pub fn deserialize_message<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T, rmp_serde::decode::Error> {
     rmp_serde::from_slice(bytes)
+}
+
+// =============================================================================
+// Admin/GM Messages
+// =============================================================================
+
+/// Admin messages sent from client to server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AdminClientMessage {
+    /// List all script files in the scripts directory
+    ListScripts,
+
+    /// Read a script file's content
+    ReadScript { path: String },
+
+    /// Write/update a script file (staged change)
+    WriteScript { path: String, content: String },
+
+    /// Get current simulation config
+    GetSimConfig,
+
+    /// Query entities with optional filters
+    QueryEntities {
+        entity_type: EntityType,
+        filters: Vec<EntityFilter>,
+        limit: usize,
+        offset: usize,
+    },
+
+    /// Get full details of a specific entity
+    GetEntity { entity_type: EntityType, id: Uuid },
+
+    /// Query all sectors with summary info
+    QuerySectors,
+
+    /// Preview staged changes (validate and compute diffs)
+    PreviewStaged { changes: Vec<StagedChange> },
+
+    /// Commit staged changes atomically
+    CommitStaged { changes: Vec<StagedChange> },
+}
+
+/// Admin messages sent from server to client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AdminServerMessage {
+    /// Script file listing
+    ScriptList { files: Vec<ScriptFileInfo> },
+
+    /// Script file content
+    ScriptContent {
+        path: String,
+        content: String,
+        last_modified: u64,
+    },
+
+    /// Current simulation config as JSON
+    SimConfigData { config: serde_json::Value },
+
+    /// Entity query results
+    EntityList {
+        entity_type: EntityType,
+        entities: Vec<EntitySummary>,
+        total_count: usize,
+    },
+
+    /// Full entity details
+    EntityDetails {
+        entity_type: EntityType,
+        id: Uuid,
+        data: serde_json::Value,
+    },
+
+    /// Sector list with admin-level details
+    SectorList { sectors: Vec<SectorSummaryAdmin> },
+
+    /// Preview of staged changes with validation
+    StagedPreview {
+        changes: Vec<ChangePreview>,
+        errors: Vec<ValidationError>,
+    },
+
+    /// Result of committing staged changes
+    CommitResult {
+        success: bool,
+        applied_count: usize,
+        errors: Vec<String>,
+    },
+
+    /// Admin error response
+    AdminError { code: String, message: String },
+}
+
+/// Entity types for admin queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EntityType {
+    Ship,
+    Player,
+    Mission,
+    Station,
+    Sector,
+}
+
+/// Filter conditions for entity queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EntityFilter {
+    /// Filter by name containing string (case-insensitive)
+    NameContains(String),
+    /// Filter by sector ID
+    InSector(Uuid),
+    /// Filter by faction ID
+    ByFaction(Uuid),
+    /// Filter by status string
+    ByStatus(String),
+    /// Filter NPC vs player ships
+    IsNpc(bool),
+    /// Filter hostile ships
+    IsHostile(bool),
+}
+
+/// A staged change pending commit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StagedChange {
+    /// Update a Rhai script file
+    ScriptUpdate { path: String, content: String },
+
+    /// Update simulation config section
+    SimConfigUpdate {
+        section: SimConfigSection,
+        value: serde_json::Value,
+    },
+
+    /// Update entity properties (partial update)
+    EntityUpdate {
+        entity_type: EntityType,
+        id: Uuid,
+        changes: serde_json::Value,
+    },
+
+    /// Spawn a new entity
+    EntitySpawn {
+        entity_type: EntityType,
+        config: serde_json::Value,
+    },
+
+    /// Delete an entity
+    EntityDelete { entity_type: EntityType, id: Uuid },
+
+    /// Update sector properties
+    SectorUpdate { id: Uuid, changes: serde_json::Value },
+
+    /// Add a location to a sector
+    LocationAdd {
+        sector_id: Uuid,
+        location: serde_json::Value,
+    },
+
+    /// Remove a location from a sector
+    LocationRemove { sector_id: Uuid, location_id: Uuid },
+}
+
+/// Simulation config sections that can be updated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SimConfigSection {
+    /// NPC spawning settings
+    NpcSpawning,
+    /// Combat settings
+    Combat,
+    /// Danger level multipliers
+    DangerMultipliers,
+    /// Replace entire config
+    Full,
+}
+
+/// Script file information for listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptFileInfo {
+    /// Relative path from scripts directory
+    pub path: String,
+    /// File name only
+    pub name: String,
+    /// File size in bytes
+    pub size_bytes: u64,
+    /// Last modified timestamp (Unix epoch seconds)
+    pub last_modified: u64,
+}
+
+/// Summary of an entity for listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitySummary {
+    pub id: Uuid,
+    pub name: String,
+    pub entity_type: EntityType,
+    pub sector_id: Option<Uuid>,
+    pub status: String,
+    /// Type-specific summary fields as JSON
+    pub extra: serde_json::Value,
+}
+
+/// Admin sector summary with counts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectorSummaryAdmin {
+    pub id: Uuid,
+    pub name: String,
+    pub danger_level: String,
+    pub ship_count: usize,
+    pub player_count: usize,
+    pub npc_count: usize,
+    pub mission_count: usize,
+    pub location_count: usize,
+}
+
+/// Preview of a single staged change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangePreview {
+    /// Type of change (e.g., "ScriptUpdate", "EntityUpdate")
+    pub change_type: String,
+    /// Human-readable target description
+    pub target: String,
+    /// Previous value (if applicable)
+    pub before: Option<serde_json::Value>,
+    /// New value
+    pub after: serde_json::Value,
+}
+
+/// Validation error for a staged change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationError {
+    /// Index of the change in the staged list
+    pub change_index: usize,
+    /// Field that failed validation
+    pub field: String,
+    /// Error message
+    pub message: String,
 }

@@ -8,6 +8,9 @@ pub enum DbError {
     #[error("Database connection failed: {0}")]
     Connection(#[from] sqlx::Error),
 
+    #[error("SeaORM error: {0}")]
+    SeaOrm(#[from] sea_orm::DbErr),
+
     #[error("Migration failed: {0}")]
     Migration(String),
 

@@ -14,7 +14,7 @@ use bw_scripting::{
 };
 use bw_shared::ServerMessage;
 
-use crate::persistence::Database;
+use crate::persistence::{Database, Persistence, TrackedDashMap};
 use crate::scripting::ScriptLogBuffer;
 use crate::simulation::metrics::MetricsStore;
 
@@ -56,6 +56,9 @@ pub struct GameState {
     /// Database connection
     pub db: Arc<Database>,
 
+    /// Streaming persistence worker handle
+    pub persist: Persistence,
+
     /// Script engine
     pub scripts: Arc<ScriptEngine>,
 
@@ -64,14 +67,16 @@ pub struct GameState {
 
     /// Player data storage (player_id -> Player)
     /// Contains the full player model with reputation, fame, stats, etc.
-    pub player_data: DashMap<Uuid, Player>,
+    /// Uses TrackedDashMap for automatic dirty tracking.
+    pub player_data: TrackedDashMap<Uuid, Player>,
 
     /// Player sessions (player_id -> PlayerSession)
     /// Contains connection and location tracking for online players
     pub players: DashMap<Uuid, PlayerSession>,
 
     /// All ships (ship_id -> Ship)
-    pub ships: DashMap<Uuid, Ship>,
+    /// Uses TrackedDashMap for automatic dirty tracking.
+    pub ships: TrackedDashMap<Uuid, Ship>,
 
     /// Factions (faction_id -> Faction)
     pub factions: DashMap<Uuid, Faction>,
@@ -80,7 +85,8 @@ pub struct GameState {
     pub faction_tags: DashMap<String, Uuid>,
 
     /// Squadrons (squadron_id -> Squadron)
-    pub squadrons: DashMap<Uuid, Squadron>,
+    /// Uses TrackedDashMap for automatic dirty tracking.
+    pub squadrons: TrackedDashMap<Uuid, Squadron>,
 
     /// Pending squadron invitations (invitee_id -> SquadronInvite)
     pub pending_squadron_invites: DashMap<Uuid, SquadronInvite>,
@@ -126,6 +132,9 @@ impl GameState {
     ///
     /// Loads factions and sectors from the database into the in-memory cache.
     pub async fn new(db: Database) -> anyhow::Result<Self> {
+        // Spawn persistence worker before wrapping db in Arc
+        let persist = db.spawn_persistence();
+
         let db = Arc::new(db);
         let scripts = Arc::new(ScriptEngine::new("scripts"));
         let (broadcaster, _) = broadcast::channel(1000);
@@ -138,14 +147,15 @@ impl GameState {
 
         let state = Self {
             db,
+            persist,
             scripts,
             sectors: DashMap::new(),
-            player_data: DashMap::new(),
+            player_data: TrackedDashMap::new(),
             players: DashMap::new(),
-            ships: DashMap::new(),
+            ships: TrackedDashMap::new(),
             factions: DashMap::new(),
             faction_tags: DashMap::new(),
-            squadrons: DashMap::new(),
+            squadrons: TrackedDashMap::new(),
             pending_squadron_invites: DashMap::new(),
             pending_alliances: DashMap::new(),
             contested_sectors: DashMap::new(),
@@ -282,6 +292,7 @@ impl GameState {
                     if let Some(ref status_change) = changes.status {
                         ship.status = status_change.to_ship_status();
                     }
+                    // Persistence is automatic via TrackedDashMap dirty tracking
                     MutationResult::success(mutation)
                 } else {
                     MutationResult::failure(mutation, "Ship not found")
@@ -302,6 +313,7 @@ impl GameState {
                     if let Some(fame_delta) = changes.fame_delta {
                         player.resources.fame = (player.resources.fame + fame_delta).max(0);
                     }
+                    // Persistence is automatic via TrackedDashMap dirty tracking
                     MutationResult::success(mutation)
                 } else {
                     MutationResult::failure(mutation, "Player not found")
@@ -337,6 +349,10 @@ impl GameState {
                             // Remove from sector
                             if let Some(sector) = self.sectors.get(&ship.sector_id) {
                                 sector.ship_ids.remove(entity_id);
+                            }
+                            // Delete from database if player ship
+                            if ship.is_player_ship {
+                                self.persist.delete_ship(*entity_id);
                             }
                             MutationResult::success(mutation)
                         } else {

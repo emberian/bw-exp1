@@ -181,6 +181,7 @@ async fn get_current_player(
             state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
         }),
         is_online: player.is_online,
+        is_admin: crate::config::config().is_admin(&player.username),
     };
 
     Ok(Json(dto))
@@ -206,6 +207,7 @@ async fn get_player(
             state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
         }),
         is_online: player.is_online,
+        is_admin: crate::config::config().is_admin(&player.username),
     };
 
     Ok(Json(dto))

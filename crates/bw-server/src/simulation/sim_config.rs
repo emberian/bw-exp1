@@ -2,10 +2,10 @@
 //!
 //! These are loaded as part of ServerConfig from config.toml.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Simulation configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SimulationConfig {
     pub npc_spawning: NpcSpawningConfig,
@@ -22,7 +22,7 @@ impl Default for SimulationConfig {
 }
 
 /// NPC spawning configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NpcSpawningConfig {
     /// Base spawn chance per tick (at 10 TPS, 0.02 = ~20% per second)
@@ -53,7 +53,7 @@ impl Default for NpcSpawningConfig {
 }
 
 /// Danger level multipliers for spawn probability.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DangerMultipliers {
     pub safe: f32,
@@ -74,7 +74,7 @@ impl Default for DangerMultipliers {
 }
 
 /// Combat configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CombatConfig {
     /// Experience granted per successful hit

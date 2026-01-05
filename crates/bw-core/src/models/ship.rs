@@ -3,13 +3,16 @@
 //! Ships are the primary game entity. For player artilects, the ship IS the player.
 //! Hull damage is felt as pain. System failures are experienced as impairment.
 
+use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{CrewResources, ShipResources};
+use crate::hash_helpers::{hash_f32, hash_f64};
 
 /// A ship in the game world.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct Ship {
     /// Unique identifier
     pub id: Uuid,
@@ -36,9 +39,11 @@ pub struct Ship {
     pub crew: CrewResources,
 
     /// Hull integrity (0.0 - 100.0)
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub hull_integrity: f32,
 
     /// Shield strength (0.0 - 100.0)
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub shield_strength: f32,
 
     /// Weapon mounts
@@ -183,7 +188,7 @@ impl Ship {
 }
 
 /// Ship class determines base capabilities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShipClass {
     // Player classes
     PatrolCorvette,
@@ -455,10 +460,14 @@ pub struct CombatStats {
 }
 
 /// Position in 3D space within a sector.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct Position {
+    #[derivative(Hash(hash_with = "hash_f64"))]
     pub x: f64,
+    #[derivative(Hash(hash_with = "hash_f64"))]
     pub y: f64,
+    #[derivative(Hash(hash_with = "hash_f64"))]
     pub z: f64,
 }
 
@@ -490,7 +499,7 @@ impl Position {
 }
 
 /// Current ship status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum ShipStatus {
     /// Not doing anything specific
     Idle,
@@ -515,11 +524,15 @@ pub enum ShipStatus {
 }
 
 /// A weapon mounted on a ship.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct WeaponMount {
     pub weapon_type: WeaponType,
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub damage_base: f32,
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub accuracy_base: f32,
+    #[derivative(Hash(hash_with = "hash_f32"))]
     pub ammo_cost: f32,
 }
 
@@ -535,7 +548,7 @@ impl WeaponMount {
 }
 
 /// Weapon types with different characteristics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WeaponType {
     /// High velocity kinetic weapon. Accurate, moderate damage.
     Railgun,

@@ -44,3 +44,5 @@ gloo-timers = "0.3"
 futures.workspace = true
 rmp-serde.workspace = true
 console_error_panic_hook = "0.1"
+tracing.workspace = true
+tracing-wasm = "0.2"

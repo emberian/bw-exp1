@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::PlayerResources;
 
 /// A player in the game.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub struct Player {
     /// Unique identifier
     pub id: Uuid,
@@ -149,7 +149,7 @@ impl Player {
 }
 
 /// Standing with a specific faction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub struct FactionStanding {
     pub faction_id: Uuid,
     /// Standing value from -100 (hostile) to 100 (allied)
@@ -195,7 +195,7 @@ impl FactionStanding {
 }
 
 /// Rank with a faction based on standing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FactionRank {
     /// Kill on sight
     Hostile,
@@ -212,7 +212,7 @@ pub enum FactionRank {
 }
 
 /// Rank within a squadron.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SquadronRank {
     /// Regular member
     Member,
@@ -223,7 +223,7 @@ pub enum SquadronRank {
 }
 
 /// Player career statistics.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Hash, Serialize, Deserialize)]
 pub struct PlayerStats {
     /// Total missions attempted
     pub total_missions: i32,

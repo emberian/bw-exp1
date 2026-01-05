@@ -2,16 +2,22 @@
 //!
 //! Processes active combat engagements each tick.
 //! Configuration is loaded from config.toml [simulation.combat].
+//! Combat logic (target selection, damage calc) is driven by Rhai scripts.
 
+use std::sync::Arc;
+
+use rhai::Dynamic;
 use uuid::Uuid;
 
 use bw_core::models::ShipStatus;
-use bw_core::systems::{calculate_attack, CombatEngagement, CombatLogEntry};
+use bw_core::systems::{CombatEngagement, CombatLogEntry, AttackResult};
+use bw_scripting::ScriptEngine;
 use bw_shared::dto::CombatEventDto;
 use bw_shared::ServerMessage;
 
 use crate::config::config;
 use crate::{GameState, SectorInstance};
+use super::script_hooks::ScriptHooks;
 
 /// Result of processing combat for a tick.
 #[derive(Debug, Default)]
@@ -29,8 +35,10 @@ pub fn process_sector_combats(
     state: &GameState,
     sector: &SectorInstance,
     tick: u64,
+    scripts: &Arc<ScriptEngine>,
 ) -> CombatTickResult {
     let mut result = CombatTickResult::default();
+    let hooks = ScriptHooks::new(scripts.clone());
 
     // Process each active combat
     let combat_ids: Vec<Uuid> = sector.combats.iter().map(|e| *e.key()).collect();
@@ -41,9 +49,9 @@ pub fn process_sector_combats(
                 continue;
             }
 
-            let combat_result = process_combat_round(state, &mut combat, tick);
+            let combat_result = process_combat_round(state, &mut combat, tick, &hooks);
 
-            // Collect updates for participants
+            // Collect updates for participants (persistence is automatic via dirty tracking)
             for ship_id in combat.all_participants() {
                 if let Some(ship) = state.ships.get(&ship_id) {
                     if ship.is_player_ship {
@@ -74,6 +82,7 @@ pub fn process_sector_combats(
         // Get surviving participants before removing combat
         if let Some((_, combat)) = sector.combats.remove(combat_id) {
             // Reset status of all surviving ships to Idle
+            // Persistence is automatic via TrackedDashMap dirty tracking
             for ship_id in combat.all_participants() {
                 if let Some(mut ship) = state.ships.get_mut(&ship_id) {
                     if matches!(ship.status, ShipStatus::InCombat { .. }) {
@@ -99,9 +108,9 @@ fn process_combat_round(
     state: &GameState,
     combat: &mut CombatEngagement,
     _tick: u64,
+    hooks: &ScriptHooks,
 ) -> CombatRoundResult {
     use rand::seq::SliceRandom;
-    use rand::Rng;
     let mut rng = rand::thread_rng();
     let mut events = Vec::new();
     let mut destroyed = Vec::new();
@@ -109,7 +118,7 @@ fn process_combat_round(
     combat.round += 1;
 
     // Build list of all attackers with their target pools
-    // Each ship attacks one random enemy from the opposing side
+    // Target selection is done via script
     let mut attack_pairs: Vec<(Uuid, Uuid)> = Vec::new();
 
     // Side A picks targets from Side B
@@ -117,8 +126,9 @@ fn process_combat_round(
         if combat.side_b.is_empty() {
             continue;
         }
-        let target_idx = rng.gen_range(0..combat.side_b.len());
-        attack_pairs.push((attacker_id, combat.side_b[target_idx]));
+        if let Some(target_id) = script_select_target(hooks, state, attacker_id, &combat.side_b, combat.round) {
+            attack_pairs.push((attacker_id, target_id));
+        }
     }
 
     // Side B picks targets from Side A
@@ -126,8 +136,9 @@ fn process_combat_round(
         if combat.side_a.is_empty() {
             continue;
         }
-        let target_idx = rng.gen_range(0..combat.side_a.len());
-        attack_pairs.push((attacker_id, combat.side_a[target_idx]));
+        if let Some(target_id) = script_select_target(hooks, state, attacker_id, &combat.side_a, combat.round) {
+            attack_pairs.push((attacker_id, target_id));
+        }
     }
 
     // Shuffle attack order for fairness (no side always goes first)
@@ -145,7 +156,7 @@ fn process_combat_round(
             continue;
         }
 
-        if let Some(event) = resolve_attack(state, attacker_id, target_id, combat, &mut destroyed) {
+        if let Some(event) = resolve_attack(state, attacker_id, target_id, combat, &mut destroyed, hooks) {
             events.push(event);
         }
     }
@@ -160,6 +171,7 @@ fn resolve_attack(
     target_id: Uuid,
     combat: &mut CombatEngagement,
     destroyed: &mut Vec<Uuid>,
+    hooks: &ScriptHooks,
 ) -> Option<CombatEventDto> {
     // Guard against self-attack (would cause double mutable borrow panic)
     if attacker_id == target_id {
@@ -185,8 +197,14 @@ fn resolve_attack(
     let weapon_type = weapon.weapon_type;
     let ammo_cost = weapon.ammo_cost;
 
-    // Calculate attack
-    let result = calculate_attack(&attacker_stats, &defender_stats, weapon_damage, weapon_accuracy);
+    // Calculate attack via script
+    let result = script_calculate_attack(
+        hooks,
+        &attacker_stats,
+        &defender_stats,
+        weapon_damage,
+        weapon_accuracy,
+    )?;
 
     // Consume ammo
     attacker.resources.consume_ammo(ammo_cost + result.ammo_consumed);
@@ -355,9 +373,11 @@ pub fn flee_from_combat(
     state: &GameState,
     sector: &SectorInstance,
     ship_id: Uuid,
+    scripts: &Arc<ScriptEngine>,
 ) -> bool {
     use rand::Rng;
     let mut rng = rand::thread_rng();
+    let hooks = ScriptHooks::new(scripts.clone());
 
     // Find the ship's combat
     let ship = state.ships.get(&ship_id);
@@ -372,11 +392,10 @@ pub fn flee_from_combat(
         None => return false,
     };
 
-    // Calculate flee chance based on speed (configurable)
-    let combat_config = &config().get().simulation.combat;
-    let flee_chance = ship.as_ref().map(|s| {
+    // Calculate flee chance via script
+    let flee_chance = ship.as_ref().and_then(|s| {
         let stats = s.combat_effectiveness();
-        (stats.speed / combat_config.flee_speed_divisor).min(combat_config.max_flee_chance)
+        script_calculate_flee_chance(&hooks, stats.speed)
     }).unwrap_or(0.3);
 
     drop(ship);
@@ -397,4 +416,124 @@ pub fn flee_from_combat(
 
     tracing::debug!("Ship {} fled from combat", ship_id);
     true
+}
+
+// =============================================================================
+// Script Integration
+// =============================================================================
+
+use bw_core::models::CombatStats;
+
+/// Call script to select a target from available enemies.
+fn script_select_target(
+    hooks: &ScriptHooks,
+    state: &GameState,
+    attacker_id: Uuid,
+    targets: &[Uuid],
+    combat_round: u32,
+) -> Option<Uuid> {
+    // Build attacker data
+    let attacker = state.ships.get(&attacker_id)?;
+    let attacker_stats = attacker.combat_effectiveness();
+
+    let mut attacker_map = rhai::Map::new();
+    attacker_map.insert("id".into(), Dynamic::from(attacker_id.to_string()));
+    attacker_map.insert("name".into(), Dynamic::from(attacker.name.clone()));
+    attacker_map.insert("hull".into(), Dynamic::from(attacker.hull_integrity as f64));
+    attacker_map.insert("shields".into(), Dynamic::from(attacker.shield_strength as f64));
+    attacker_map.insert("speed".into(), Dynamic::from(attacker_stats.speed as f64));
+    drop(attacker);
+
+    // Build targets array
+    let mut targets_arr: Vec<Dynamic> = Vec::new();
+    for &target_id in targets {
+        if let Some(target) = state.ships.get(&target_id) {
+            let target_stats = target.combat_effectiveness();
+            let mut target_map = rhai::Map::new();
+            target_map.insert("id".into(), Dynamic::from(target_id.to_string()));
+            target_map.insert("name".into(), Dynamic::from(target.name.clone()));
+            target_map.insert("hull".into(), Dynamic::from(target.hull_integrity as f64));
+            target_map.insert("shields".into(), Dynamic::from(target.shield_strength as f64));
+            target_map.insert("speed".into(), Dynamic::from(target_stats.speed as f64));
+            targets_arr.push(Dynamic::from(target_map));
+        }
+    }
+
+    // Build context
+    let mut ctx = rhai::Map::new();
+    ctx.insert("attacker".into(), Dynamic::from(attacker_map));
+    ctx.insert("targets".into(), Dynamic::from(targets_arr));
+    ctx.insert("combat_round".into(), Dynamic::from(combat_round as i64));
+
+    // Call script
+    let result = hooks.try_call("combat/rules.rhai", "select_target", ctx.into())?;
+
+    // Parse result (should be target UUID string or unit)
+    if result.is_unit() {
+        return None;
+    }
+
+    let target_str = result.into_string().ok()?;
+    Uuid::parse_str(&target_str).ok()
+}
+
+/// Call script to calculate attack damage/hit/crit.
+fn script_calculate_attack(
+    hooks: &ScriptHooks,
+    attacker_stats: &CombatStats,
+    defender_stats: &CombatStats,
+    weapon_damage: f32,
+    weapon_accuracy: f32,
+) -> Option<AttackResult> {
+    // Build context
+    let mut ctx = rhai::Map::new();
+
+    let mut attacker_map = rhai::Map::new();
+    attacker_map.insert("attack".into(), Dynamic::from(attacker_stats.attack as f64));
+    attacker_map.insert("defense".into(), Dynamic::from(attacker_stats.defense as f64));
+    attacker_map.insert("speed".into(), Dynamic::from(attacker_stats.speed as f64));
+
+    let mut defender_map = rhai::Map::new();
+    defender_map.insert("attack".into(), Dynamic::from(defender_stats.attack as f64));
+    defender_map.insert("defense".into(), Dynamic::from(defender_stats.defense as f64));
+    defender_map.insert("speed".into(), Dynamic::from(defender_stats.speed as f64));
+
+    ctx.insert("attacker".into(), Dynamic::from(attacker_map));
+    ctx.insert("defender".into(), Dynamic::from(defender_map));
+    ctx.insert("weapon_damage".into(), Dynamic::from(weapon_damage as f64));
+    ctx.insert("weapon_accuracy".into(), Dynamic::from(weapon_accuracy as f64));
+
+    // Call script
+    let result = hooks.try_call("combat/rules.rhai", "calculate_attack", ctx.into())?;
+
+    // Parse result map
+    let result_map = result.try_cast::<rhai::Map>()?;
+
+    let hit = result_map.get("hit")?.as_bool().ok().unwrap_or(false);
+    let damage = result_map.get("damage")?.as_float().ok().unwrap_or(0.0) as f32;
+    let critical_hit = result_map.get("critical_hit").and_then(|v| v.as_bool().ok()).unwrap_or(false);
+    let ammo_consumed = result_map.get("ammo_consumed").and_then(|v| v.as_float().ok()).unwrap_or(1.0) as f32;
+
+    Some(AttackResult {
+        hit,
+        damage,
+        ammo_consumed,
+        critical_hit,
+    })
+}
+
+/// Call script to calculate flee chance.
+fn script_calculate_flee_chance(hooks: &ScriptHooks, speed: f32) -> Option<f32> {
+    let combat_config = &config().get().simulation.combat;
+
+    // Build context
+    let mut ctx = rhai::Map::new();
+    ctx.insert("speed".into(), Dynamic::from(speed as f64));
+    ctx.insert("max_flee_chance".into(), Dynamic::from(combat_config.max_flee_chance as f64));
+    ctx.insert("flee_speed_divisor".into(), Dynamic::from(combat_config.flee_speed_divisor as f64));
+
+    // Call script
+    let result = hooks.try_call("combat/rules.rhai", "calculate_flee_chance", ctx.into())?;
+
+    Some(result.as_float().ok()? as f32)
 }
