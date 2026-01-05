@@ -12,7 +12,7 @@ use rhai::{Dynamic, Engine, Array, CustomType, TypeBuilder};
 use uuid::Uuid;
 
 use crate::context::with_accessor;
-use crate::state::PlayerChanges;
+use bw_game::state::PlayerChanges;
 use super::ShipView;
 
 /// A facade view of a player for scripts.

@@ -14,7 +14,7 @@ pub const DEFAULT_SCRIPT_LOG_CAPACITY: usize = 1000;
 use bw_core::models::*;
 use bw_game::state::{
     StateAccessor, StateProvider, StateMutation, MutationResult,
-    ShipSnapshot, PlayerSnapshot, SectorSnapshot,
+    ShipSnapshot, PlayerSnapshot, SectorSnapshot, EntityType,
 };
 use bw_scripting::{
     ScriptEngine, BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher,
@@ -453,6 +453,25 @@ impl GameState {
         self.tick.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
     }
 
+    // === Tag lookup helpers ===
+
+    /// Look up a faction's tag by ID.
+    pub fn faction_tag(&self, faction_id: Option<Uuid>) -> Option<String> {
+        faction_id.and_then(|fid| self.factions.get(&fid).map(|f| f.tag.clone()))
+    }
+
+    /// Look up a faction's tag by ID, with a default fallback.
+    pub fn faction_tag_or(&self, faction_id: Uuid, default: &str) -> String {
+        self.factions.get(&faction_id)
+            .map(|f| f.tag.clone())
+            .unwrap_or_else(|| default.to_string())
+    }
+
+    /// Look up a squadron's tag by ID.
+    pub fn squadron_tag(&self, squadron_id: Option<Uuid>) -> Option<String> {
+        squadron_id.and_then(|sid| self.squadrons.get(&sid).map(|s| s.tag.clone()))
+    }
+
     // === Script logging helpers ===
 
     /// Log a script info message.
@@ -587,7 +606,7 @@ impl GameState {
 
             StateMutation::DestroyEntity { entity_id, entity_type } => {
                 match entity_type {
-                    bw_scripting::state::EntityType::Ship => {
+                    EntityType::Ship => {
                         if let Some((_, ship)) = self.ships.remove(entity_id) {
                             // Remove from sector
                             if let Some(sector) = self.sectors.get(&ship.sector_id) {
@@ -602,7 +621,7 @@ impl GameState {
                             MutationResult::failure(mutation, "Ship not found")
                         }
                     }
-                    bw_scripting::state::EntityType::Mission => {
+                    EntityType::Mission => {
                         // Find and remove mission from any sector
                         for sector in self.sectors.iter() {
                             if sector.missions.remove(entity_id).is_some() {
@@ -611,7 +630,7 @@ impl GameState {
                         }
                         MutationResult::failure(mutation, "Mission not found")
                     }
-                    bw_scripting::state::EntityType::Station => {
+                    EntityType::Station => {
                         // Find and remove station (location) from any sector
                         for mut sector in self.sectors.iter_mut() {
                             let initial_len = sector.sector.locations.len();
@@ -622,7 +641,7 @@ impl GameState {
                         }
                         MutationResult::failure(mutation, "Station not found")
                     }
-                    bw_scripting::state::EntityType::Sector => {
+                    EntityType::Sector => {
                         if let Some((_, sector)) = self.sectors.remove(entity_id) {
                             // Move all ships in this sector to limbo (remove from tracking)
                             for ship_entry in sector.ship_ids.iter() {
@@ -851,12 +870,7 @@ impl GameState {
 impl StateProvider for GameState {
     fn get_ship(&self, ship_id: Uuid) -> Option<ShipSnapshot> {
         self.ships.get(&ship_id)
-            .map(|ship| {
-                let faction_tag = ship.faction_id.and_then(|fid| {
-                    self.factions.get(&fid).map(|f| f.tag.clone())
-                });
-                ShipSnapshot::from_core(&ship, faction_tag)
-            })
+            .map(|ship| ShipSnapshot::from_core(&ship, self.faction_tag(ship.faction_id)))
     }
 
     fn get_ships_in_sector(&self, sector_id: Uuid) -> Vec<ShipSnapshot> {
@@ -864,12 +878,7 @@ impl StateProvider for GameState {
             .map(|sector| {
                 sector.ship_ids.iter()
                     .filter_map(|entry| self.ships.get(entry.key()))
-                    .map(|ship| {
-                        let faction_tag = ship.faction_id.and_then(|fid| {
-                            self.factions.get(&fid).map(|f| f.tag.clone())
-                        });
-                        ShipSnapshot::from_core(&ship, faction_tag)
-                    })
+                    .map(|ship| ShipSnapshot::from_core(&ship, self.faction_tag(ship.faction_id)))
                     .collect()
             })
             .unwrap_or_default()
@@ -881,12 +890,7 @@ impl StateProvider for GameState {
                 sector.ship_ids.iter()
                     .filter_map(|entry| self.ships.get(entry.key()))
                     .filter(|ship| ship.position.distance_to(&position) <= range)
-                    .map(|ship| {
-                        let faction_tag = ship.faction_id.and_then(|fid| {
-                            self.factions.get(&fid).map(|f| f.tag.clone())
-                        });
-                        ShipSnapshot::from_core(&ship, faction_tag)
-                    })
+                    .map(|ship| ShipSnapshot::from_core(&ship, self.faction_tag(ship.faction_id)))
                     .collect()
             })
             .unwrap_or_default()
@@ -895,12 +899,8 @@ impl StateProvider for GameState {
     fn get_player(&self, player_id: Uuid) -> Option<PlayerSnapshot> {
         self.player_data.get(&player_id)
             .map(|player| {
-                let faction_tag = self.factions.get(&player.faction_id)
-                    .map(|f| f.tag.clone())
-                    .unwrap_or_default();
-                let squadron_tag = player.squadron_id.and_then(|sid| {
-                    self.squadrons.get(&sid).map(|s| s.tag.clone())
-                });
+                let faction_tag = self.faction_tag_or(player.faction_id, "");
+                let squadron_tag = self.squadron_tag(player.squadron_id);
                 // Admin status would need to be looked up from the database
                 // For now, use false as default - scripts rarely need this
                 PlayerSnapshot::from_core(&player, faction_tag, squadron_tag, false)

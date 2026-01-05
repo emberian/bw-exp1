@@ -6,7 +6,6 @@
 use std::cell::RefCell;
 
 use leptos::prelude::*;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{MessageEvent, WebSocket};
@@ -480,13 +479,6 @@ pub fn send_delete_export(export_id: uuid::Uuid) {
 /// Send a request to download an export
 pub fn send_download_export(export_id: uuid::Uuid) {
     with_admin_ws(move |ws| ws.download_export(export_id));
-}
-
-/// Poll for a message (stub - actual implementation would use message queue)
-pub fn poll_message() -> Option<AdminServerMessage> {
-    // This is a simplified stub. In a real implementation, messages would be
-    // queued and polled here. For now, the message handler updates contexts directly.
-    None
 }
 
 /// Handle incoming server messages

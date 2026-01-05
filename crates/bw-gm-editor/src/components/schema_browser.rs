@@ -1,53 +1,28 @@
 //! Schema browser component for viewing archetype schemas
 
 use leptos::prelude::*;
-use bw_shared::dto::{ArchetypeSchemaDto, FieldSchemaDto};
+use bw_shared::dto::FieldSchemaDto;
 
 use crate::api::admin_ws;
+use crate::state::SchemaState;
 
 /// Schema browser component
 #[component]
 pub fn SchemaBrowser() -> impl IntoView {
-    // State
-    let schemas = RwSignal::new(Vec::<ArchetypeSchemaDto>::new());
-    let selected_type = RwSignal::new(Option::<String>::None);
-    let fields = RwSignal::new(Vec::<FieldSchemaDto>::new());
-    let loading = RwSignal::new(false);
-    let error = RwSignal::new(Option::<String>::None);
+    // Get state from context
+    let schema_state = expect_context::<SchemaState>();
 
     // Load schemas on mount
     Effect::new(move |_| {
-        loading.set(true);
+        schema_state.loading.set(true);
         admin_ws::send_get_archetype_schemas();
-    });
-
-    // Handle incoming messages
-    Effect::new(move |_| {
-        if let Some(msg) = admin_ws::poll_message() {
-            use bw_shared::AdminServerMessage;
-            match msg {
-                AdminServerMessage::ArchetypeSchemas { schemas: s } => {
-                    schemas.set(s);
-                    loading.set(false);
-                }
-                AdminServerMessage::ArchetypeSchemaDetail { archetype_type: _, name: _, fields: f } => {
-                    fields.set(f);
-                    loading.set(false);
-                }
-                AdminServerMessage::AdminError { code: _, message } => {
-                    error.set(Some(message));
-                    loading.set(false);
-                }
-                _ => {}
-            }
-        }
     });
 
     // Select a schema type
     let on_select = move |type_name: String| {
-        selected_type.set(Some(type_name.clone()));
-        fields.set(vec![]);
-        loading.set(true);
+        schema_state.selected_type.set(Some(type_name.clone()));
+        schema_state.fields.set(vec![]);
+        schema_state.loading.set(true);
         admin_ws::send_get_archetype_schema(&type_name);
     };
 
@@ -59,7 +34,7 @@ pub fn SchemaBrowser() -> impl IntoView {
                 <button
                     class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-sm rounded"
                     on:click=move |_| {
-                        loading.set(true);
+                        schema_state.loading.set(true);
                         admin_ws::send_get_archetype_schemas();
                     }
                 >
@@ -68,9 +43,9 @@ pub fn SchemaBrowser() -> impl IntoView {
             </div>
 
             // Error display
-            <Show when=move || error.get().is_some()>
+            <Show when=move || schema_state.error.get().is_some()>
                 <div class="mb-4 p-2 bg-red-900/50 border border-red-500 rounded text-red-300 text-sm">
-                    {move || error.get().unwrap_or_default()}
+                    {move || schema_state.error.get().unwrap_or_default()}
                 </div>
             </Show>
 
@@ -80,13 +55,13 @@ pub fn SchemaBrowser() -> impl IntoView {
                 <div class="w-48 flex-shrink-0 overflow-auto">
                     <div class="space-y-1">
                         <For
-                            each=move || schemas.get()
+                            each=move || schema_state.schemas.get()
                             key=|s| s.archetype_type.clone()
                             children=move |schema| {
                                 let type_name = schema.archetype_type.clone();
                                 let type_name_click = type_name.clone();
                                 let is_selected = move || {
-                                    selected_type.get().as_deref() == Some(&type_name)
+                                    schema_state.selected_type.get().as_deref() == Some(&type_name)
                                 };
                                 view! {
                                     <button
@@ -114,7 +89,7 @@ pub fn SchemaBrowser() -> impl IntoView {
                 // Field details
                 <div class="flex-1 overflow-auto">
                     <Show
-                        when=move || selected_type.get().is_some()
+                        when=move || schema_state.selected_type.get().is_some()
                         fallback=|| view! {
                             <div class="flex items-center justify-center h-full text-slate-400">
                                 "Select an archetype type to view its fields"
@@ -122,9 +97,9 @@ pub fn SchemaBrowser() -> impl IntoView {
                         }
                     >
                         <Show
-                            when=move || loading.get()
+                            when=move || schema_state.loading.get()
                             fallback=move || view! {
-                                <FieldsTable fields=fields />
+                                <FieldsTable fields=schema_state.fields />
                             }
                         >
                             <div class="flex items-center justify-center h-32 text-slate-400">

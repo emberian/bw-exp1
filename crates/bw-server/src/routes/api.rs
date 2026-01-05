@@ -99,9 +99,7 @@ async fn get_sector(
                         y: loc.position.y,
                         z: loc.position.z,
                     },
-                    faction_tag: loc.faction_id.and_then(|fid| {
-                        state.factions.get(&fid).map(|f| f.tag.clone())
-                    }),
+                    faction_tag: state.faction_tag(loc.faction_id),
                     services: loc.services.iter().map(|s| format!("{:?}", s)).collect(),
                 }
             }).collect(),
@@ -216,12 +214,7 @@ async fn get_my_ships(
 ) -> Json<ShipsResponse> {
     let ships: Vec<ShipDto> = state.ships.iter()
         .filter(|s| s.owner_id == Some(auth.player_id))
-        .map(|s| {
-            let faction_tag = s.faction_id.and_then(|fid| {
-                state.factions.get(&fid).map(|f| f.tag.clone())
-            });
-            ShipDto::from_core(&s, faction_tag)
-        })
+        .map(|s| ShipDto::from_core(&s, state.faction_tag(s.faction_id)))
         .collect();
 
     Json(ShipsResponse { ships })
@@ -235,10 +228,7 @@ async fn get_ship(
     let ship = state.ships.get(&ship_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let faction_tag = ship.faction_id.and_then(|fid| {
-        state.factions.get(&fid).map(|f| f.tag.clone())
-    });
-    let dto = ShipDto::from_core(&ship, faction_tag);
+    let dto = ShipDto::from_core(&ship, state.faction_tag(ship.faction_id));
 
     Ok(Json(dto))
 }

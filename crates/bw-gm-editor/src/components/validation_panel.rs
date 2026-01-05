@@ -3,6 +3,8 @@
 use leptos::prelude::*;
 use bw_shared::dto::{ValidationIssueDto, ValidationSeverity};
 
+use crate::state::ValidationState;
+
 /// Validation panel component for showing script issues
 #[component]
 pub fn ValidationPanel(
@@ -14,10 +16,10 @@ pub fn ValidationPanel(
     #[prop(optional)]
     on_jump_to_line: Option<Callback<(usize, usize)>>,
 ) -> impl IntoView {
-    // State
-    let issues = RwSignal::new(Vec::<ValidationIssueDto>::new());
-    let is_valid = RwSignal::new(true);
-    let validating = RwSignal::new(false);
+    // Get state from context
+    let validation_state = expect_context::<ValidationState>();
+
+    // Local tracking for debounce
     let last_validated_content = RwSignal::new(String::new());
 
     // Debounced validation effect
@@ -32,7 +34,7 @@ pub fn ValidationPanel(
 
         // Update last validated and trigger validation
         last_validated_content.set(content.clone());
-        validating.set(true);
+        validation_state.validating.set(true);
 
         if let Some(p) = path {
             use crate::api::admin_ws;
@@ -42,11 +44,14 @@ pub fn ValidationPanel(
 
     // Count issues by severity
     let error_count = move || {
-        issues.get().iter().filter(|i| matches!(i.severity, ValidationSeverity::Error)).count()
+        validation_state.errors.get().len()
     };
     let warning_count = move || {
-        issues.get().iter().filter(|i| matches!(i.severity, ValidationSeverity::Warning)).count()
+        validation_state.warnings.get().len()
     };
+
+    // Combined issues for display
+    let all_issues = move || validation_state.all_issues();
 
     view! {
         <div class="border-t border-slate-700 bg-slate-900/50">
@@ -54,7 +59,7 @@ pub fn ValidationPanel(
             <div class="flex items-center justify-between px-3 py-2 bg-slate-800/50">
                 <div class="flex items-center gap-3">
                     <span class="text-xs font-medium text-slate-400">"Problems"</span>
-                    <Show when=move || validating.get()>
+                    <Show when=move || validation_state.validating.get()>
                         <span class="text-xs text-slate-500">"Validating..."</span>
                     </Show>
                 </div>
@@ -71,7 +76,7 @@ pub fn ValidationPanel(
                             {warning_count}
                         </span>
                     </Show>
-                    <Show when=move || is_valid.get() && issues.get().is_empty() && !validating.get()>
+                    <Show when=move || validation_state.is_valid.get() && all_issues().is_empty() && !validation_state.validating.get()>
                         <span class="text-green-400">"No issues"</span>
                     </Show>
                 </div>
@@ -80,7 +85,7 @@ pub fn ValidationPanel(
             // Issues list
             <div class="max-h-40 overflow-auto">
                 <Show
-                    when=move || !issues.get().is_empty()
+                    when=move || !all_issues().is_empty()
                     fallback=|| view! {
                         <div class="px-3 py-4 text-center text-xs text-slate-500">
                             "No validation issues"
@@ -89,7 +94,7 @@ pub fn ValidationPanel(
                 >
                     <div class="divide-y divide-slate-800">
                         <For
-                            each=move || issues.get()
+                            each=all_issues
                             key=|issue| format!("{}:{}:{}", issue.line, issue.column, issue.message.clone())
                             children=move |issue| {
                                 let line = issue.line;
@@ -202,47 +207,5 @@ fn HintIcon() -> impl IntoView {
         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
         </svg>
-    }
-}
-
-/// Standalone validation panel state for use in contexts
-#[derive(Clone)]
-pub struct ValidationState {
-    pub issues: RwSignal<Vec<ValidationIssueDto>>,
-    pub is_valid: RwSignal<bool>,
-    pub validating: RwSignal<bool>,
-}
-
-impl ValidationState {
-    pub fn new() -> Self {
-        Self {
-            issues: RwSignal::new(Vec::new()),
-            is_valid: RwSignal::new(true),
-            validating: RwSignal::new(false),
-        }
-    }
-
-    /// Update validation results from server response
-    pub fn on_validation_result(&self, errors: Vec<ValidationIssueDto>, warnings: Vec<ValidationIssueDto>, valid: bool) {
-        let mut all_issues = errors;
-        all_issues.extend(warnings);
-        // Sort by line number
-        all_issues.sort_by_key(|i| (i.line, i.column));
-        self.issues.set(all_issues);
-        self.is_valid.set(valid);
-        self.validating.set(false);
-    }
-
-    /// Clear validation state
-    pub fn clear(&self) {
-        self.issues.set(Vec::new());
-        self.is_valid.set(true);
-        self.validating.set(false);
-    }
-}
-
-impl Default for ValidationState {
-    fn default() -> Self {
-        Self::new()
     }
 }

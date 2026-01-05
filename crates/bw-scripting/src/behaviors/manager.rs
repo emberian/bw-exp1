@@ -10,10 +10,10 @@ use uuid::Uuid;
 
 use bw_core::events::GameEvent;
 use crate::engine::{ScriptEngine, ScriptError};
-use crate::state::{StateAccessor, AccessPermissions};
+use bw_game::state::{StateAccessor, AccessPermissions};
 use crate::events::EventRegistry;
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
-use crate::ai::{BehaviorTreeRunner, AiContext, BtNode};
+use bw_ai::{BehaviorTreeRunner, AiContext, BtNode};
 use crate::persistence::{ScriptStateStore, PersistenceError};
 use crate::debug::{DebugController, DebugTarget, EntityContext};
 

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use bw_core::events::{GameEvent, GameEventType};
 use crate::engine::ScriptEngine;
-use crate::state::{StateAccessor, AccessPermissions, StateMutation};
+use bw_game::state::{StateAccessor, AccessPermissions, StateMutation};
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
 
 use super::{EventRegistry, EventSubscription};

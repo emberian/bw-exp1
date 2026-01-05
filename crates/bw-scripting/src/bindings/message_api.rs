@@ -6,7 +6,7 @@
 use rhai::{Engine, Array, Map};
 use uuid::Uuid;
 
-use crate::state::ChoiceOption;
+use bw_game::state::ChoiceOption;
 use crate::context::with_accessor;
 
 /// Register message API functions with the engine.

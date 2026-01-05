@@ -800,6 +800,25 @@ fn infer_dynamic_type(value: &Dynamic) -> InferredType {
     }
 }
 
+/// Functions that look up archetypes by ID string.
+const ARCHETYPE_LOOKUP_FNS: &[&str] = &[
+    "get_ship_def",
+    "get_weapon_def",
+    "get_upgrade_def",
+    "get_cargo_def",
+    "get_stance_def",
+    "get_ship",
+    "get_weapon",
+    "get_effect",
+    "get_ability",
+    "get_faction",
+];
+
+/// Check if a function is an archetype lookup function.
+fn is_archetype_lookup_fn(name: &str) -> bool {
+    ARCHETYPE_LOOKUP_FNS.contains(&name)
+}
+
 /// Tracks null guard information for complex conditionals.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NullGuardInfo {
@@ -861,6 +880,10 @@ pub struct FunctionAnalysis {
     pub type_mismatches: Vec<(String, Option<Position>)>,
     /// Implicit type coercions (description, position) - W700
     pub implicit_coercions: Vec<(String, Option<Position>)>,
+    /// Invalid archetype IDs (empty string) - E900
+    pub invalid_archetype_ids: Vec<(String, Option<Position>)>,
+    /// Unknown archetype IDs (not in registry) - W900
+    pub unknown_archetype_ids: Vec<(String, String, Option<Position>)>, // (fn_name, id, position)
     /// Whether all control flow paths return a value
     pub all_paths_return: bool,
     /// Dead code positions
@@ -1317,6 +1340,20 @@ impl<'a> FunctionAnalyzer<'a> {
             // Check for type mismatch error (E700)
             if let Err(msg) = check_binary_op(fn_name, &left_type, &right_type) {
                 self.result.type_mismatches.push((msg, None));
+            }
+        }
+
+        // Check for archetype lookup functions with string literal IDs
+        if is_archetype_lookup_fn(fn_name) && !call_expr.args.is_empty() {
+            if let Some(id) = extract_string_literal(&call_expr.args[0]) {
+                if id.is_empty() {
+                    // E900: Empty string is definitely invalid
+                    self.result.invalid_archetype_ids.push((
+                        format!("{}() called with empty string", fn_name),
+                        None,
+                    ));
+                }
+                // Note: W900 for unknown IDs requires a registry, handled at higher level
             }
         }
     }
@@ -2677,6 +2714,18 @@ impl ActionScriptValidator {
                 code: "W700",
                 message: format!(
                     "In '{}()': {}",
+                    handler_name, msg
+                ),
+                line: pos.and_then(|p| p.line()),
+            });
+        }
+
+        // E900: Invalid archetype IDs (empty string)
+        for (msg, pos) in &analysis.invalid_archetype_ids {
+            errors.push(ActionValidationError {
+                code: "E900",
+                message: format!(
+                    "In '{}()': Invalid archetype ID - {}",
                     handler_name, msg
                 ),
                 line: pos.and_then(|p| p.line()),
@@ -5585,6 +5634,69 @@ fn handle_test(ctx, params) {
             e700_errors.is_empty(),
             "Should not have E700 errors for valid comparisons. Errors: {:?}",
             e700_errors
+        );
+    }
+
+    // =========================================================================
+    // Archetype ID Validation Tests (E900)
+    // =========================================================================
+
+    #[test]
+    fn test_empty_archetype_id_e900() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_e900.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship = get_ship_def("");
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have E900 error for empty archetype ID
+        assert!(
+            result.errors.iter().any(|e| e.code == "E900" && e.message.contains("empty string")),
+            "Should detect E900 for empty archetype ID. Errors: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_valid_archetype_id_no_e900() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_no_e900.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship = get_ship_def("patrol_corvette");
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have E900 error for valid archetype ID
+        let e900_errors: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == "E900")
+            .collect();
+        assert!(
+            e900_errors.is_empty(),
+            "Should not have E900 errors for valid archetype ID. Errors: {:?}",
+            e900_errors
         );
     }
 }

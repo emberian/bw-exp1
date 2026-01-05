@@ -1,5 +1,8 @@
 //! CodeMirror 6 JavaScript bindings.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlElement;
 
@@ -22,6 +25,17 @@ extern "C" {
     fn js_get_content(element: &HtmlElement) -> Option<String>;
 }
 
+// Track closures by element pointer so we can clean them up on destroy.
+// Using raw pointer as key since HtmlElement doesn't implement Hash/Eq.
+thread_local! {
+    static CLOSURES: RefCell<HashMap<usize, Closure<dyn Fn(String)>>> = RefCell::new(HashMap::new());
+}
+
+/// Get a unique key for an element (its pointer address).
+fn element_key(element: &HtmlElement) -> usize {
+    element as *const HtmlElement as usize
+}
+
 /// Initialize CodeMirror on a DOM element.
 ///
 /// The `on_change` callback is called whenever the content changes.
@@ -29,6 +43,8 @@ pub fn init_codemirror<F>(element: &HtmlElement, initial_content: &str, on_chang
 where
     F: Fn(String) + 'static,
 {
+    let key = element_key(element);
+
     // Create a closure that can be called from JS
     let closure = Closure::new(move |content: String| {
         on_change(content);
@@ -36,8 +52,10 @@ where
 
     js_init_codemirror(element, initial_content, &closure);
 
-    // Leak the closure so it lives forever (it's tied to the editor lifetime)
-    closure.forget();
+    // Store the closure so it stays alive and can be cleaned up later
+    CLOSURES.with(|closures| {
+        closures.borrow_mut().insert(key, closure);
+    });
 }
 
 /// Update the content of an existing CodeMirror instance.
@@ -51,6 +69,12 @@ pub fn update_codemirror_content(element: &HtmlElement, content: &str) {
 #[allow(dead_code)]
 pub fn destroy_codemirror(element: &HtmlElement) {
     js_destroy_codemirror(element);
+
+    // Clean up the stored closure to prevent memory leak
+    let key = element_key(element);
+    CLOSURES.with(|closures| {
+        closures.borrow_mut().remove(&key);
+    });
 }
 
 /// Get the current content from a CodeMirror instance.

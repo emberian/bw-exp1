@@ -74,6 +74,7 @@ impl FromRequestParts<Arc<GameState>> for AuthExtractor {
 ///
 /// Useful for routes that work both with and without authentication,
 /// providing different responses based on auth status.
+#[allow(dead_code)] // Public API for future routes
 pub struct OptionalAuth {
     /// The authenticated player's ID, if present and valid.
     pub player_id: Option<Uuid>,

@@ -251,7 +251,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use crate::context::{ScriptExecutionContext, ExecutionGuard};
-    use crate::state::{StateAccessor, StateProvider, ShipSnapshot, PlayerSnapshot, SectorSnapshot, StateMutation, MutationResult};
+    use bw_game::state::{StateAccessor, StateProvider, ShipSnapshot, PlayerSnapshot, SectorSnapshot, StateMutation, MutationResult};
     use bw_core::models::Position;
 
     // Mock provider for tests

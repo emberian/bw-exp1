@@ -7,7 +7,10 @@ use crate::components::{
     ConfigEditor, DebugPanel, EntityBrowser, ExportPanel, SchemaBrowser,
     ScriptEditor, StagedPreview, StateInspector, Tab, TabBar,
 };
-use crate::state::{DebugPanelState, GMEditorState, StagedChangesState};
+use crate::state::{
+    DebugPanelState, ExportState, GMEditorState, InspectorState,
+    SchemaState, StagedChangesState, ValidationState,
+};
 
 /// Root component for the GM Editor
 #[component]
@@ -19,6 +22,10 @@ pub fn GMEditorApp(
     let gm_state = GMEditorState::new();
     let staged = StagedChangesState::new();
     let debug_state = DebugPanelState::new();
+    let schema_state = SchemaState::new();
+    let validation_state = ValidationState::new();
+    let inspector_state = InspectorState::new();
+    let export_state = ExportState::new();
 
     // Initialize WebSocket client (thread_local storage)
     init_admin_ws(&ws_url, &auth_token);
@@ -32,6 +39,10 @@ pub fn GMEditorApp(
     provide_context(gm_state);
     provide_context(staged);
     provide_context(debug_state);
+    provide_context(schema_state);
+    provide_context(validation_state);
+    provide_context(inspector_state);
+    provide_context(export_state);
 
     // Active tab
     let active_tab = RwSignal::new(Tab::Scripts);

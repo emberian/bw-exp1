@@ -12,7 +12,7 @@ use rhai::{Dynamic, Engine, Array, Map, CustomType, TypeBuilder};
 use uuid::Uuid;
 
 use crate::context::with_accessor;
-use crate::state::{ShipChanges, ShipStatusChange, CargoChange, UpgradeInstall};
+use bw_game::state::{ShipChanges, ShipStatusChange, CargoChange, UpgradeInstall};
 
 /// A facade view of a ship for scripts.
 ///

@@ -48,20 +48,18 @@ impl RateLimiter {
     fn get_limiter(&self, ip: &str) -> Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>> {
         let now = Instant::now();
 
-        // Try to get existing entry and update its timestamp
-        if let Some(mut entry) = self.limiters.get_mut(ip) {
-            entry.1 = now; // Update last-used time
-            return entry.0.clone();
-        }
+        // Use entry API for atomic get-or-insert to avoid race conditions
+        let mut entry = self.limiters.entry(ip.to_string()).or_insert_with(|| {
+            let quota = Quota::with_period(self.window / self.requests_per_window.get())
+                .expect("valid quota")
+                .allow_burst(self.requests_per_window);
+            let limiter = Arc::new(GovernorRateLimiter::direct(quota));
+            (limiter, now)
+        });
 
-        // Create new entry
-        let quota = Quota::with_period(self.window / self.requests_per_window.get())
-            .expect("valid quota")
-            .allow_burst(self.requests_per_window);
-        let limiter = Arc::new(GovernorRateLimiter::direct(quota));
-
-        self.limiters.insert(ip.to_string(), (limiter.clone(), now));
-        limiter
+        // Update last-used time
+        entry.1 = now;
+        entry.0.clone()
     }
 
     /// Check if a request from the given IP should be allowed.

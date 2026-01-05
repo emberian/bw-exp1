@@ -601,7 +601,7 @@ async fn handle_query_entities(
     offset: usize,
 ) {
     let mut entities = Vec::new();
-    let mut total_count = 0;
+    let total_count;
 
     match entity_type {
         EntityType::Ship => {
@@ -2720,7 +2720,7 @@ async fn handle_get_state_snapshot(
 ) {
     let tick = state.get_tick();
     let mut entities = Vec::new();
-    let mut total_count = 0usize;
+    let total_count;
 
     match entity_type {
         EntityType::Ship => {

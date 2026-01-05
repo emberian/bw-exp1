@@ -25,7 +25,7 @@ use rhai::{Dynamic, Map};
 use uuid::Uuid;
 
 use crate::engine::ScriptEngine;
-use crate::state::{StateAccessor, StateMutation};
+use bw_game::state::{StateAccessor, StateMutation};
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
 
 /// Trait for handler contexts.

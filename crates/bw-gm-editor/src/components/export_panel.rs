@@ -4,17 +4,15 @@ use leptos::prelude::*;
 use bw_shared::dto::{ExportConfigDto, ExportFormat, ExportSummaryDto, ExportStatus};
 
 use crate::api::admin_ws;
+use crate::state::ExportState;
 
 /// Export panel component
 #[component]
 pub fn ExportPanel() -> impl IntoView {
-    // State
-    let exports = RwSignal::new(Vec::<ExportSummaryDto>::new());
-    let loading = RwSignal::new(false);
-    let error = RwSignal::new(Option::<String>::None);
-    let creating = RwSignal::new(false);
+    // Get state from context
+    let export_state = expect_context::<ExportState>();
 
-    // Export config form state
+    // Export config form state (local)
     let export_name = RwSignal::new(String::new());
     let include_players = RwSignal::new(true);
     let include_npcs = RwSignal::new(true);
@@ -24,60 +22,18 @@ pub fn ExportPanel() -> impl IntoView {
 
     // Load exports on mount
     Effect::new(move |_| {
-        loading.set(true);
+        export_state.loading.set(true);
         admin_ws::send_list_exports();
-    });
-
-    // Handle incoming messages
-    Effect::new(move |_| {
-        if let Some(msg) = admin_ws::poll_message() {
-            use bw_shared::AdminServerMessage;
-            match msg {
-                AdminServerMessage::ExportList { exports: e } => {
-                    exports.set(e);
-                    loading.set(false);
-                }
-                AdminServerMessage::ExportCreated { export_id: _, name } => {
-                    creating.set(false);
-                    export_name.set(String::new());
-                    // Refresh list
-                    admin_ws::send_list_exports();
-                    tracing::info!("Export '{}' created", name);
-                }
-                AdminServerMessage::ExportProgress { export_id: _, phase, percent } => {
-                    tracing::info!("Export progress: {} ({}%)", phase, percent);
-                }
-                AdminServerMessage::ExportCompleted { export_id: _, size_bytes, download_url } => {
-                    tracing::info!("Export completed: {} bytes, url: {}", size_bytes, download_url);
-                    admin_ws::send_list_exports();
-                }
-                AdminServerMessage::ExportFailed { export_id: _, error: e } => {
-                    error.set(Some(format!("Export failed: {}", e)));
-                    creating.set(false);
-                    admin_ws::send_list_exports();
-                }
-                AdminServerMessage::ExportDeleted { export_id: _ } => {
-                    admin_ws::send_list_exports();
-                }
-                AdminServerMessage::AdminError { code: _, message } => {
-                    error.set(Some(message));
-                    loading.set(false);
-                    creating.set(false);
-                }
-                _ => {}
-            }
-        }
     });
 
     let on_create_export = move |_| {
         let name = export_name.get();
         if name.is_empty() {
-            error.set(Some("Export name is required".to_string()));
+            export_state.error.set(Some("Export name is required".to_string()));
             return;
         }
 
-        creating.set(true);
-        error.set(None);
+        export_state.error.set(None);
 
         let config = ExportConfigDto {
             sectors: vec![],
@@ -91,6 +47,7 @@ pub fn ExportPanel() -> impl IntoView {
         };
 
         admin_ws::send_create_export(&name, config);
+        export_name.set(String::new());
     };
 
     view! {
@@ -101,7 +58,7 @@ pub fn ExportPanel() -> impl IntoView {
                 <button
                     class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-sm rounded"
                     on:click=move |_| {
-                        loading.set(true);
+                        export_state.loading.set(true);
                         admin_ws::send_list_exports();
                     }
                 >
@@ -110,15 +67,38 @@ pub fn ExportPanel() -> impl IntoView {
             </div>
 
             // Error display
-            <Show when=move || error.get().is_some()>
+            <Show when=move || export_state.error.get().is_some()>
                 <div class="mb-4 p-2 bg-red-900/50 border border-red-500 rounded text-red-300 text-sm">
-                    {move || error.get().unwrap_or_default()}
+                    {move || export_state.error.get().unwrap_or_default()}
                     <button
                         class="ml-2 text-red-400 hover:text-red-300"
-                        on:click=move |_| error.set(None)
+                        on:click=move |_| export_state.clear_error()
                     >
                         "×"
                     </button>
+                </div>
+            </Show>
+
+            // Progress indicator
+            <Show when=move || export_state.is_exporting()>
+                <div class="mb-4 p-3 bg-amber-900/30 border border-amber-700/50 rounded">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-amber-400 font-medium">
+                            "Creating: "{move || export_state.creating_name.get().unwrap_or_default()}
+                        </span>
+                        <span class="text-sm text-slate-400">
+                            {move || export_state.progress.get()}"%"
+                        </span>
+                    </div>
+                    <div class="w-full bg-slate-700 rounded-full h-2">
+                        <div
+                            class="bg-amber-500 h-2 rounded-full transition-all"
+                            style=move || format!("width: {}%", export_state.progress.get())
+                        ></div>
+                    </div>
+                    <div class="text-xs text-slate-400 mt-1">
+                        {move || export_state.progress_phase.get()}
+                    </div>
                 </div>
             </Show>
 
@@ -169,10 +149,10 @@ pub fn ExportPanel() -> impl IntoView {
                         // Create button
                         <button
                             class="w-full px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded disabled:opacity-50"
-                            disabled=move || creating.get()
+                            disabled=move || export_state.is_exporting()
                             on:click=on_create_export
                         >
-                            {move || if creating.get() { "Creating..." } else { "Create Export" }}
+                            {move || if export_state.is_exporting() { "Creating..." } else { "Create Export" }}
                         </button>
                     </div>
                 </div>
@@ -182,9 +162,9 @@ pub fn ExportPanel() -> impl IntoView {
                     <h3 class="text-sm font-medium text-slate-300 mb-4">"Available Exports"</h3>
 
                     <Show
-                        when=move || loading.get()
+                        when=move || export_state.loading.get()
                         fallback=move || view! {
-                            <ExportList exports=exports />
+                            <ExportList exports=export_state.exports />
                         }
                     >
                         <div class="flex items-center justify-center h-32 text-slate-400">

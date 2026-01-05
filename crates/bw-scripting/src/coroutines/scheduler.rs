@@ -10,7 +10,7 @@ use uuid::Uuid;
 use rhai::{Dynamic, Map, Scope};
 
 use crate::engine::{ScriptEngine, ScriptError};
-use crate::state::{StateAccessor, AccessPermissions};
+use bw_game::state::{StateAccessor, AccessPermissions};
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
 use crate::persistence::ScriptStateStore;
 
@@ -110,6 +110,50 @@ impl CoroutineScheduler {
 
         self.coroutines.write().insert(id, coroutine);
         self.ready_queue.lock().push_back(id);
+
+        Ok(id)
+    }
+
+    /// Spawn a coroutine that will run after a delay.
+    ///
+    /// Unlike `spawn_with_context`, this doesn't add the coroutine to the ready queue.
+    /// Instead, it schedules it to wake up at `current_tick + delay_ticks`.
+    pub fn spawn_scheduled(
+        &self,
+        script_path: &str,
+        function_name: &str,
+        current_tick: u64,
+        delay_ticks: u64,
+        owner_entity_id: Option<Uuid>,
+        sector_id: Option<Uuid>,
+    ) -> Result<Uuid, ScriptError> {
+        if !self.engine.has_script(script_path) {
+            return Err(ScriptError::NotFound(script_path.to_string()));
+        }
+
+        let mut coroutine = Coroutine::new(script_path, function_name, current_tick);
+        coroutine.owner_entity_id = owner_entity_id;
+        coroutine.sector_id = sector_id;
+        coroutine.state = CoroutineState::WaitingForTicks;
+        coroutine.resume_at = Some(current_tick + delay_ticks);
+
+        let id = coroutine.id;
+        let resume_tick = current_tick + delay_ticks;
+
+        self.coroutines.write().insert(id, coroutine);
+        self.tick_waiters.write()
+            .entry(resume_tick)
+            .or_default()
+            .push(id);
+
+        tracing::debug!(
+            coroutine_id = %id,
+            script = script_path,
+            function = function_name,
+            delay_ticks,
+            resume_tick,
+            "Spawned scheduled coroutine"
+        );
 
         Ok(id)
     }
@@ -425,11 +469,12 @@ impl CoroutineScheduler {
             }
             YieldType::Schedule { delay_ticks, callback } => {
                 // Schedule is fire-and-forget: spawn a new coroutine for the callback
-                // and mark this yield as completed
-                let _ = self.spawn_with_context(
+                // that will run after delay_ticks
+                let _ = self.spawn_scheduled(
                     &coroutine.script_path,
                     &callback,
-                    current_tick + delay_ticks,
+                    current_tick,
+                    delay_ticks,
                     coroutine.owner_entity_id,
                     coroutine.sector_id,
                 );

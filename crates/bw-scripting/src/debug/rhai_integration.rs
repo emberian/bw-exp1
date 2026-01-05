@@ -477,6 +477,7 @@ pub fn dynamic_to_variable(name: &str, value: &Dynamic, path: &str) -> Variable 
 }
 
 /// Expand a Map or Array variable into its children.
+#[allow(dead_code)] // Public API for debugger clients - implementation pending in server
 pub fn expand_variable(value: &Dynamic, parent_path: &str) -> Vec<Variable> {
     if let Some(arr) = value.clone().try_cast::<rhai::Array>() {
         arr.iter()

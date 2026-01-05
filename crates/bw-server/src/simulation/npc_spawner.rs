@@ -7,7 +7,7 @@
 use uuid::Uuid;
 
 use bw_core::models::{DangerLevel, Ship, ShipClass};
-use bw_shared::dto::{PositionDto, ShipDto};
+use bw_shared::dto::ShipDto;
 use rhai::Dynamic;
 
 use crate::{GameState, SectorInstance};
@@ -102,8 +102,7 @@ pub fn try_spawn_npcs(
     let sector_id = sector.sector.id;
 
     // Create DTO for broadcast (before inserting ship into state)
-    let faction_tag = faction_id.and_then(|fid| state.factions.get(&fid).map(|f| f.tag.clone()));
-    let ship_dto = ShipDto::from_core(&npc_ship, faction_tag);
+    let ship_dto = ShipDto::from_core(&npc_ship, state.faction_tag(faction_id));
 
     // Add to state
     state.ships.insert(ship_id, npc_ship);

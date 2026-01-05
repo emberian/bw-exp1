@@ -4,53 +4,28 @@ use leptos::prelude::*;
 use bw_shared::EntityType;
 
 use crate::api::admin_ws;
+use crate::state::InspectorState;
 
 /// State inspector component
 #[component]
 pub fn StateInspector() -> impl IntoView {
-    // State
-    let selected_type = RwSignal::new(EntityType::Ship);
-    let entities = RwSignal::new(Vec::<serde_json::Value>::new());
-    let total_count = RwSignal::new(0usize);
-    let current_tick = RwSignal::new(0u64);
-    let loading = RwSignal::new(false);
-    let error = RwSignal::new(Option::<String>::None);
+    // Get state from context
+    let inspector_state = expect_context::<InspectorState>();
 
-    // Pagination
-    let limit = 50usize;
-    let offset = RwSignal::new(0usize);
+    // Local state for selected entity type (easier UX)
+    let selected_type = RwSignal::new(EntityType::Ship);
+    let limit = inspector_state.page_size.get();
 
     // Load state on type change
     let fetch_state = move || {
-        loading.set(true);
-        error.set(None);
-        admin_ws::send_get_state_snapshot(selected_type.get(), limit, offset.get());
+        inspector_state.loading.set(true);
+        admin_ws::send_get_state_snapshot(selected_type.get(), limit, inspector_state.offset.get());
     };
 
     Effect::new(move |_| {
         let _ = selected_type.get();
-        let _ = offset.get();
+        let _ = inspector_state.offset.get();
         fetch_state();
-    });
-
-    // Handle incoming messages
-    Effect::new(move |_| {
-        if let Some(msg) = admin_ws::poll_message() {
-            use bw_shared::AdminServerMessage;
-            match msg {
-                AdminServerMessage::StateSnapshot { tick, entity_type: _, entities: e, total_count: tc } => {
-                    entities.set(e);
-                    total_count.set(tc);
-                    current_tick.set(tick);
-                    loading.set(false);
-                }
-                AdminServerMessage::AdminError { code: _, message } => {
-                    error.set(Some(message));
-                    loading.set(false);
-                }
-                _ => {}
-            }
-        }
     });
 
     view! {
@@ -60,7 +35,7 @@ pub fn StateInspector() -> impl IntoView {
                 <div class="flex items-center gap-4">
                     <h2 class="text-lg font-semibold text-amber-500">"State Inspector"</h2>
                     <span class="text-xs text-slate-400">
-                        "Tick: "{move || current_tick.get()}
+                        "Tick: "{move || inspector_state.current_tick.get()}
                     </span>
                 </div>
                 <div class="flex items-center gap-2">
@@ -78,7 +53,7 @@ pub fn StateInspector() -> impl IntoView {
                                 _ => EntityType::Ship,
                             };
                             selected_type.set(entity_type);
-                            offset.set(0);
+                            inspector_state.offset.set(0);
                         }
                     >
                         <option value="Ship">"Ships"</option>
@@ -96,25 +71,18 @@ pub fn StateInspector() -> impl IntoView {
                 </div>
             </div>
 
-            // Error display
-            <Show when=move || error.get().is_some()>
-                <div class="mb-4 p-2 bg-red-900/50 border border-red-500 rounded text-red-300 text-sm">
-                    {move || error.get().unwrap_or_default()}
-                </div>
-            </Show>
-
             // Stats bar
             <div class="mb-4 flex items-center gap-4 text-sm text-slate-400">
-                <span>"Total: "{move || total_count.get()}</span>
-                <span>"Showing: "{move || entities.get().len()}</span>
+                <span>"Total: "{move || inspector_state.total_count.get()}</span>
+                <span>"Showing: "{move || inspector_state.entities.get().len()}</span>
             </div>
 
             // Entity list
             <div class="flex-1 overflow-auto">
                 <Show
-                    when=move || loading.get()
+                    when=move || inspector_state.loading.get()
                     fallback=move || view! {
-                        <EntityList entities=entities />
+                        <EntityList entities=inspector_state.entities />
                     }
                 >
                     <div class="flex items-center justify-center h-32 text-slate-400">
@@ -127,22 +95,26 @@ pub fn StateInspector() -> impl IntoView {
             <div class="mt-4 flex items-center justify-between">
                 <button
                     class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-sm rounded disabled:opacity-50"
-                    disabled=move || offset.get() == 0
+                    disabled=move || inspector_state.offset.get() == 0
                     on:click=move |_| {
-                        let new_offset = offset.get().saturating_sub(limit);
-                        offset.set(new_offset);
+                        let new_offset = inspector_state.offset.get().saturating_sub(limit);
+                        inspector_state.offset.set(new_offset);
                     }
                 >
                     "Previous"
                 </button>
                 <span class="text-sm text-slate-400">
-                    {move || format!("{}-{} of {}", offset.get() + 1, (offset.get() + entities.get().len()).min(total_count.get()), total_count.get())}
+                    {move || format!("{}-{} of {}",
+                        inspector_state.offset.get() + 1,
+                        (inspector_state.offset.get() + inspector_state.entities.get().len()).min(inspector_state.total_count.get()),
+                        inspector_state.total_count.get()
+                    )}
                 </span>
                 <button
                     class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-sm rounded disabled:opacity-50"
-                    disabled=move || offset.get() + limit >= total_count.get()
+                    disabled=move || inspector_state.offset.get() + limit >= inspector_state.total_count.get()
                     on:click=move |_| {
-                        offset.set(offset.get() + limit);
+                        inspector_state.offset.set(inspector_state.offset.get() + limit);
                     }
                 >
                     "Next"

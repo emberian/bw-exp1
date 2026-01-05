@@ -7,6 +7,7 @@ use uuid::Uuid;
 use bw_core::models::{CombatStance, Position, Ship};
 use bw_game::state::{
     MutationResult, PlayerSnapshot, SectorSnapshot, ShipSnapshot, StateProvider, StateMutation,
+    EntityType,
 };
 use bw_shared::ServerMessage;
 
@@ -213,7 +214,7 @@ impl PlaytestInstance {
 
             StateMutation::DestroyEntity { entity_id, entity_type } => {
                 match entity_type {
-                    bw_scripting::state::EntityType::Ship => {
+                    EntityType::Ship => {
                         if let Some((_, ship)) = self.ships.remove(entity_id) {
                             // Remove from sector
                             if let Some(sector) = self.sectors.get(&ship.sector_id) {
@@ -229,7 +230,7 @@ impl PlaytestInstance {
                             MutationResult::failure(mutation, "Ship not found")
                         }
                     }
-                    bw_scripting::state::EntityType::Mission => {
+                    EntityType::Mission => {
                         // Find and remove mission from any sector
                         for sector in self.sectors.iter() {
                             if sector.missions.remove(entity_id).is_some() {
@@ -238,7 +239,7 @@ impl PlaytestInstance {
                         }
                         MutationResult::failure(mutation, "Mission not found")
                     }
-                    bw_scripting::state::EntityType::Station => {
+                    EntityType::Station => {
                         // Find and remove station (location) from any sector
                         for mut sector in self.sectors.iter_mut() {
                             let initial_len = sector.sector.locations.len();
@@ -249,7 +250,7 @@ impl PlaytestInstance {
                         }
                         MutationResult::failure(mutation, "Station not found")
                     }
-                    bw_scripting::state::EntityType::Sector => {
+                    EntityType::Sector => {
                         if let Some((_, sector)) = self.sectors.remove(entity_id) {
                             // Move all ships in this sector to limbo
                             for ship_entry in sector.ship_ids.iter() {
@@ -301,7 +302,14 @@ impl PlaytestInstance {
                             message: message.clone(),
                             notification_type: notification_type.clone(),
                         };
-                        let _ = conn.try_send(msg);
+                        if let Err(e) = conn.try_send(msg) {
+                            tracing::warn!(
+                                playtest_id = %self.id,
+                                player_id = %player_id,
+                                error = %e,
+                                "Failed to send notification to player"
+                            );
+                        }
                     }
                 }
                 MutationResult::success(mutation)
@@ -336,7 +344,15 @@ impl PlaytestInstance {
                                 })
                                 .collect(),
                         };
-                        let _ = conn.try_send(msg);
+                        if let Err(e) = conn.try_send(msg) {
+                            tracing::warn!(
+                                playtest_id = %self.id,
+                                player_id = %player_id,
+                                choice_id = %choice_id,
+                                error = %e,
+                                "Failed to send choice dialog to player"
+                            );
+                        }
                     }
                 }
                 MutationResult::success(mutation)
@@ -361,7 +377,14 @@ impl PlaytestInstance {
                         notification_type: notification_type.clone(),
                     };
                     for conn in sector.connections.iter() {
-                        let _ = conn.value().try_send(msg.clone());
+                        if let Err(e) = conn.value().try_send(msg.clone()) {
+                            tracing::warn!(
+                                playtest_id = %self.id,
+                                sector_id = %sector_id,
+                                error = %e,
+                                "Failed to broadcast to player in sector"
+                            );
+                        }
                     }
                 }
                 MutationResult::success(mutation)

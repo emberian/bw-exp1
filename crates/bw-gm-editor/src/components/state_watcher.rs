@@ -4,23 +4,22 @@ use leptos::prelude::*;
 use bw_shared::dto::WatchDto;
 
 use crate::api::admin_ws;
+use crate::state::InspectorState;
 
 /// State watcher component for creating and monitoring watch expressions
 #[component]
 pub fn StateWatcher() -> impl IntoView {
-    // State
-    let watches = RwSignal::new(Vec::<WatchDto>::new());
-    let loading = RwSignal::new(false);
-    let error = RwSignal::new(Option::<String>::None);
+    // Get state from context
+    let inspector_state = expect_context::<InspectorState>();
 
-    // New watch form state
+    // New watch form state (local)
     let new_expression = RwSignal::new(String::new());
     let new_name = RwSignal::new(String::new());
     let creating = RwSignal::new(false);
+    let error = RwSignal::new(Option::<String>::None);
 
     // Load watches on mount
     Effect::new(move |_| {
-        loading.set(true);
         admin_ws::with_admin_ws(|ws| ws.list_watches());
     });
 
@@ -46,9 +45,6 @@ pub fn StateWatcher() -> impl IntoView {
         new_expression.set(String::new());
         new_name.set(String::new());
         creating.set(false);
-
-        // Refresh list after brief delay
-        admin_ws::with_admin_ws(|ws| ws.list_watches());
     };
 
     view! {
@@ -59,7 +55,6 @@ pub fn StateWatcher() -> impl IntoView {
                 <button
                     class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-sm rounded"
                     on:click=move |_| {
-                        loading.set(true);
                         admin_ws::with_admin_ws(|ws| ws.list_watches());
                     }
                 >
@@ -138,17 +133,7 @@ pub fn StateWatcher() -> impl IntoView {
                 // Watch list
                 <div class="flex-1 overflow-auto">
                     <h3 class="text-sm font-medium text-slate-300 mb-4">"Active Watches"</h3>
-
-                    <Show
-                        when=move || loading.get()
-                        fallback=move || view! {
-                            <WatchList watches=watches />
-                        }
-                    >
-                        <div class="flex items-center justify-center h-32 text-slate-400">
-                            "Loading..."
-                        </div>
-                    </Show>
+                    <WatchList watches=inspector_state.watches />
                 </div>
             </div>
         </div>
@@ -234,8 +219,6 @@ fn WatchCard(watch: WatchDto) -> impl IntoView {
                         class="px-2 py-1 bg-red-900/50 hover:bg-red-900 text-red-400 text-xs rounded"
                         on:click=move |_| {
                             admin_ws::with_admin_ws(|ws| ws.remove_watch(watch_id));
-                            // Refresh list
-                            admin_ws::with_admin_ws(|ws| ws.list_watches());
                         }
                     >
                         "Remove"

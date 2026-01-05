@@ -230,12 +230,8 @@ async fn send_initial_state(
     // Build player DTO
     let player_dto = match state.player_data.get(&player_id) {
         Some(player) => {
-            let faction_tag = state.factions.get(&player.faction_id)
-                .map(|f| f.tag.clone())
-                .unwrap_or_else(|| "COMPACT".to_string());
-            let squadron_tag = player.squadron_id.and_then(|sid| {
-                state.squadrons.get(&sid).map(|s| s.tag.clone())
-            });
+            let faction_tag = state.faction_tag_or(player.faction_id, "COMPACT");
+            let squadron_tag = state.squadron_tag(player.squadron_id);
             let is_admin = config().is_admin(&player.username);
             PlayerDto::from_core(&player, faction_tag, squadron_tag, is_admin)
         }
@@ -265,10 +261,7 @@ async fn send_initial_state(
         }
     };
 
-    let ship_faction_tag = ship.faction_id.and_then(|fid| {
-        state.factions.get(&fid).map(|f| f.tag.clone())
-    });
-    let ship_dto = ShipDto::from_core(&ship, ship_faction_tag);
+    let ship_dto = ShipDto::from_core(&ship, state.faction_tag(ship.faction_id));
 
     let sector_dto = SectorDto {
         id: sector.sector.id,
@@ -298,10 +291,7 @@ async fn send_initial_state(
                 return None; // Skip player's own ship
             }
             state.ships.get(&ship_id).map(|s| {
-                let faction_tag = s.faction_id.and_then(|fid| {
-                    state.factions.get(&fid).map(|f| f.tag.clone())
-                });
-                ShipDto::from_core(&s, faction_tag)
+                ShipDto::from_core(&s, state.faction_tag(s.faction_id))
             })
         })
         .collect();
@@ -603,19 +593,12 @@ async fn handle_join_sector(
         }
     };
 
-    let faction_tag = state.factions.get(&player.faction_id)
-        .map(|f| f.tag.clone())
-        .unwrap_or_default();
-    let squadron_tag = player.squadron_id.and_then(|sq_id| {
-        state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
-    });
+    let faction_tag = state.faction_tag_or(player.faction_id, "");
+    let squadron_tag = state.squadron_tag(player.squadron_id);
     let is_admin = config().is_admin(&player.username);
     let player_dto = PlayerDto::from_core(&player, faction_tag, squadron_tag, is_admin);
 
-    let ship_faction_tag = ship.faction_id.and_then(|fid| {
-        state.factions.get(&fid).map(|f| f.tag.clone())
-    });
-    let ship_dto = ShipDto::from_core(&ship, ship_faction_tag);
+    let ship_dto = ShipDto::from_core(&ship, state.faction_tag(ship.faction_id));
 
     let sector_dto = SectorDto {
         id: target_sector.sector.id,
@@ -654,10 +637,7 @@ async fn handle_join_sector(
                 return None;
             }
             state.ships.get(&other_ship_id).map(|s| {
-                let faction_tag = s.faction_id.and_then(|fid| {
-                    state.factions.get(&fid).map(|f| f.tag.clone())
-                });
-                ShipDto::from_core(&s, faction_tag)
+                ShipDto::from_core(&s, state.faction_tag(s.faction_id))
             })
         })
         .collect();
@@ -698,10 +678,7 @@ async fn handle_join_sector(
     if let Some(new_sector) = state.sectors.get(&target_sector_id) {
         let ship = state.ships.get(&ship_id);
         if let Some(ship) = ship {
-            let spawn_faction_tag = ship.faction_id.and_then(|fid| {
-                state.factions.get(&fid).map(|f| f.tag.clone())
-            });
-            let spawn_dto = ShipDto::from_core(&ship, spawn_faction_tag);
+            let spawn_dto = ShipDto::from_core(&ship, state.faction_tag(ship.faction_id));
 
             let spawn_msg = ServerMessage::StateUpdate {
                 tick: state.get_tick(),

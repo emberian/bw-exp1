@@ -8,8 +8,8 @@ use rhai::{Engine, Dynamic, Map, Array, EvalAltResult, Position as RhaiPos};
 use uuid::Uuid;
 
 use bw_core::models::Position;
-use crate::state::{StateAccessor, ShipChanges, PlayerChanges, ShipSpawnConfig, EntityType};
-use crate::state::{PropertyWatch, WatchCondition, WatchRegistry};
+use bw_game::state::{StateAccessor, ShipChanges, PlayerChanges, ShipSpawnConfig, EntityType, ShipStatusChange, CargoChange, UpgradeInstall};
+use bw_game::state::{PropertyWatch, WatchCondition, WatchRegistry};
 use crate::errors::{ScriptError, push_error};
 use crate::context::{
     with_context, with_accessor,
@@ -229,7 +229,7 @@ pub fn register(engine: &mut Engine) {
         };
 
         let changes = ShipChanges {
-            status: Some(crate::state::ShipStatusChange::InTransit {
+            status: Some(ShipStatusChange::InTransit {
                 destination: Position::new(x, y, z),
                 target_id: None,
             }),
@@ -447,7 +447,7 @@ pub fn register(engine: &mut Engine) {
         };
 
         let changes = ShipChanges {
-            add_cargo: Some(crate::state::CargoChange {
+            add_cargo: Some(CargoChange {
                 cargo_type,
                 quantity: quantity as u32,
                 purchase_price: price,
@@ -468,7 +468,7 @@ pub fn register(engine: &mut Engine) {
         };
 
         let changes = ShipChanges {
-            remove_cargo: Some(crate::state::CargoChange {
+            remove_cargo: Some(CargoChange {
                 cargo_type,
                 quantity: quantity as u32,
                 purchase_price: 0,
@@ -639,7 +639,7 @@ pub fn register(engine: &mut Engine) {
         };
 
         let changes = ShipChanges {
-            install_upgrade: Some(crate::state::UpgradeInstall {
+            install_upgrade: Some(UpgradeInstall {
                 upgrade_id,
                 slot,
             }),

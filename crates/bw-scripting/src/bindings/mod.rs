@@ -38,7 +38,7 @@ pub fn register_all(engine: &mut Engine) {
     crate::transaction::register(engine);
 
     // Register AI system (behavior trees + utility AI)
-    crate::ai::register_ai_bindings(engine);
+    bw_ai::register_ai_bindings(engine);
 
     // Register persistence system for saving/loading script state
     crate::persistence::register_persistence_bindings(engine);

@@ -8,7 +8,7 @@ use rhai::{Dynamic, Map};
 use uuid::Uuid;
 
 use crate::engine::ScriptEngine;
-use crate::state::{StateAccessor, AccessPermissions, StateMutation};
+use bw_game::state::{StateAccessor, AccessPermissions, StateMutation};
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
 use crate::handlers::HandlerContext;
 

@@ -27,7 +27,7 @@ pub use manager::*;
 use rhai::{Dynamic, Map};
 use uuid::Uuid;
 
-use crate::ai::BtNode;
+use bw_ai::BtNode;
 pub use bw_game::EntityType;
 
 /// A behavior script attached to an entity.

@@ -69,9 +69,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
         .collect();
 
     // Helper to convert game coords to screen coords
+    // Sector bounds are centered at origin (e.g., -500 to 500), so offset by half
     let to_screen = |x: f64, y: f64| -> Option<(usize, usize)> {
-        let sx = ((x / SECTOR_SIZE) * width as f64) as isize;
-        let sy = ((y / SECTOR_SIZE) * height as f64) as isize;
+        let sx = (((x + SECTOR_SIZE / 2.0) / SECTOR_SIZE) * width as f64) as isize;
+        let sy = (((y + SECTOR_SIZE / 2.0) / SECTOR_SIZE) * height as f64) as isize;
         if sx >= 0 && sx < width as isize && sy >= 0 && sy < height as isize {
             Some((sx as usize, sy as usize))
         } else {

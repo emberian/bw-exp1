@@ -11,7 +11,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use rhai::{Engine, Dynamic, Map};
 
-use crate::archetypes::ArchetypeRegistry;
+use bw_game::archetypes::ArchetypeRegistry;
 
 // Thread-local data accessor for script execution.
 thread_local! {
@@ -427,7 +427,7 @@ pub fn register(engine: &mut Engine) {
 // Archetype to Dynamic Converters
 // =========================================================================
 
-use crate::archetypes::{
+use bw_game::archetypes::{
     ShipArchetype, WeaponArchetype, EffectArchetype, AbilityArchetype,
     CargoArchetype, FactionArchetype,
 };

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 use rhai::Map;
 
+use bw_game::state::AccessPermissions;
 use crate::auth::AdminAuth;
 use crate::GameState;
 use crate::scripting::{LogLevel, ScriptLogEntry};
@@ -271,9 +272,9 @@ async fn eval_script(
     // Set up state accessor with appropriate permissions
     if let Some(accessor) = state.state_accessor.read().as_ref() {
         if req.trusted {
-            accessor.set_permissions(bw_scripting::AccessPermissions::trusted());
+            accessor.set_permissions(AccessPermissions::trusted());
         } else {
-            accessor.set_permissions(bw_scripting::AccessPermissions::read_only());
+            accessor.set_permissions(AccessPermissions::read_only());
         }
     }
 

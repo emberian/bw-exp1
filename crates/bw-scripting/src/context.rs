@@ -30,7 +30,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 use thiserror::Error;
 
-use crate::state::{StateAccessor, WatchRegistry};
+use bw_game::state::{StateAccessor, WatchRegistry};
 use crate::events::EventRegistry;
 use crate::actions::ActionRegistry;
 use crate::effects::EffectDispatcher;
@@ -197,8 +197,20 @@ impl Drop for ExecutionGuard {
     fn drop(&mut self) {
         CURRENT_CONTEXT.with(|cell| {
             if let Some(ctx) = cell.borrow_mut().take() {
-                // Apply pending mutations
-                let _ = ctx.accessor.apply_pending_mutations();
+                // Apply pending mutations and log any failures
+                let results = ctx.accessor.apply_pending_mutations();
+                for result in results {
+                    if !result.success {
+                        if let Some(ref error) = result.error {
+                            tracing::warn!(
+                                script = %ctx.script_path,
+                                mutation = ?result.mutation,
+                                error = %error,
+                                "Mutation failed during script cleanup"
+                            );
+                        }
+                    }
+                }
 
                 // Clear error context
                 crate::errors::clear_current_script();
@@ -292,17 +304,17 @@ pub fn with_persistence_store<T>(f: impl FnOnce(&dyn ScriptStateStore) -> T) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::StateProvider;
+    use bw_game::state::StateProvider;
     use bw_core::models::Position;
 
     struct MockProvider;
     impl StateProvider for MockProvider {
-        fn get_ship(&self, _: Uuid) -> Option<crate::state::ShipSnapshot> { None }
-        fn get_ships_in_sector(&self, _: Uuid) -> Vec<crate::state::ShipSnapshot> { vec![] }
-        fn get_ships_in_range(&self, _: Uuid, _: Position, _: f64) -> Vec<crate::state::ShipSnapshot> { vec![] }
-        fn get_player(&self, _: Uuid) -> Option<crate::state::PlayerSnapshot> { None }
-        fn get_sector(&self, _: Uuid) -> Option<crate::state::SectorSnapshot> { None }
-        fn apply_mutations(&self, _: Vec<crate::state::StateMutation>) -> Vec<crate::state::MutationResult> { vec![] }
+        fn get_ship(&self, _: Uuid) -> Option<bw_game::state::ShipSnapshot> { None }
+        fn get_ships_in_sector(&self, _: Uuid) -> Vec<bw_game::state::ShipSnapshot> { vec![] }
+        fn get_ships_in_range(&self, _: Uuid, _: Position, _: f64) -> Vec<bw_game::state::ShipSnapshot> { vec![] }
+        fn get_player(&self, _: Uuid) -> Option<bw_game::state::PlayerSnapshot> { None }
+        fn get_sector(&self, _: Uuid) -> Option<bw_game::state::SectorSnapshot> { None }
+        fn apply_mutations(&self, _: Vec<bw_game::state::StateMutation>) -> Vec<bw_game::state::MutationResult> { vec![] }
     }
 
     #[test]
