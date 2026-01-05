@@ -39,6 +39,7 @@ COPY crates/bw-core/src crates/bw-core/src
 COPY crates/bw-shared/src crates/bw-shared/src
 COPY crates/bw-scripting/src crates/bw-scripting/src
 COPY crates/bw-server/src crates/bw-server/src
+COPY migrations migrations
 
 # Build the server
 RUN touch crates/bw-core/src/lib.rs crates/bw-shared/src/lib.rs crates/bw-scripting/src/lib.rs crates/bw-server/src/lib.rs crates/bw-server/src/main.rs && \
