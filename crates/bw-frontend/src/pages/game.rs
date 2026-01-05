@@ -201,7 +201,7 @@ pub fn GamePage() -> impl IntoView {
                 // Hidden when docked to allow station panel to be visible
                 <aside class=move || {
                     let panel = game_state.active_mobile_panel.get();
-                    let is_docked = game_state.ship_status.get().starts_with("Docked");
+                    let is_docked = game_state.is_docked();
                     let is_visible = matches!(panel, MobilePanel::Missions | MobilePanel::Squadron) && !is_docked;
                     if is_visible {
                         // Mobile: full-screen overlay (z-[55] to be above alerts at z-50)
@@ -304,7 +304,7 @@ pub fn GamePage() -> impl IntoView {
                 // Hidden when docked to allow station panel to be visible
                 <aside class=move || {
                     let panel = game_state.active_mobile_panel.get();
-                    let is_docked = game_state.ship_status.get().starts_with("Docked");
+                    let is_docked = game_state.is_docked();
                     let is_visible = matches!(panel, MobilePanel::Ship | MobilePanel::Comms | MobilePanel::Combat) && !is_docked;
                     if is_visible {
                         // Mobile: full-screen overlay (z-[55] to be above alerts at z-50)

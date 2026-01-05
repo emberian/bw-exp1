@@ -653,83 +653,146 @@ fn handle_admin_message(msg: AdminServerMessage) {
         return;
     };
 
-    let gm_state = refs.gm_state;
-    let staged = refs.staged;
-    let debug_state = refs.debug;
-    let schema_state = refs.schema;
-    let validation_state = refs.validation;
-    let inspector_state = refs.inspector;
-    let export_state = refs.export;
+    // Route messages to domain-specific handlers for better organization
+    use AdminServerMessage::*;
+    match msg {
+        // Core data messages
+        ScriptList { .. } | ScriptContent { .. } | SimConfigData { .. } => {
+            handle_core_data_messages(msg, refs)
+        }
+        EntityList { .. } | EntityDetails { .. } | SectorList { .. } => {
+            handle_entity_messages(msg, refs)
+        }
+        StagedPreview { .. } | CommitResult { .. } => {
+            handle_staged_messages(msg, refs)
+        }
+        AdminError { .. } => {
+            handle_error_messages(msg, refs)
+        }
 
+        // Playtest messages (not yet handled in UI)
+        PlaytestCreated { .. } | PlaytestList { .. } | PlaytestDetails { .. }
+        | PlaytestJoined { .. } | PlaytestLeft | PlaytestInviteSent { .. }
+        | PlaytestPlayerKicked { .. } | PlaytestStateChanged { .. }
+        | PlaytestDestroyed { .. } | PromotePreview { .. } | PromoteResult { .. } => {
+            handle_playtest_messages(msg)
+        }
+
+        // Script messages
+        ScriptError { .. } | ScriptErrors { .. } | ScriptReloaded { .. }
+        | DefinitionsReloaded { .. } | SubscribedToScriptErrors
+        | UnsubscribedFromScriptErrors => {
+            handle_script_messages(msg, refs)
+        }
+
+        // Debug messages
+        DebugSessionStarted { .. } | DebugSessionEnded | BreakpointSet { .. }
+        | FunctionBreakpointSet { .. } | BreakpointRemoved { .. }
+        | BreakpointToggled { .. } | BreakpointList { .. } | DebugPaused { .. }
+        | DebugResumed | DebugVariables { .. } | EvaluationResult { .. }
+        | CallStack { .. } | DebugError { .. } | VariableExpanded { .. } => {
+            handle_debug_messages(msg, refs)
+        }
+
+        // Schema messages
+        ArchetypeSchemas { .. } | ArchetypeSchemaDetail { .. } | ActionSchemas { .. } => {
+            handle_schema_messages(msg, refs)
+        }
+
+        // Validation messages
+        ValidationResult { .. } | DefinitionValidationResult { .. } => {
+            handle_validation_messages(msg, refs)
+        }
+
+        // State introspection messages
+        StateSubscribed { .. } | StateUnsubscribed | StateUpdate { .. }
+        | StateSnapshot { .. } | WatchCreated { .. } | WatchRemoved { .. }
+        | WatchList { .. } | WatchValue { .. } => {
+            handle_inspector_messages(msg, refs)
+        }
+
+        // Export messages
+        ExportCreated { .. } | ExportProgress { .. } | ExportCompleted { .. }
+        | ExportFailed { .. } | ExportStatus { .. } | ExportList { .. }
+        | ExportDeleted { .. } | ExportDownloadUrl { .. } => {
+            handle_export_messages(msg, refs)
+        }
+    }
+}
+
+// =============================================================================
+// Domain-specific message handlers
+// =============================================================================
+
+fn handle_core_data_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let gm_state = refs.gm_state;
     match msg {
         AdminServerMessage::ScriptList { files } => {
             gm_state.scripts.set(files);
             gm_state.loading_scripts.set(false);
         }
-
-        AdminServerMessage::ScriptContent {
-            path,
-            content,
-            last_modified: _,
-        } => {
+        AdminServerMessage::ScriptContent { path, content, .. } => {
             gm_state.selected_script.set(Some(path));
             gm_state.script_content.set(content.clone());
             gm_state.script_original.set(content);
             gm_state.loading_scripts.set(false);
         }
-
         AdminServerMessage::SimConfigData { config } => {
             gm_state.sim_config.set(Some(config));
             gm_state.loading_config.set(false);
         }
+        _ => {}
+    }
+}
 
-        AdminServerMessage::EntityList {
-            entities,
-            total_count: _,
-            entity_type: _,
-        } => {
+fn handle_entity_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let gm_state = refs.gm_state;
+    match msg {
+        AdminServerMessage::EntityList { entities, .. } => {
             gm_state.entities.set(entities);
             gm_state.loading_entities.set(false);
         }
-
         AdminServerMessage::EntityDetails { data, .. } => {
             gm_state.entity_details.set(Some(data));
         }
-
         AdminServerMessage::SectorList { sectors } => {
             gm_state.sectors.set(sectors);
         }
+        _ => {}
+    }
+}
 
+fn handle_staged_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let staged = refs.staged;
+    match msg {
         AdminServerMessage::StagedPreview { changes, errors } => {
             staged.update_previews(changes, errors);
             staged.preview_loading.set(false);
         }
-
-        AdminServerMessage::CommitResult {
-            success,
-            applied_count,
-            errors,
-        } => {
+        AdminServerMessage::CommitResult { success, applied_count, errors } => {
             staged.commit_loading.set(false);
             if success {
                 staged.clear();
-                staged
-                    .last_result
-                    .set(Some(format!("Successfully applied {} changes", applied_count)));
+                staged.last_result.set(Some(format!("Successfully applied {} changes", applied_count)));
             } else {
-                staged
-                    .last_result
-                    .set(Some(format!("Commit failed: {}", errors.join(", "))));
+                staged.last_result.set(Some(format!("Commit failed: {}", errors.join(", "))));
             }
         }
+        _ => {}
+    }
+}
 
-        AdminServerMessage::AdminError { code, message } => {
-            tracing::error!("[gm-ws] Admin error {}: {}", code, message);
-            gm_state.error.set(Some(format!("{}: {}", code, message)));
-            gm_state.clear_error_delayed();
-        }
+fn handle_error_messages(msg: AdminServerMessage, refs: StateRefs) {
+    if let AdminServerMessage::AdminError { code, message } = msg {
+        tracing::error!("[gm-ws] Admin error {}: {}", code, message);
+        refs.gm_state.error.set(Some(format!("{}: {}", code, message)));
+        refs.gm_state.clear_error_delayed();
+    }
+}
 
-        // Playtest messages - not yet handled in GM editor UI
+fn handle_playtest_messages(msg: AdminServerMessage) {
+    // Playtest messages - not yet handled in GM editor UI, just log
+    match msg {
         AdminServerMessage::PlaytestCreated { playtest_id, name } => {
             tracing::info!("[gm-ws] Playtest created: {} ({})", name, playtest_id);
         }
@@ -768,29 +831,27 @@ fn handle_admin_message(msg: AdminServerMessage) {
                 tracing::warn!("[gm-ws] Promote failed: {:?}", errors);
             }
         }
+        _ => {}
+    }
+}
 
-        // === Script Debugging ===
-
+fn handle_script_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let gm_state = refs.gm_state;
+    match msg {
         AdminServerMessage::ScriptError { script, function, message, line, column, tick } => {
             tracing::warn!("[gm-ws] Script error in {}::{}:{}: {} (tick {})",
                 script, function, line, message, tick);
             gm_state.add_script_error(script, function, message, line, column, tick);
         }
-
         AdminServerMessage::ScriptErrors { errors } => {
             tracing::info!("[gm-ws] Received {} script errors", errors.len());
             for error in errors {
                 gm_state.add_script_error(
-                    error.script,
-                    error.function,
-                    error.message,
-                    error.line,
-                    error.column,
-                    error.tick,
+                    error.script, error.function, error.message,
+                    error.line, error.column, error.tick,
                 );
             }
         }
-
         AdminServerMessage::ScriptReloaded { path, success, error, warnings } => {
             if success {
                 tracing::info!("[gm-ws] Script reloaded: {} ({} warnings)", path, warnings.len());
@@ -806,7 +867,6 @@ fn handle_admin_message(msg: AdminServerMessage) {
                 );
             }
         }
-
         AdminServerMessage::DefinitionsReloaded { file, ships_loaded, weapons_loaded, errors } => {
             tracing::info!("[gm-ws] Definitions reloaded: {} ships, {} weapons from {}",
                 ships_loaded, weapons_loaded, file);
@@ -822,123 +882,108 @@ fn handle_admin_message(msg: AdminServerMessage) {
                 );
             }
         }
-
         AdminServerMessage::SubscribedToScriptErrors => {
             tracing::info!("[gm-ws] Subscribed to script errors");
         }
-
         AdminServerMessage::UnsubscribedFromScriptErrors => {
             tracing::info!("[gm-ws] Unsubscribed from script errors");
         }
+        _ => {}
+    }
+}
 
-        // === Interactive Debugger Messages ===
-
+fn handle_debug_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let debug_state = refs.debug;
+    match msg {
         AdminServerMessage::DebugSessionStarted { session_id } => {
             tracing::info!("[gm-ws] Debug session started: {}", session_id);
             debug_state.on_session_started(session_id);
         }
-
         AdminServerMessage::DebugSessionEnded => {
             tracing::info!("[gm-ws] Debug session ended");
             debug_state.on_session_ended();
         }
-
         AdminServerMessage::BreakpointSet { breakpoint } => {
-            tracing::debug!("[gm-ws] Breakpoint set: {}:{}",
-                breakpoint.script, breakpoint.line);
+            tracing::debug!("[gm-ws] Breakpoint set: {}:{}", breakpoint.script, breakpoint.line);
             debug_state.on_breakpoint_set(breakpoint);
         }
-
         AdminServerMessage::FunctionBreakpointSet { breakpoint } => {
-            tracing::debug!("[gm-ws] Function breakpoint set: {}",
-                breakpoint.function_name);
+            tracing::debug!("[gm-ws] Function breakpoint set: {}", breakpoint.function_name);
             debug_state.function_breakpoints.update(|bps| bps.push(breakpoint));
         }
-
         AdminServerMessage::BreakpointRemoved { breakpoint_id } => {
             tracing::debug!("[gm-ws] Breakpoint removed: {}", breakpoint_id);
             debug_state.on_breakpoint_removed(breakpoint_id);
         }
-
         AdminServerMessage::BreakpointToggled { breakpoint_id, enabled } => {
-            tracing::debug!("[gm-ws] Breakpoint toggled: {} = {}",
-                breakpoint_id, enabled);
+            tracing::debug!("[gm-ws] Breakpoint toggled: {} = {}", breakpoint_id, enabled);
             debug_state.on_breakpoint_toggled(breakpoint_id, enabled);
         }
-
         AdminServerMessage::BreakpointList { breakpoints, function_breakpoints } => {
             tracing::debug!("[gm-ws] Received {} breakpoints, {} function breakpoints",
                 breakpoints.len(), function_breakpoints.len());
             debug_state.on_breakpoint_list(breakpoints, function_breakpoints);
         }
-
         AdminServerMessage::DebugPaused { script, line, column, reason, call_stack, entity_context } => {
             tracing::info!("[gm-ws] Debug paused at {}:{}", script, line);
             debug_state.on_paused(script, line, column, reason, call_stack, entity_context);
             // Automatically request variables for frame 0
             with_admin_ws(|ws| ws.get_variables(0));
         }
-
         AdminServerMessage::DebugResumed => {
             tracing::debug!("[gm-ws] Debug resumed");
             debug_state.on_resumed();
         }
-
         AdminServerMessage::DebugVariables { frame_index, variables } => {
-            tracing::debug!("[gm-ws] Received {} variables for frame {}",
-                variables.len(), frame_index);
+            tracing::debug!("[gm-ws] Received {} variables for frame {}", variables.len(), frame_index);
             debug_state.on_variables(frame_index, variables);
         }
-
         AdminServerMessage::EvaluationResult { expression, result, type_name, success, error } => {
             if success {
-                tracing::debug!("[gm-ws] Eval '{}' = {} ({})",
-                    expression, result, type_name);
+                tracing::debug!("[gm-ws] Eval '{}' = {} ({})", expression, result, type_name);
             } else {
-                tracing::warn!("[gm-ws] Eval '{}' failed: {:?}",
-                    expression, error);
+                tracing::warn!("[gm-ws] Eval '{}' failed: {:?}", expression, error);
             }
-            // Could store in state for display if needed
         }
-
         AdminServerMessage::CallStack { frames } => {
-            tracing::debug!("[gm-ws] Received call stack with {} frames",
-                frames.len());
+            tracing::debug!("[gm-ws] Received call stack with {} frames", frames.len());
             debug_state.on_call_stack(frames);
         }
-
         AdminServerMessage::DebugError { message } => {
             tracing::error!("[gm-ws] Debug error: {}", message);
             debug_state.on_error(message);
         }
-
         AdminServerMessage::VariableExpanded { variable_path, children } => {
-            tracing::debug!("[gm-ws] Variable expanded '{}': {} children",
-                variable_path, children.len());
-            // Could update variables in state if we implement expansion UI
+            tracing::debug!("[gm-ws] Variable expanded '{}': {} children", variable_path, children.len());
+            // TODO: Update variables in state when expansion UI is implemented
             let _ = (variable_path, children);
         }
+        _ => {}
+    }
+}
 
-        // === Schema Introspection ===
-
+fn handle_schema_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let schema_state = refs.schema;
+    match msg {
         AdminServerMessage::ArchetypeSchemas { schemas } => {
             tracing::info!("[gm-ws] Received {} archetype schemas", schemas.len());
             schema_state.on_schemas(schemas);
         }
-
         AdminServerMessage::ArchetypeSchemaDetail { archetype_type, name, fields } => {
-            tracing::info!("[gm-ws] Schema detail for {}: {} ({} fields)",
-                archetype_type, name, fields.len());
+            tracing::info!("[gm-ws] Schema detail for {}: {} ({} fields)", archetype_type, name, fields.len());
             schema_state.on_schema_detail(archetype_type, name, fields);
         }
-
         AdminServerMessage::ActionSchemas { actions } => {
             tracing::info!("[gm-ws] Received {} action schemas", actions.len());
             schema_state.on_action_schemas(actions);
         }
+        _ => {}
+    }
+}
 
-        // === Validation ===
-
+fn handle_validation_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let validation_state = refs.validation;
+    match msg {
         AdminServerMessage::ValidationResult { path, errors, warnings, is_valid } => {
             if is_valid {
                 tracing::info!("[gm-ws] Validation passed for {}", path);
@@ -948,7 +993,6 @@ fn handle_admin_message(msg: AdminServerMessage) {
             }
             validation_state.on_validation_result(path, errors, warnings, is_valid);
         }
-
         AdminServerMessage::DefinitionValidationResult { definition_type, errors, warnings, is_valid } => {
             if is_valid {
                 tracing::info!("[gm-ws] Definition validation passed for {}", definition_type);
@@ -958,47 +1002,42 @@ fn handle_admin_message(msg: AdminServerMessage) {
             }
             validation_state.on_validation_result(definition_type, errors, warnings, is_valid);
         }
+        _ => {}
+    }
+}
 
-        // === State Introspection ===
-
+fn handle_inspector_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let inspector_state = refs.inspector;
+    match msg {
         AdminServerMessage::StateSubscribed { entity_types } => {
             tracing::info!("[gm-ws] Subscribed to state updates for {:?}", entity_types);
             inspector_state.on_subscribed(entity_types);
         }
-
         AdminServerMessage::StateUnsubscribed => {
             tracing::info!("[gm-ws] Unsubscribed from state updates");
             inspector_state.on_unsubscribed();
         }
-
         AdminServerMessage::StateUpdate { tick, entity_type, changes } => {
-            tracing::debug!("[gm-ws] State update (tick {}): {:?} - {} changes",
-                tick, entity_type, changes.len());
+            tracing::debug!("[gm-ws] State update (tick {}): {:?} - {} changes", tick, entity_type, changes.len());
             inspector_state.on_state_update(tick, entity_type, changes);
         }
-
         AdminServerMessage::StateSnapshot { tick, entity_type, entities, total_count } => {
             tracing::info!("[gm-ws] State snapshot (tick {}): {:?} - {} of {} entities",
                 tick, entity_type, entities.len(), total_count);
             inspector_state.on_snapshot(tick, entity_type, entities, total_count);
         }
-
         AdminServerMessage::WatchCreated { watch } => {
-            tracing::info!("[gm-ws] Watch created: {} ({})",
-                watch.name.as_deref().unwrap_or("unnamed"), watch.id);
+            tracing::info!("[gm-ws] Watch created: {} ({})", watch.name.as_deref().unwrap_or("unnamed"), watch.id);
             inspector_state.on_watch_created(watch);
         }
-
         AdminServerMessage::WatchRemoved { watch_id } => {
             tracing::info!("[gm-ws] Watch removed: {}", watch_id);
             inspector_state.on_watch_removed(watch_id);
         }
-
         AdminServerMessage::WatchList { watches } => {
             tracing::info!("[gm-ws] Received {} watches", watches.len());
             inspector_state.on_watch_list(watches);
         }
-
         AdminServerMessage::WatchValue { watch_id, tick, value, error } => {
             if let Some(ref err) = error {
                 tracing::warn!("[gm-ws] Watch {} error at tick {}: {}", watch_id, tick, err);
@@ -1007,56 +1046,50 @@ fn handle_admin_message(msg: AdminServerMessage) {
             }
             inspector_state.on_watch_value(watch_id, tick, value, error);
         }
+        _ => {}
+    }
+}
 
-        // === Export ===
-
+fn handle_export_messages(msg: AdminServerMessage, refs: StateRefs) {
+    let export_state = refs.export;
+    let gm_state = refs.gm_state;
+    match msg {
         AdminServerMessage::ExportCreated { export_id, name } => {
             tracing::info!("[gm-ws] Export created: {} ({})", name, export_id);
             export_state.on_export_created(export_id, name.clone());
             gm_state.add_notification(format!("Export '{}' started", name), "info".to_string());
         }
-
         AdminServerMessage::ExportProgress { export_id, phase, percent } => {
             tracing::info!("[gm-ws] Export {} progress: {} ({}%)", export_id, phase, percent);
             export_state.on_progress(export_id, phase, percent);
         }
-
         AdminServerMessage::ExportCompleted { export_id, size_bytes, download_url } => {
             let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
-            tracing::info!("[gm-ws] Export {} completed: {:.2}MB, url: {}",
-                export_id, size_mb, download_url);
+            tracing::info!("[gm-ws] Export {} completed: {:.2}MB, url: {}", export_id, size_mb, download_url);
             export_state.on_completed(export_id, size_bytes, download_url);
-            gm_state.add_notification(
-                format!("Export completed ({:.2}MB)", size_mb),
-                "success".to_string(),
-            );
+            gm_state.add_notification(format!("Export completed ({:.2}MB)", size_mb), "success".to_string());
         }
-
         AdminServerMessage::ExportFailed { export_id, error } => {
             tracing::error!("[gm-ws] Export {} failed: {}", export_id, error);
             export_state.on_failed(export_id, error.clone());
             gm_state.add_notification(format!("Export failed: {}", error), "error".to_string());
         }
-
         AdminServerMessage::ExportStatus { export } => {
             tracing::info!("[gm-ws] Export status: {} - {:?}", export.name, export.status);
             export_state.on_status(export);
         }
-
         AdminServerMessage::ExportList { exports } => {
             tracing::info!("[gm-ws] Received {} exports", exports.len());
             export_state.on_export_list(exports);
         }
-
         AdminServerMessage::ExportDeleted { export_id } => {
             tracing::info!("[gm-ws] Export deleted: {}", export_id);
             export_state.on_deleted(export_id);
         }
-
         AdminServerMessage::ExportDownloadUrl { export_id, url, expires_at } => {
-            tracing::info!("[gm-ws] Export {} download URL: {} (expires {})",
-                export_id, url, expires_at);
+            tracing::info!("[gm-ws] Export {} download URL: {} (expires {})", export_id, url, expires_at);
             export_state.on_download_url(export_id, url, expires_at);
         }
+        _ => {}
     }
 }

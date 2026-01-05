@@ -4,6 +4,7 @@ mod config_editor;
 mod debug_panel;
 mod entity_browser;
 mod export_panel;
+pub mod icons;
 mod schema_browser;
 mod script_editor;
 mod staged_preview;

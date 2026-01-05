@@ -35,6 +35,11 @@ pub struct Ship {
     pub faction_tag: Option<String>,
     #[serde(default)]
     pub is_hostile: bool,
+    /// Station ID if docked (avoids distance-based heuristics)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[cfg_attr(feature = "scripting", rhai(skip))]
+    pub docked_at: Option<Uuid>,
 
     // === Script-only fields (not sent to clients) ===
     #[serde(skip)]
@@ -101,7 +106,15 @@ impl Ship {
     /// The `faction_tag` must be resolved externally since it requires
     /// looking up the faction by ID.
     pub fn from_core(ship: &bw_core::models::Ship, faction_tag: Option<String>) -> Self {
+        use bw_core::models::ShipStatus;
         let combat_stats = ship.combat_effectiveness();
+
+        // Extract docked station ID if ship is docked
+        let docked_at = match &ship.status {
+            ShipStatus::Docked { station_id } => Some(*station_id),
+            _ => None,
+        };
+
         Self {
             id: ship.id,
             name: ship.name.clone(),
@@ -118,6 +131,7 @@ impl Ship {
             is_player: ship.is_player_ship,
             faction_tag,
             is_hostile: ship.ship_class.is_hostile(),
+            docked_at,
             // Script-only fields
             sector_id: ship.sector_id,
             ammunition: ship.resources.ammunition,
@@ -276,6 +290,9 @@ pub struct ShipUpdateDto {
     pub hull_percent: Option<f32>,
     pub shield_percent: Option<f32>,
     pub status: Option<String>,
+    /// Station ID if docked, None if undocked. Use Some(None) to explicitly undock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docked_at: Option<Option<Uuid>>,
 }
 
 /// Position DTO.
@@ -379,6 +396,9 @@ pub struct SquadronDto {
     pub tag: String,
     pub motto: Option<String>,
     pub leader_name: String,
+    /// List of officer usernames (for permission checks on client)
+    #[serde(default)]
+    pub officer_names: Vec<String>,
     pub member_count: u32,
     pub reputation_bonus: f32,
     pub fame_bonus: f32,

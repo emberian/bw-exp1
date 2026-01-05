@@ -266,6 +266,7 @@ fn CountdownTimer(initial_seconds: u32) -> impl IntoView {
     let remaining = RwSignal::new(initial_seconds);
 
     // Store interval in Rc<RefCell> so we can cancel it when timer reaches zero
+    // Note: The interval is also dropped when the component unmounts (Leptos cleans up automatically)
     let interval_handle: Rc<RefCell<Option<Interval>>> = Rc::new(RefCell::new(None));
 
     if initial_seconds > 0 {

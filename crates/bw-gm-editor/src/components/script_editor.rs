@@ -37,7 +37,11 @@ pub fn ScriptEditor() -> impl IntoView {
                 if let Some(el) = editor_ref.get()
                     && let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>()
                 {
+                    // Full cleanup: destroy JS instance and Rust closure
                     handle.destroy(html_el);
+                } else {
+                    // Element no longer accessible, just clean up Rust closure
+                    handle.cleanup_closure();
                 }
             }
         }

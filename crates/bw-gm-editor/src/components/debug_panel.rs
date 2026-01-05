@@ -15,6 +15,7 @@ use uuid::Uuid;
 use bw_shared::dto::{DebugTargetDto, PauseReasonDto};
 
 use crate::api::with_admin_ws;
+use crate::components::icons::{CloseIcon, PauseIcon, PlayIcon, StepIntoIcon, StepOutIcon, StepOverIcon};
 use crate::state::{DebugPanelState, GMEditorState, ScriptErrorEntry};
 
 /// Main debug panel component
@@ -591,67 +592,6 @@ fn CollapsibleSection(
                 {children()}
             </Show>
         </div>
-    }
-}
-
-// =============================================================================
-// Icons (simple SVG-like text icons for now)
-// =============================================================================
-
-#[component]
-fn PlayIcon() -> impl IntoView {
-    view! {
-        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
-            <path d="M4 2l10 6-10 6V2z"/>
-        </svg>
-    }
-}
-
-#[component]
-fn PauseIcon() -> impl IntoView {
-    view! {
-        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
-            <path d="M3 2h4v12H3V2zm6 0h4v12H9V2z"/>
-        </svg>
-    }
-}
-
-#[component]
-fn StepIntoIcon() -> impl IntoView {
-    view! {
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 16 16">
-            <path d="M8 2v8M5 7l3 3 3-3M8 14h0"/>
-            <circle cx="8" cy="14" r="1" fill="currentColor"/>
-        </svg>
-    }
-}
-
-#[component]
-fn StepOverIcon() -> impl IntoView {
-    view! {
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 16 16">
-            <path d="M2 8h8M7 5l3 3-3 3"/>
-            <circle cx="13" cy="8" r="1.5" fill="currentColor"/>
-        </svg>
-    }
-}
-
-#[component]
-fn StepOutIcon() -> impl IntoView {
-    view! {
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 16 16">
-            <path d="M8 14V6M5 9l3-3 3 3M8 2h0"/>
-            <circle cx="8" cy="2" r="1" fill="currentColor"/>
-        </svg>
-    }
-}
-
-#[component]
-fn CloseIcon() -> impl IntoView {
-    view! {
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 16 16">
-            <path d="M4 4l8 8M12 4l-8 8"/>
-        </svg>
     }
 }
 

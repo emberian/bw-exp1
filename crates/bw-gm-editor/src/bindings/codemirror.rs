@@ -46,13 +46,16 @@ impl CodeMirrorHandle {
     /// Destroy this CodeMirror instance and clean up resources.
     pub fn destroy(&self, element: &HtmlElement) {
         js_destroy_codemirror(element);
+        self.cleanup_closure();
+        tracing::debug!("[codemirror] Destroyed instance {}", self.instance_id);
+    }
 
-        // Clean up the stored closure to prevent memory leak
+    /// Clean up only the Rust-side closure (use when DOM element is no longer accessible).
+    /// This prevents memory leaks when the element is removed before cleanup runs.
+    pub fn cleanup_closure(&self) {
         CLOSURES.with(|closures| {
             closures.borrow_mut().remove(&self.instance_id);
         });
-
-        tracing::debug!("[codemirror] Destroyed instance {}", self.instance_id);
     }
 }
 

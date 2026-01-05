@@ -157,8 +157,7 @@ pub fn SectorMap() -> impl IntoView {
 
             // Selected target info (hidden when docked to avoid overlap with station panel)
             <Show when=move || {
-                let is_docked = game_state.ship_status.get().starts_with("Docked");
-                selected_target().is_some() && !is_docked
+                selected_target().is_some() && !game_state.is_docked()
             }>
                 {move || {
                     if let Some(target_id) = selected_target() {

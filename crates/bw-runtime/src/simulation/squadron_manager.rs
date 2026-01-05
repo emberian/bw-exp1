@@ -100,8 +100,8 @@ pub fn create_squadron(
     player.squadron_rank = Some(SquadronRank::Leader);
     drop(player);
 
-    // Build DTO before inserting
-    let dto = build_squadron_dto(&squadron, &leader_name);
+    // Build DTO before inserting (no officers yet on creation)
+    let dto = build_squadron_dto(&squadron, &leader_name, vec![]);
 
     // Store squadron
     state.squadrons.insert(squadron_id, squadron);
@@ -1806,13 +1806,14 @@ pub fn apply_squadron_fame_bonus(state: &GameState, player_id: Uuid, base_fame: 
 
 // === DTO Builder ===
 
-fn build_squadron_dto(squadron: &Squadron, leader_name: &str) -> SquadronDto {
+fn build_squadron_dto(squadron: &Squadron, leader_name: &str, officer_names: Vec<String>) -> SquadronDto {
     SquadronDto {
         id: squadron.id,
         name: squadron.name.clone(),
         tag: squadron.tag.clone(),
         motto: squadron.motto.clone(),
         leader_name: leader_name.to_string(),
+        officer_names,
         member_count: squadron.member_count() as u32,
         reputation_bonus: squadron.reputation_bonus,
         fame_bonus: squadron.fame_bonus,
@@ -1835,7 +1836,14 @@ pub fn get_squadron_info(state: &GameState, player_id: Uuid) -> Option<SquadronD
         .map(|p| p.username.clone())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    Some(build_squadron_dto(&squadron, &leader_name))
+    // Map officer UUIDs to usernames
+    let officer_names: Vec<String> = squadron.officers.iter()
+        .filter_map(|officer_id| {
+            state.player_data.get(officer_id).map(|p| p.username.clone())
+        })
+        .collect();
+
+    Some(build_squadron_dto(&squadron, &leader_name, officer_names))
 }
 
 /// Count the number of ships owned by a squadron in a given sector.

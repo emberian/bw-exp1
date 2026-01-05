@@ -174,7 +174,6 @@ fn WatchList(watches: RwSignal<Vec<WatchDto>>) -> impl IntoView {
 #[component]
 fn WatchCard(watch: WatchDto) -> impl IntoView {
     let watch_id = watch.id;
-    let expanded = RwSignal::new(false);
 
     // Determine value display
     let (value_display, value_class) = if let Some(val) = &watch.last_value {
@@ -211,36 +210,15 @@ fn WatchCard(watch: WatchDto) -> impl IntoView {
                         {value_display}
                     </div>
                 </div>
-                <div class="flex items-center gap-2 ml-4">
-                    <button
-                        class="px-2 py-1 text-xs text-slate-400 hover:text-slate-300"
-                        on:click=move |_| expanded.set(!expanded.get())
-                    >
-                        {move || if expanded.get() { "Hide" } else { "History" }}
-                    </button>
-                    <button
-                        class="px-2 py-1 bg-red-900/50 hover:bg-red-900 text-red-400 text-xs rounded"
-                        on:click=move |_| {
-                            admin_ws::with_admin_ws(|ws| ws.remove_watch(watch_id));
-                        }
-                    >
-                        "Remove"
-                    </button>
-                </div>
+                <button
+                    class="px-2 py-1 bg-red-900/50 hover:bg-red-900 text-red-400 text-xs rounded ml-4"
+                    on:click=move |_| {
+                        admin_ws::with_admin_ws(|ws| ws.remove_watch(watch_id));
+                    }
+                >
+                    "Remove"
+                </button>
             </div>
-
-            // Expanded history view
-            <Show when=move || expanded.get()>
-                <div class="px-3 py-2 border-t border-slate-700 bg-slate-900/50">
-                    <div class="text-xs text-slate-400 mb-2">
-                        "History: "{watch.history_length}" samples"
-                    </div>
-                    // Simple sparkline placeholder - could be enhanced with actual chart
-                    <div class="h-12 bg-slate-800 rounded flex items-center justify-center text-xs text-slate-500">
-                        "Value history visualization (TODO)"
-                    </div>
-                </div>
-            </Show>
         </div>
     }
 }

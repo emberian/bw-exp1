@@ -301,6 +301,7 @@ async fn process_sector_tick_with_metrics(
                     } else {
                         None
                     },
+                    docked_at: None,
                 });
                 // Persistence is automatic via TrackedDashMap dirty tracking
             }

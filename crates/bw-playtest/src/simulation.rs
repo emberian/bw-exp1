@@ -133,6 +133,7 @@ async fn process_playtest_sector_tick(
                     } else {
                         None
                     },
+                    docked_at: None,
                 });
             }
     }
@@ -278,6 +279,7 @@ async fn process_playtest_combats(
                         hull_percent: None,
                         shield_percent: None,
                         status: Some("Idle".to_string()),
+                        docked_at: None,
                     });
                 }
             }
@@ -310,6 +312,7 @@ async fn process_playtest_combats(
             hull_percent: Some(target_hull),
             shield_percent: Some(target_shield),
             status: None,
+            docked_at: None,
         });
 
         events.push(GameEventDto {

@@ -338,33 +338,6 @@ pub struct VarInfo {
     pub null_checked: bool,
 }
 
-/// Result of variable flow analysis.
-#[derive(Debug, Default)]
-pub struct VariableFlowResult {
-    /// Variables used without being defined
-    pub undefined: Vec<(String, Option<Position>)>,
-    /// Variables defined but never used
-    pub unused: Vec<(String, Option<Position>)>,
-    /// Variables that shadow outer scope
-    pub shadows: Vec<(String, Option<Position>)>,
-}
-
-/// Result of null safety analysis.
-#[derive(Debug, Default)]
-pub struct NullSafetyResult {
-    /// Accesses to potentially null values without null check
-    pub unchecked_accesses: Vec<(String, Option<Position>)>,
-}
-
-/// Result of control flow analysis.
-#[derive(Debug, Default)]
-pub struct ControlFlowResult {
-    /// Code after unconditional return
-    pub dead_code: Vec<Option<Position>>,
-    /// Handler functions that may not return a value
-    pub missing_returns: Vec<String>,
-}
-
 // ============================================================================
 // AST Walking Infrastructure
 // ============================================================================
@@ -635,11 +608,24 @@ fn is_nullable_expr(expr: &Expr) -> bool {
 fn is_nullable_fn_name(name: &str) -> bool {
     matches!(
         name,
-        "query_sector" | "get_context_sector" | "get_data" |
-        "get_ship_def" | "get_upgrade_def" | "get_cargo_def" |
+        // Query functions that may return () if not found
+        "query_sector" | "query_location" | "query_combat_engagement" |
+        "query_squadron" | "query_mission" |
+        // Context that may not exist
+        "get_context_sector" |
+        // Data lookups that may return () if not found
+        "get_data" | "get_ship_def" | "get_upgrade_def" | "get_cargo_def" |
         "get_stance_def" | "get_ship" | "get_weapon" | "get_effect" |
-        "get_ability" | "get_faction"
+        "get_ability" | "get_faction" |
+        // Squadron/alliance lookups
+        "get_squadron_invite" | "get_alliance_proposal"
     )
+}
+
+/// Check if a variable name is a builtin or commonly injected.
+fn is_builtin_var(name: &str) -> bool {
+    // Common builtins, context variables, and special patterns
+    matches!(name, "ctx" | "params" | "this" | "true" | "false" | "_")
 }
 
 // ============================================================================
@@ -1635,15 +1621,10 @@ impl<'a> FunctionAnalyzer<'a> {
     }
 
     /// Pop the current scope.
+    /// Note: Unused variable checking is done in analyze() at the end,
+    /// which iterates all scopes comprehensively. Don't duplicate here.
     fn pop_scope(&mut self) {
         if let Some(parent) = self.scopes[self.current_scope].parent {
-            // Check for unused vars before popping
-            let scope = &self.scopes[self.current_scope];
-            for (name, state) in &scope.vars {
-                if !state.used && !name.starts_with('_') {
-                    self.result.unused_vars.push((name.clone(), state.defined_at));
-                }
-            }
             self.current_scope = parent;
         }
     }
@@ -1798,10 +1779,13 @@ impl<'a> FunctionAnalyzer<'a> {
             // If the last statement is an expression (implicit return), treat it as returning
             if is_last && !has_returned
                 && let Stmt::Expr(expr) = stmt {
-                    // Record as implicit return and capture map keys if present
+                    // Record as implicit return and capture map keys/fields if present
                     self.result.returns.push(Some(stmt.position()));
                     if let Some(keys) = self.extract_map_keys(expr.as_ref()) {
                         self.result.return_map_keys.push(keys);
+                    }
+                    if let Some(fields) = self.extract_map_fields(expr.as_ref()) {
+                        self.result.return_map_fields.push(fields);
                     }
                     has_returned = true;
                 }
@@ -1953,14 +1937,9 @@ impl<'a> FunctionAnalyzer<'a> {
 
             Stmt::Expr(expr) => {
                 self.analyze_expr(expr.as_ref());
-                // Check if this is an implicit return (last expression)
-                if let Some(keys) = self.extract_map_keys(expr.as_ref()) {
-                    self.result.return_map_keys.push(keys);
-                }
-                // Extract map fields with types for W302 validation
-                if let Some(fields) = self.extract_map_fields(expr.as_ref()) {
-                    self.result.return_map_fields.push(fields);
-                }
+                // Note: Map key/field extraction for implicit returns is handled in
+                // analyze_statements() which checks if this is actually the last statement.
+                // Don't extract here to avoid duplicates.
                 false
             }
 
@@ -2477,448 +2456,6 @@ pub fn analyze_function(ast: &AST, fn_name: &str) -> FunctionAnalysis {
     FunctionAnalyzer::new(ast, fn_name).analyze()
 }
 
-/// Legacy text-based analysis (kept for fallback/comparison).
-/// This provides basic validation without deep AST inspection.
-#[allow(dead_code)]
-pub fn analyze_text_simple(content: &str) -> AstAnalysis {
-    let mut analysis = AstAnalysis::default();
-
-    // Use regex to find function calls
-    let fn_call_re = regex::Regex::new(r"(\w+)\s*\(").ok();
-    if let Some(re) = fn_call_re {
-        for cap in re.captures_iter(content) {
-            if let Some(name) = cap.get(1) {
-                let name_str = name.as_str().to_string();
-                // Skip keywords and common constructs
-                if !matches!(name_str.as_str(), "fn" | "if" | "while" | "for" | "let") {
-                    // Count args heuristically (just mark as unknown with 0)
-                    analysis.fn_calls.push((name_str, 0, None));
-                }
-            }
-        }
-    }
-
-    // Find index accesses like ctx["key"] or params["key"]
-    let index_re = regex::Regex::new(r#"(\w+)\s*\[\s*"([^"]+)"\s*\]"#).ok();
-    if let Some(re) = index_re {
-        for cap in re.captures_iter(content) {
-            if let (Some(var), Some(key)) = (cap.get(1), cap.get(2)) {
-                analysis.index_accesses.push((
-                    var.as_str().to_string(),
-                    key.as_str().to_string(),
-                    None,
-                ));
-            }
-        }
-    }
-
-    // Find variable definitions: let x = ..., let mut x = ...
-    let let_re = regex::Regex::new(r"let\s+(?:mut\s+)?(\w+)\s*=\s*([^;]+)").ok();
-    if let Some(re) = let_re {
-        for cap in re.captures_iter(content) {
-            if let (Some(name), Some(rhs)) = (cap.get(1), cap.get(2)) {
-                let name_str = name.as_str().to_string();
-                let rhs_str = rhs.as_str();
-                // Check if RHS is a nullable function call
-                let is_nullable = is_nullable_call(rhs_str);
-                analysis.var_defs.push((name_str, None, is_nullable));
-            }
-        }
-    }
-
-    // Find variable uses (identifiers in expressions)
-    // This is a simplified heuristic - looks for bare identifiers not in definitions
-    let ident_re = regex::Regex::new(r"\b([a-z_][a-z0-9_]*)\b").ok();
-    if let Some(re) = ident_re {
-        for cap in re.captures_iter(content) {
-            if let Some(name) = cap.get(1) {
-                let name_str = name.as_str();
-                // Skip keywords and common constructs
-                if !is_keyword(name_str) {
-                    analysis.var_uses.push((name_str.to_string(), None));
-                }
-            }
-        }
-    }
-
-    // Find return statements
-    let return_re = regex::Regex::new(r"return\s+([^;]+)").ok();
-    if let Some(re) = return_re {
-        for cap in re.captures_iter(content) {
-            let has_value = cap.get(1).is_some_and(|m| !m.as_str().trim().is_empty());
-            analysis.returns.push((None, has_value));
-        }
-    }
-
-    // Find implicit returns (last expression in function, starts with #{)
-    let map_return_re = regex::Regex::new(r"#\{\s*(\w+)\s*:").ok();
-    if let Some(re) = map_return_re {
-        for cap in re.captures_iter(content) {
-            if let Some(key) = cap.get(1) {
-                analysis.map_keys.push((vec![key.as_str().to_string()], None));
-            }
-        }
-    }
-
-    analysis
-}
-
-/// Check if an expression is a call to a nullable-returning function.
-fn is_nullable_call(expr: &str) -> bool {
-    // Check for query_* functions that return Nullable
-    let nullable_prefixes = ["query_sector", "get_context_sector", "get_data",
-                            "get_ship_def", "get_upgrade_def", "get_cargo_def",
-                            "get_stance_def", "get_ship", "get_weapon", "get_effect",
-                            "get_ability", "get_faction"];
-    for prefix in nullable_prefixes {
-        if expr.trim_start().starts_with(prefix) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Check if a string is a Rhai keyword or builtin.
-fn is_keyword(s: &str) -> bool {
-    matches!(s,
-        "let" | "const" | "if" | "else" | "while" | "for" | "in" | "loop" |
-        "break" | "continue" | "return" | "throw" | "try" | "catch" |
-        "fn" | "private" | "import" | "export" | "as" | "true" | "false" |
-        "this" | "switch" | "do" | "type_of" | "print" | "debug"
-    )
-}
-
-/// Strip string literals and comments from code.
-/// Preserves structure (newlines, whitespace) so positions remain valid.
-fn strip_strings_and_comments(content: &str) -> String {
-    let mut result = String::new();
-    let mut chars = content.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        match c {
-            // Line comment
-            '/' if chars.peek() == Some(&'/') => {
-                chars.next(); // consume second /
-                // Skip until end of line
-                for c in chars.by_ref() {
-                    if c == '\n' {
-                        result.push('\n');
-                        break;
-                    }
-                }
-            }
-            // Block comment
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next(); // consume *
-                while let Some(c) = chars.next() {
-                    if c == '*' && chars.peek() == Some(&'/') {
-                        chars.next();
-                        break;
-                    }
-                    if c == '\n' {
-                        result.push('\n');
-                    } else {
-                        result.push(' '); // preserve spacing
-                    }
-                }
-            }
-            // Double-quoted string
-            '"' => {
-                result.push(' '); // placeholder
-                while let Some(c) = chars.next() {
-                    if c == '\\' {
-                        chars.next(); // skip escaped char
-                    } else if c == '"' {
-                        break;
-                    } else if c == '\n' {
-                        result.push('\n');
-                    }
-                }
-            }
-            // Backtick string (Rhai template strings)
-            '`' => {
-                result.push(' ');
-                while let Some(c) = chars.next() {
-                    if c == '\\' {
-                        chars.next();
-                    } else if c == '`' {
-                        break;
-                    } else if c == '\n' {
-                        result.push('\n');
-                    }
-                }
-            }
-            _ => result.push(c),
-        }
-    }
-
-    result
-}
-
-/// Analyze variable flow within a function body.
-///
-/// Detects:
-/// - Undefined variables (E600)
-/// - Unused variables (W401)
-/// - Shadowed variables (W402)
-pub fn analyze_variable_flow(content: &str, fn_name: &str) -> VariableFlowResult {
-    let mut result = VariableFlowResult::default();
-
-    // Strip strings and comments first
-    let cleaned = strip_strings_and_comments(content);
-
-    // Extract function body
-    let fn_pattern = format!("fn {}(", fn_name);
-    let Some(fn_start) = cleaned.find(&fn_pattern) else {
-        return result;
-    };
-
-    // Find parameters
-    let params_start = fn_start + fn_pattern.len();
-    let Some(params_end) = cleaned[params_start..].find(')') else {
-        return result;
-    };
-    let params_str = &cleaned[params_start..params_start + params_end];
-
-    // Parse parameters as defined variables
-    let mut defined: HashSet<String> = params_str
-        .split(',')
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect();
-
-    // Track all local definitions (not params) for unused check
-    let mut local_defs: Vec<String> = Vec::new();
-
-    // Find end of function (heuristic: next fn or end of file)
-    let body_start = params_start + params_end + 1;
-    let body_end = cleaned[body_start..].find("\nfn ").unwrap_or(cleaned.len() - body_start);
-    let func_body = &cleaned[body_start..body_start + body_end];
-
-    // Find let statements in function body
-    let let_re = regex::Regex::new(r"let\s+(?:mut\s+)?(\w+)\s*=").unwrap();
-    for cap in let_re.captures_iter(func_body) {
-        if let Some(name) = cap.get(1) {
-            let var_name = name.as_str().to_string();
-
-            // Check for shadowing
-            if defined.contains(&var_name) {
-                result.shadows.push((var_name.clone(), None));
-            }
-
-            defined.insert(var_name.clone());
-            local_defs.push(var_name);
-        }
-    }
-
-    // Find for loop variables
-    let for_re = regex::Regex::new(r"for\s+(\w+)\s+in\b").unwrap();
-    for cap in for_re.captures_iter(func_body) {
-        if let Some(name) = cap.get(1) {
-            let var_name = name.as_str().to_string();
-            if defined.contains(&var_name) {
-                result.shadows.push((var_name.clone(), None));
-            }
-            defined.insert(var_name.clone());
-            local_defs.push(var_name);
-        }
-    }
-
-    // Find variable uses - identifiers that are NOT:
-    // - Keywords
-    // - Function calls (followed by `(`)
-    // - Map keys (followed by `:`)
-    // - API functions
-    // - Part of let/for definitions
-    let mut used: HashSet<String> = HashSet::new();
-
-    // First, remove let/for definitions from the body so we don't count them as uses
-    let body_without_defs = {
-        let mut s = func_body.to_string();
-        // Remove "let varname =" and "let mut varname =" patterns
-        let let_def_re = regex::Regex::new(r"let\s+(?:mut\s+)?(\w+)\s*=").unwrap();
-        s = let_def_re.replace_all(&s, "let __def__ =").to_string();
-        // Remove "for varname in" patterns
-        let for_def_re = regex::Regex::new(r"for\s+(\w+)\s+in\b").unwrap();
-        s = for_def_re.replace_all(&s, "for __def__ in").to_string();
-        s
-    };
-
-    // Regex that captures identifier and what follows
-    let ident_re = regex::Regex::new(r"\b([a-z_][a-z0-9_]*)\b\s*([:\(]?)").unwrap();
-    for cap in ident_re.captures_iter(&body_without_defs) {
-        let name = cap.get(1).unwrap().as_str();
-        let suffix = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-
-        // Skip if followed by : (map key) or ( (function call)
-        if suffix == ":" || suffix == "(" {
-            continue;
-        }
-
-        // Skip keywords and builtins
-        if is_keyword(name) || is_builtin_var(name) {
-            continue;
-        }
-
-        // Skip API function names
-        if get_api_function(name).is_some() {
-            continue;
-        }
-
-        // Skip our placeholder
-        if name == "__def__" {
-            continue;
-        }
-
-        // This is a variable use
-        used.insert(name.to_string());
-
-        // Check if undefined
-        if !defined.contains(name) {
-            result.undefined.push((name.to_string(), None));
-        }
-    }
-
-    // Check for unused LOCAL variables (not params - those may be intentionally unused)
-    for var in &local_defs {
-        if !used.contains(var) && !var.starts_with('_') {
-            result.unused.push((var.clone(), None));
-        }
-    }
-
-    // Deduplicate undefined (may have multiple uses of same undefined var)
-    let mut seen = HashSet::new();
-    result.undefined.retain(|(name, _)| seen.insert(name.clone()));
-
-    result
-}
-
-/// Check if a variable name is a builtin or commonly injected.
-fn is_builtin_var(name: &str) -> bool {
-    // Common builtins, context variables, and special patterns
-    matches!(name, "ctx" | "params" | "this" | "true" | "false" | "_")
-}
-
-/// Analyze control flow within a function body.
-///
-/// Detects:
-/// - Dead code after unconditional return (W200)
-/// - Handler functions that may not return a value (missing_returns)
-pub fn analyze_control_flow(content: &str, fn_name: &str) -> ControlFlowResult {
-    let mut result = ControlFlowResult::default();
-
-    // Strip strings and comments first
-    let cleaned = strip_strings_and_comments(content);
-
-    // Extract function body
-    let fn_pattern = format!("fn {}(", fn_name);
-    let Some(fn_start) = cleaned.find(&fn_pattern) else {
-        return result;
-    };
-
-    let params_start = fn_start + fn_pattern.len();
-    let Some(params_end) = cleaned[params_start..].find(')') else {
-        return result;
-    };
-
-    let body_start = params_start + params_end + 1;
-    let body_end = cleaned[body_start..].find("\nfn ").unwrap_or(cleaned.len() - body_start);
-    let func_body = &cleaned[body_start..body_start + body_end];
-
-    // Find dead code: Look for `return ...;` followed by non-whitespace code that's not `}`
-    // This is a heuristic - we look for return followed by statements not in nested blocks
-    let return_re = regex::Regex::new(r"return\s+[^;]+;\s*\n\s*([a-z])").unwrap();
-    for cap in return_re.captures_iter(func_body) {
-        // Check if the next char starts a statement (not just closing brace)
-        if let Some(next_char) = cap.get(1) {
-            let ch = next_char.as_str();
-            if ch != "}" && ch != "/" {  // Not closing brace or comment
-                result.dead_code.push(None);
-            }
-        }
-    }
-
-    result
-}
-
-/// Analyze null safety within a function body.
-///
-/// Detects when variables assigned from nullable functions (query_sector, get_*, etc.)
-/// are accessed without being checked for null first.
-///
-/// Returns W100 warnings for unchecked nullable accesses.
-pub fn analyze_null_safety(content: &str, fn_name: &str) -> NullSafetyResult {
-    let mut result = NullSafetyResult::default();
-
-    // Strip strings and comments first
-    let cleaned = strip_strings_and_comments(content);
-
-    // Extract function body
-    let fn_pattern = format!("fn {}(", fn_name);
-    let Some(fn_start) = cleaned.find(&fn_pattern) else {
-        return result;
-    };
-
-    let params_start = fn_start + fn_pattern.len();
-    let Some(params_end) = cleaned[params_start..].find(')') else {
-        return result;
-    };
-
-    let body_start = params_start + params_end + 1;
-    let body_end = cleaned[body_start..].find("\nfn ").unwrap_or(cleaned.len() - body_start);
-    let func_body = &cleaned[body_start..body_start + body_end];
-
-    // Track which variables are nullable (assigned from nullable functions)
-    let mut nullable_vars: HashSet<String> = HashSet::new();
-
-    // Find nullable assignments: let x = query_sector(...) or let x = get_ship(...)
-    let nullable_assign_re = regex::Regex::new(
-        r"let\s+(?:mut\s+)?(\w+)\s*=\s*(query_sector|get_context_sector|get_data|get_ship_def|get_upgrade_def|get_cargo_def|get_stance_def|get_ship|get_weapon|get_effect|get_ability|get_faction)\s*\("
-    ).unwrap();
-
-    for cap in nullable_assign_re.captures_iter(func_body) {
-        if let Some(var_name) = cap.get(1) {
-            nullable_vars.insert(var_name.as_str().to_string());
-        }
-    }
-
-    if nullable_vars.is_empty() {
-        return result; // No nullable variables, nothing to check
-    }
-
-    // Track which nullable variables have been null-checked
-    // Patterns: `if varname == ()`, `if varname != ()`, `varname == ()`, `varname != ()`
-    let mut null_checked: HashSet<String> = HashSet::new();
-
-    for var in &nullable_vars {
-        // Check if there's a null check pattern for this variable
-        let check_pattern = format!(r"\b{}\s*[!=]=\s*\(\)", regex::escape(var));
-        if regex::Regex::new(&check_pattern).ok()
-            .is_some_and(|re| re.is_match(func_body))
-        {
-            null_checked.insert(var.clone());
-        }
-    }
-
-    // Find accesses to nullable variables that haven't been null-checked
-    // Access patterns: var["key"], var.method(), var.property
-    for var in &nullable_vars {
-        if null_checked.contains(var) {
-            continue; // This variable has been null-checked somewhere
-        }
-
-        // Check if variable is accessed (indexed or method called)
-        let access_pattern = format!(r"\b{}\s*[\[\.]", regex::escape(var));
-        if regex::Regex::new(&access_pattern).ok()
-            .is_some_and(|re| re.is_match(func_body))
-        {
-            result.unchecked_accesses.push((var.clone(), None));
-        }
-    }
-
-    result
-}
-
 // ============================================================================
 // Action Script Validator
 // ============================================================================
@@ -3252,25 +2789,21 @@ impl ActionScriptValidator {
             }
 
             // === Advanced Analysis ===
-            // Use text-based analysis (simpler but works without internals feature)
-            let analysis = analyze_text_simple(&content);
+            // Use AST-based analysis for accurate validation
+            let ast_analysis = analyze_ast(&ast, &content);
 
             // Check API function argument counts
-            self.check_api_calls(&analysis, &mut errors, &mut warnings);
+            self.check_api_calls(&ast_analysis, &mut errors, &mut warnings);
 
             // Check context key accesses
-            self.check_ctx_keys(&analysis, &mut warnings);
+            self.check_ctx_keys(&ast_analysis, &mut warnings);
 
             // Check variable flow and param access in each handler
             for action in &registered_actions {
                 if functions.contains(&action.handler) {
-                    // AST-based comprehensive analysis (E301, E600, W100, W200, W401, W402)
+                    // AST-based comprehensive analysis (E301, E600, W100, W200, W401, W402, W700, E700, etc.)
                     self.check_handler_with_ast(&ast, &action.handler, &mut errors, &mut warnings);
-
-                    // Legacy text-based checks (kept for additional coverage)
-                    self.check_variable_flow(&content, &action.handler, &mut errors, &mut warnings);
-                    self.check_null_safety(&content, &action.handler, &mut warnings);
-                    self.check_control_flow(&content, &action.handler, &mut warnings);
+                    // Schema-based param validation
                     self.check_param_keys(&content, &action.name, &action.handler, &mut warnings);
                 }
             }
@@ -3278,11 +2811,9 @@ impl ActionScriptValidator {
             // Also check init() for variable issues
             if functions.contains(&"init".to_string()) {
                 self.check_handler_with_ast(&ast, "init", &mut errors, &mut warnings);
-                self.check_variable_flow(&content, "init", &mut errors, &mut warnings);
             }
 
             // === Event Subscription Validation ===
-            let ast_analysis = analyze_ast(&ast, &content);
             self.check_event_subscriptions(&ast_analysis, &functions, &mut errors, &mut warnings);
 
             // === Dynamic Key Warnings ===
@@ -3683,97 +3214,6 @@ impl ActionScriptValidator {
                 message: format!(
                     "In '{}()': {}",
                     handler_name, msg
-                ),
-                line: pos.and_then(|p| p.line()),
-            });
-        }
-    }
-
-    /// Check variable flow within a function.
-    fn check_variable_flow(
-        &self,
-        content: &str,
-        fn_name: &str,
-        errors: &mut Vec<ActionValidationError>,
-        warnings: &mut Vec<ActionValidationWarning>,
-    ) {
-        let flow_result = analyze_variable_flow(content, fn_name);
-
-        // Report undefined variables as errors
-        for (var_name, pos) in flow_result.undefined {
-            errors.push(ActionValidationError {
-                code: "E600",
-                message: format!(
-                    "In '{}()': Use of undefined variable '{}'",
-                    fn_name, var_name
-                ),
-                line: pos.and_then(|p| p.line()),
-            });
-        }
-
-        // Report unused variables as warnings
-        for (var_name, pos) in flow_result.unused {
-            warnings.push(ActionValidationWarning {
-                code: "W401",
-                message: format!(
-                    "In '{}()': Variable '{}' is defined but never used",
-                    fn_name, var_name
-                ),
-                line: pos.and_then(|p| p.line()),
-            });
-        }
-
-        // Report shadowed variables as warnings
-        for (var_name, pos) in flow_result.shadows {
-            warnings.push(ActionValidationWarning {
-                code: "W402",
-                message: format!(
-                    "In '{}()': Variable '{}' shadows a previous definition",
-                    fn_name, var_name
-                ),
-                line: pos.and_then(|p| p.line()),
-            });
-        }
-    }
-
-    /// Check null safety within a function.
-    fn check_null_safety(
-        &self,
-        content: &str,
-        fn_name: &str,
-        warnings: &mut Vec<ActionValidationWarning>,
-    ) {
-        let null_result = analyze_null_safety(content, fn_name);
-
-        // Report unchecked nullable accesses as warnings
-        for (var_name, pos) in null_result.unchecked_accesses {
-            warnings.push(ActionValidationWarning {
-                code: "W100",
-                message: format!(
-                    "In '{}()': Variable '{}' may be null (from query/get function) but is accessed without null check",
-                    fn_name, var_name
-                ),
-                line: pos.and_then(|p| p.line()),
-            });
-        }
-    }
-
-    /// Check control flow within a function.
-    fn check_control_flow(
-        &self,
-        content: &str,
-        fn_name: &str,
-        warnings: &mut Vec<ActionValidationWarning>,
-    ) {
-        let flow_result = analyze_control_flow(content, fn_name);
-
-        // Report dead code warnings
-        for pos in flow_result.dead_code {
-            warnings.push(ActionValidationWarning {
-                code: "W200",
-                message: format!(
-                    "In '{}()': Dead code detected after return statement",
-                    fn_name
                 ),
                 line: pos.and_then(|p| p.line()),
             });
@@ -4781,57 +4221,6 @@ fn handle_test(ctx, params) {
     // ========================================================================
     // Text Analysis Tests
     // ========================================================================
-
-    #[test]
-    fn test_text_analysis_fn_calls() {
-        let content = r#"
-fn init() {
-    register_action("test", "handler");
-}
-
-fn handler(ctx, params) {
-    let ship = query_ship(ctx["ship_id"]);
-    send_notification(ctx["player_id"], "Hello");
-    #{ success: true }
-}
-"#;
-        let analysis = analyze_text_simple(content);
-
-        // Check function calls were found
-        let fn_names: Vec<&str> = analysis.fn_calls.iter()
-            .map(|(name, _, _)| name.as_str())
-            .collect();
-        assert!(fn_names.contains(&"register_action"));
-        assert!(fn_names.contains(&"query_ship"));
-        assert!(fn_names.contains(&"send_notification"));
-    }
-
-    #[test]
-    fn test_text_analysis_index_accesses() {
-        let content = r#"
-fn handler(ctx, params) {
-    let player_id = ctx["player_id"];
-    let ship_id = ctx["ship_id"];
-    let amount = params["amount"];
-    #{ success: true }
-}
-"#;
-        let analysis = analyze_text_simple(content);
-
-        // Check index accesses were found
-        let ctx_keys: Vec<&str> = analysis.index_accesses.iter()
-            .filter(|(var, _, _)| var == "ctx")
-            .map(|(_, key, _)| key.as_str())
-            .collect();
-        assert!(ctx_keys.contains(&"player_id"));
-        assert!(ctx_keys.contains(&"ship_id"));
-
-        let params_keys: Vec<&str> = analysis.index_accesses.iter()
-            .filter(|(var, _, _)| var == "params")
-            .map(|(_, key, _)| key.as_str())
-            .collect();
-        assert!(params_keys.contains(&"amount"));
-    }
 
     #[test]
     fn test_ctx_key_validation_warning() {

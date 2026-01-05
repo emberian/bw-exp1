@@ -508,19 +508,12 @@ impl GameState {
         self.ship_shields.set(ship.shields);
         self.ship_status.set(ship.status.clone());
 
-        // Update docked state based on ship status
-        if ship.status.starts_with("Docked") {
-            // Find the station we're docked at by finding the nearest station to ship position
-            let ship_pos = (ship.position.x, ship.position.y);
-            if let Some(station) = locs.iter()
-                .filter(|l| l.location_type.eq_ignore_ascii_case("station"))
-                .min_by(|a, b| {
-                    let dist_a = (a.x - ship_pos.0).powi(2) + (a.y - ship_pos.1).powi(2);
-                    let dist_b = (b.x - ship_pos.0).powi(2) + (b.y - ship_pos.1).powi(2);
-                    dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-                })
-            {
-                self.docked_station_id.set(Some(station.id));
+        // Update docked state using explicit docked_at field from server
+        if let Some(station_id) = ship.docked_at {
+            // Server tells us exactly which station we're docked at
+            self.docked_station_id.set(Some(station_id));
+            // Look up station details by ID
+            if let Some(station) = locs.iter().find(|l| l.id == station_id) {
                 self.docked_station_name.set(station.name.clone());
                 self.docked_station_services.set(station.services.clone());
             }
@@ -576,34 +569,80 @@ impl GameState {
 
         // Get our ship ID once outside the loop
         let our_ship_id = self.ship_id.get_untracked();
+        let locations = self.locations.get_untracked();
 
-        // Update existing ships
-        self.ships.update(|ships| {
-            for update in ship_updates {
-                // Check if it's our ship
-                if Some(update.id) == our_ship_id {
-                    if let Some(pos) = &update.position {
-                        self.position_x.set(pos.x);
-                        self.position_y.set(pos.y);
-                    }
-                    if let Some(hull) = update.hull_percent {
-                        self.ship_hull.set(hull);
-                    }
-                    if let Some(shields) = update.shield_percent {
-                        self.ship_shields.set(shields);
-                    }
-                    if let Some(status) = update.status.clone() {
-                        // Clear docked state if no longer docked
-                        if !status.starts_with("Docked") {
-                            self.docked_station_id.set(None);
-                            self.docked_station_name.set(String::new());
-                            self.docked_station_services.set(vec![]);
-                        }
-                        self.ship_status.set(status);
+        // Collect our ship's updates first (avoid nested signal updates)
+        let mut our_position: Option<(f64, f64)> = None;
+        let mut our_hull: Option<f32> = None;
+        let mut our_shields: Option<f32> = None;
+        let mut our_status: Option<String> = None;
+        let mut our_docked_at: Option<Option<Uuid>> = None;
+
+        for update in &ship_updates {
+            if Some(update.id) == our_ship_id {
+                if let Some(pos) = &update.position {
+                    our_position = Some((pos.x, pos.y));
+                }
+                if let Some(hull) = update.hull_percent {
+                    our_hull = Some(hull);
+                }
+                if let Some(shields) = update.shield_percent {
+                    our_shields = Some(shields);
+                }
+                if let Some(status) = &update.status {
+                    our_status = Some(status.clone());
+                }
+                if let Some(docked) = &update.docked_at {
+                    our_docked_at = Some(*docked);
+                }
+            }
+        }
+
+        // Apply our ship updates outside of the ships.update() closure
+        if let Some((x, y)) = our_position {
+            self.position_x.set(x);
+            self.position_y.set(y);
+        }
+        if let Some(hull) = our_hull {
+            self.ship_hull.set(hull);
+        }
+        if let Some(shields) = our_shields {
+            self.ship_shields.set(shields);
+        }
+        if let Some(status) = our_status {
+            self.ship_status.set(status);
+        }
+        // Handle docking state changes
+        if let Some(docked) = our_docked_at {
+            match docked {
+                Some(station_id) => {
+                    self.docked_station_id.set(Some(station_id));
+                    // Look up station details by ID
+                    if let Some(station) = locations.iter().find(|l| l.id == station_id) {
+                        self.docked_station_name.set(station.name.clone());
+                        self.docked_station_services.set(station.services.clone());
                     }
                 }
+                None => {
+                    // Explicit undock
+                    self.docked_station_id.set(None);
+                    self.docked_station_name.set(String::new());
+                    self.docked_station_services.set(vec![]);
+                }
+            }
+        }
 
-                // Update in ships list
+        // Clear selected target if it was despawned
+        if let Some(target_id) = self.selected_target.get_untracked()
+            && ship_despawns.contains(&target_id)
+        {
+            self.selected_target.set(None);
+        }
+
+        // Update ships list
+        self.ships.update(|ships| {
+            // Update existing ships
+            for update in ship_updates {
                 if let Some(ship) = ships.iter_mut().find(|s| s.id == update.id) {
                     if let Some(pos) = update.position {
                         ship.x = pos.x;
@@ -620,13 +659,6 @@ impl GameState {
 
             // Remove despawned ships
             ships.retain(|s| !ship_despawns.contains(&s.id));
-
-            // Clear selected target if it was despawned
-            if let Some(target_id) = self.selected_target.get_untracked()
-                && ship_despawns.contains(&target_id)
-            {
-                self.selected_target.set(None);
-            }
 
             // Add spawned ships
             for spawn in ship_spawns {
@@ -781,12 +813,23 @@ impl GameState {
             message: e.message,
         }).collect();
 
-        // Append new events to existing list
+        // Append new events to existing list (max 50 events)
         self.combat_events.update(|existing| {
-            existing.extend(event_infos);
-            // Keep last 50 events
-            if existing.len() > 50 {
-                existing.drain(0..existing.len() - 50);
+            const MAX_EVENTS: usize = 50;
+            let new_count = event_infos.len();
+
+            // Make room for new events if needed (trim from front)
+            if existing.len() + new_count > MAX_EVENTS {
+                let to_remove = (existing.len() + new_count).saturating_sub(MAX_EVENTS);
+                existing.drain(0..to_remove.min(existing.len()));
+            }
+
+            // Add new events (if more than MAX_EVENTS, only keep last MAX_EVENTS)
+            if new_count > MAX_EVENTS {
+                existing.clear();
+                existing.extend(event_infos.into_iter().skip(new_count - MAX_EVENTS));
+            } else {
+                existing.extend(event_infos);
             }
         });
 
@@ -812,6 +855,12 @@ impl GameState {
     /// Check if in active combat.
     pub fn in_combat(&self) -> bool {
         self.combat_engagement_id.get().is_some() && !self.combat_resolved.get()
+    }
+
+    /// Check if the player is docked at a station.
+    /// Uses the explicit docked_station_id rather than string matching.
+    pub fn is_docked(&self) -> bool {
+        self.docked_station_id.get().is_some()
     }
 
     /// Add a chat message.

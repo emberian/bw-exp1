@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use crate::api::{init_admin_ws, shutdown_admin_ws};
+use crate::api::{init_admin_ws, init_state_refs, shutdown_admin_ws};
 use crate::components::{
     ConfigEditor, DebugPanel, EntityBrowser, ExportPanel, SchemaBrowser,
     ScriptEditor, StagedPreview, StateInspector, Tab, TabBar,
@@ -29,6 +29,18 @@ pub fn GMEditorApp(
 
     // Initialize WebSocket client (thread_local storage)
     init_admin_ws(&ws_url, &auth_token);
+
+    // Initialize state refs for WebSocket message handlers
+    // (handlers run outside Leptos reactive context and need direct access to state)
+    init_state_refs(
+        gm_state,
+        staged,
+        debug_state,
+        schema_state,
+        validation_state,
+        inspector_state,
+        export_state,
+    );
 
     // Cleanup on unmount
     on_cleanup(|| {

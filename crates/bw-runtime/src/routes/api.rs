@@ -284,12 +284,20 @@ async fn get_squadron(
         .map(|p| p.username.clone())
         .unwrap_or_else(|| "Unknown".to_string());
 
+    // Map officer UUIDs to usernames
+    let officer_names: Vec<String> = squadron.officers.iter()
+        .filter_map(|officer_id| {
+            state.player_data.get(officer_id).map(|p| p.username.clone())
+        })
+        .collect();
+
     let dto = SquadronDto {
         id: squadron.id,
         name: squadron.name.clone(),
         tag: squadron.tag.clone(),
         motto: squadron.motto.clone(),
         leader_name,
+        officer_names,
         member_count: squadron.member_count() as u32,
         reputation_bonus: squadron.reputation_bonus,
         fame_bonus: squadron.fame_bonus,

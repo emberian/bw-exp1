@@ -12,7 +12,7 @@ pub fn StationPanel() -> impl IntoView {
     let game_state = expect_context::<GameState>();
     let ws = expect_context::<WsService>();
 
-    let is_docked = move || game_state.ship_status.get().starts_with("Docked");
+    let is_docked = move || game_state.is_docked();
     let station_name = move || game_state.docked_station_name.get();
     let services = move || game_state.docked_station_services.get();
 

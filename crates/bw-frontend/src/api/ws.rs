@@ -9,12 +9,28 @@ use std::rc::Rc;
 use leptos::prelude::*;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::closure::Closure;
 use web_sys::{MessageEvent, WebSocket};
 
 use bw_shared::messages::*;
 use bw_shared::{ChatChannel, deserialize_message, serialize_message};
 
 use crate::state::{GameState, SquadronInfo, SquadronInviteInfo, AllianceProposalInfo};
+
+/// Container for WebSocket closures to prevent memory leaks.
+/// When this is dropped, the closures are properly freed.
+struct WsClosures {
+    _onopen: Closure<dyn FnMut(web_sys::Event)>,
+    _onmessage: Closure<dyn FnMut(MessageEvent)>,
+    _onclose: Closure<dyn FnMut(web_sys::CloseEvent)>,
+    _onerror: Closure<dyn FnMut(web_sys::ErrorEvent)>,
+}
+
+/// Shared state for WebSocket connection, properly managing closure lifetimes.
+struct WsConnection {
+    ws: WebSocket,
+    _closures: WsClosures,
+}
 
 /// WebSocket connection state
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -32,9 +48,12 @@ const BASE_RECONNECT_DELAY_MS: u32 = 1000;
 /// Maximum delay between reconnect attempts.
 const MAX_RECONNECT_DELAY_MS: u32 = 30000;
 
+/// Shared WebSocket connection state (stored in Rc<RefCell> for closure access).
+type SharedConnection = Rc<RefCell<Option<WsConnection>>>;
+
 /// WebSocket service for game communication.
 /// Uses signals for thread-safe state management.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct WsService {
     pub state: RwSignal<ConnectionState>,
     /// Queue of outgoing messages (supports multiple rapid sends)
@@ -49,6 +68,8 @@ pub struct WsService {
     effects_initialized: RwSignal<bool>,
     /// Generation counter to prevent stale reconnection timeouts from firing
     reconnect_generation: RwSignal<u32>,
+    /// Active WebSocket connection (closures are dropped when connection is replaced)
+    connection: SharedConnection,
 }
 
 impl Default for WsService {
@@ -67,6 +88,7 @@ impl WsService {
             auto_reconnect: RwSignal::new(true),
             effects_initialized: RwSignal::new(false),
             reconnect_generation: RwSignal::new(0),
+            connection: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -316,9 +338,14 @@ impl WsService {
         }
 
         // Determine WebSocket URL based on current location
-        let location = web_sys::window()
-            .expect("no window")
-            .location();
+        let location = match web_sys::window() {
+            Some(w) => w.location(),
+            None => {
+                game_state.set_error("No window available".to_string());
+                self.state.set(ConnectionState::Disconnected);
+                return;
+            }
+        };
         let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
         let host = location.host().unwrap_or_else(|_| "localhost:3000".to_string());
         let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
@@ -431,12 +458,12 @@ impl WsService {
                     }
                 }) as Box<dyn FnOnce()>);
 
-                let _ = web_sys::window()
-                    .expect("no window")
-                    .set_timeout_with_callback_and_timeout_and_arguments_0(
+                if let Some(window) = web_sys::window() {
+                    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
                         reconnect_closure.as_ref().unchecked_ref(),
                         delay as i32,
                     );
+                }
                 reconnect_closure.forget();
 
                 // Notify user
@@ -615,11 +642,10 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
 
         ServerMessage::SquadronUpdate { squadron, message } => {
             if let Some(sq) = squadron {
-                // Determine if current player is leader by comparing usernames
+                // Determine if current player is leader or officer by comparing usernames
                 let current_username = game_state.username.get_untracked();
                 let is_leader = sq.leader_name == current_username;
-                // TODO: is_officer needs server-side support to properly determine
-                let is_officer = false;
+                let is_officer = sq.officer_names.contains(&current_username);
 
                 game_state.update_squadron(Some(SquadronInfo {
                     id: sq.id,
