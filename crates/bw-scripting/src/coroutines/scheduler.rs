@@ -362,10 +362,11 @@ impl CoroutineScheduler {
             scope.push_dynamic("__resume_value", resume_val);
         }
 
-        // Execute the function
-        let result = self.engine.call_function_dynamic(
+        // Execute the function with the scope containing local vars and resume value
+        let result = self.engine.call_function_with_scope(
             &script_path,
             &function_name,
+            &mut scope,
             (), // No additional args for coroutine resume
         );
 
@@ -400,8 +401,8 @@ impl CoroutineScheduler {
                     .push(id);
             }
             YieldType::Seconds(secs) => {
-                // Convert seconds to ticks (10 TPS)
-                let ticks = (secs * 10.0).ceil() as u64;
+                // Convert seconds to ticks
+                let ticks = (secs * bw_shared::constants::TICK_RATE as f64).ceil() as u64;
                 let resume_tick = current_tick + ticks;
                 coroutine.state = CoroutineState::WaitingForTicks;
                 coroutine.resume_at = Some(resume_tick);

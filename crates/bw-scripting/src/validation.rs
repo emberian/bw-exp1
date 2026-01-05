@@ -627,6 +627,143 @@ pub enum InferredType {
     Dynamic,
 }
 
+// ============================================================================
+// Binary Operation Type Rules
+// ============================================================================
+
+/// A binary operation type rule: (operator, left_type, right_type, result_type)
+#[derive(Debug, Clone)]
+pub struct BinaryOpRule {
+    pub op: &'static str,
+    pub left: InferredType,
+    pub right: InferredType,
+    pub result: InferredType,
+}
+
+impl BinaryOpRule {
+    const fn new(op: &'static str, left: InferredType, right: InferredType, result: InferredType) -> Self {
+        Self { op, left, right, result }
+    }
+}
+
+/// Type rules for binary operations.
+/// Rules are matched in order - first match wins.
+pub static BINARY_OP_RULES: &[BinaryOpRule] = &[
+    // Numeric operations
+    BinaryOpRule::new("+", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("+", InferredType::Float, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("+", InferredType::Int, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("+", InferredType::Float, InferredType::Int, InferredType::Float),
+    BinaryOpRule::new("+", InferredType::String, InferredType::String, InferredType::String),
+
+    BinaryOpRule::new("-", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("-", InferredType::Float, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("-", InferredType::Int, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("-", InferredType::Float, InferredType::Int, InferredType::Float),
+
+    BinaryOpRule::new("*", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("*", InferredType::Float, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("*", InferredType::Int, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("*", InferredType::Float, InferredType::Int, InferredType::Float),
+
+    BinaryOpRule::new("/", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("/", InferredType::Float, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("/", InferredType::Int, InferredType::Float, InferredType::Float),
+    BinaryOpRule::new("/", InferredType::Float, InferredType::Int, InferredType::Float),
+
+    BinaryOpRule::new("%", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("%", InferredType::Float, InferredType::Float, InferredType::Float),
+
+    // Comparison operations - always return Bool
+    BinaryOpRule::new("==", InferredType::Dynamic, InferredType::Dynamic, InferredType::Bool),
+    BinaryOpRule::new("!=", InferredType::Dynamic, InferredType::Dynamic, InferredType::Bool),
+    BinaryOpRule::new("<", InferredType::Int, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new("<", InferredType::Float, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new("<", InferredType::Int, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new("<", InferredType::Float, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new("<", InferredType::String, InferredType::String, InferredType::Bool),
+    BinaryOpRule::new("<=", InferredType::Int, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new("<=", InferredType::Float, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new("<=", InferredType::Int, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new("<=", InferredType::Float, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new("<=", InferredType::String, InferredType::String, InferredType::Bool),
+    BinaryOpRule::new(">", InferredType::Int, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new(">", InferredType::Float, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new(">", InferredType::Int, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new(">", InferredType::Float, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new(">", InferredType::String, InferredType::String, InferredType::Bool),
+    BinaryOpRule::new(">=", InferredType::Int, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new(">=", InferredType::Float, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new(">=", InferredType::Int, InferredType::Float, InferredType::Bool),
+    BinaryOpRule::new(">=", InferredType::Float, InferredType::Int, InferredType::Bool),
+    BinaryOpRule::new(">=", InferredType::String, InferredType::String, InferredType::Bool),
+
+    // Logical operations
+    BinaryOpRule::new("&&", InferredType::Bool, InferredType::Bool, InferredType::Bool),
+    BinaryOpRule::new("||", InferredType::Bool, InferredType::Bool, InferredType::Bool),
+
+    // Bitwise operations
+    BinaryOpRule::new("&", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("|", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("^", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new("<<", InferredType::Int, InferredType::Int, InferredType::Int),
+    BinaryOpRule::new(">>", InferredType::Int, InferredType::Int, InferredType::Int),
+];
+
+/// List of binary operators we can check.
+pub static BINARY_OPERATORS: &[&str] = &[
+    "+", "-", "*", "/", "%",
+    "==", "!=", "<", "<=", ">", ">=",
+    "&&", "||",
+    "&", "|", "^", "<<", ">>",
+];
+
+/// Check if a function name is a binary operator.
+pub fn is_binary_operator(name: &str) -> bool {
+    BINARY_OPERATORS.contains(&name)
+}
+
+/// Find matching binary operation rule.
+/// Returns Ok(result_type) if valid, Err(error_message) if type mismatch.
+pub fn check_binary_op(op: &str, left: &InferredType, right: &InferredType) -> Result<InferredType, String> {
+    // Dynamic types can combine with anything
+    if *left == InferredType::Dynamic || *right == InferredType::Dynamic {
+        return Ok(InferredType::Dynamic);
+    }
+
+    // Find matching rule
+    for rule in BINARY_OP_RULES {
+        if rule.op != op {
+            continue;
+        }
+
+        // Check exact match
+        if rule.left == *left && rule.right == *right {
+            return Ok(rule.result.clone());
+        }
+
+        // Check if rule uses Dynamic (accepts any)
+        if rule.left == InferredType::Dynamic && rule.right == InferredType::Dynamic {
+            return Ok(rule.result.clone());
+        }
+    }
+
+    // No matching rule - this is a type error
+    Err(format!(
+        "cannot apply operator '{}' to {:?} and {:?}",
+        op, left, right
+    ))
+}
+
+/// Check if mixing Int and Float (implicit coercion).
+pub fn is_implicit_coercion(left: &InferredType, right: &InferredType) -> bool {
+    matches!(
+        (left, right),
+        (InferredType::Int, InferredType::Float) |
+        (InferredType::Float, InferredType::Int)
+    )
+}
+
 impl InferredType {
     /// Check if this type could be unit (null).
     pub fn could_be_null(&self) -> bool {
@@ -663,6 +800,15 @@ fn infer_dynamic_type(value: &Dynamic) -> InferredType {
     }
 }
 
+/// Tracks null guard information for complex conditionals.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NullGuardInfo {
+    /// This boolean variable represents `target_var != ()` (is_not_null check)
+    IsNotNull(String),
+    /// This boolean variable represents `target_var == ()` (is_null check)
+    IsNull(String),
+}
+
 /// State of a variable in a scope.
 #[derive(Debug, Clone)]
 pub struct VarState {
@@ -676,6 +822,8 @@ pub struct VarState {
     pub null_checked: bool,
     /// Position where defined
     pub defined_at: Option<Position>,
+    /// If this is a boolean that tracks another variable's null state
+    pub null_guard_of: Option<NullGuardInfo>,
 }
 
 /// A scope containing variables.
@@ -709,8 +857,10 @@ pub struct FunctionAnalysis {
     pub shadowed_vars: Vec<(String, Option<Position>)>,
     /// Unchecked nullable accesses (var_name, position)
     pub unchecked_nullables: Vec<(String, Option<Position>)>,
-    /// Type mismatches (description, position)
+    /// Type mismatches in binary operations (description, position) - E700
     pub type_mismatches: Vec<(String, Option<Position>)>,
+    /// Implicit type coercions (description, position) - W700
+    pub implicit_coercions: Vec<(String, Option<Position>)>,
     /// Whether all control flow paths return a value
     pub all_paths_return: bool,
     /// Dead code positions
@@ -824,6 +974,31 @@ impl<'a> FunctionAnalyzer<'a> {
             used: false,
             null_checked: false,
             defined_at: pos,
+            null_guard_of: None,
+        };
+        self.scopes[self.current_scope].vars.insert(name.to_string(), state);
+    }
+
+    /// Define a variable with null guard tracking information.
+    fn define_var_with_null_guard(
+        &mut self,
+        name: &str,
+        inferred_type: InferredType,
+        pos: Option<Position>,
+        null_guard: NullGuardInfo,
+    ) {
+        // Check for shadowing
+        if self.lookup_var(name).is_some() {
+            self.result.shadowed_vars.push((name.to_string(), pos));
+        }
+
+        let state = VarState {
+            name: name.to_string(),
+            inferred_type,
+            used: false,
+            null_checked: false,
+            defined_at: pos,
+            null_guard_of: Some(null_guard),
         };
         self.scopes[self.current_scope].vars.insert(name.to_string(), state);
     }
@@ -934,7 +1109,12 @@ impl<'a> FunctionAnalyzer<'a> {
                 // Analyze the initializer expression
                 self.analyze_expr(init_expr);
 
-                self.define_var(&var_name, inferred_type, Some(*pos));
+                // Check if this is a null guard assignment: let valid = x != () or let valid = x == ()
+                if let Some(null_guard) = self.detect_null_guard(init_expr) {
+                    self.define_var_with_null_guard(&var_name, inferred_type, Some(*pos), null_guard);
+                } else {
+                    self.define_var(&var_name, inferred_type, Some(*pos));
+                }
                 false
             }
 
@@ -1111,9 +1291,33 @@ impl<'a> FunctionAnalyzer<'a> {
 
     /// Analyze a function call.
     fn analyze_fn_call(&mut self, call_expr: &FnCallExpr) {
-        // Analyze arguments
+        // Analyze arguments first
         for arg in &call_expr.args {
             self.analyze_expr(arg);
+        }
+
+        let fn_name = call_expr.name.as_str();
+
+        // Check if this is a binary operator
+        if is_binary_operator(fn_name) && call_expr.args.len() == 2 {
+            let left_type = self.infer_expr_type(&call_expr.args[0]);
+            let right_type = self.infer_expr_type(&call_expr.args[1]);
+
+            // Check for implicit coercion warning (W700)
+            if is_implicit_coercion(&left_type, &right_type) {
+                self.result.implicit_coercions.push((
+                    format!(
+                        "implicit coercion in '{}': mixing Int and Float",
+                        fn_name
+                    ),
+                    None, // Position not easily available from FnCallExpr
+                ));
+            }
+
+            // Check for type mismatch error (E700)
+            if let Err(msg) = check_binary_op(fn_name, &left_type, &right_type) {
+                self.result.type_mismatches.push((msg, None));
+            }
         }
     }
 
@@ -1130,8 +1334,17 @@ impl<'a> FunctionAnalyzer<'a> {
 
             Expr::FnCall(call_expr, _) => {
                 let fn_name = call_expr.name.as_str();
+
+                // Check if it's a binary operator first
+                if is_binary_operator(fn_name) && call_expr.args.len() == 2 {
+                    let left_type = self.infer_expr_type(&call_expr.args[0]);
+                    let right_type = self.infer_expr_type(&call_expr.args[1]);
+                    // Try to find result type, default to Dynamic on error
+                    check_binary_op(fn_name, &left_type, &right_type)
+                        .unwrap_or(InferredType::Dynamic)
+                }
                 // Check API function return types
-                if let Some(api_fn) = get_api_function(fn_name) {
+                else if let Some(api_fn) = get_api_function(fn_name) {
                     match api_fn.returns {
                         ReturnType::Unit => InferredType::Unit,
                         ReturnType::Bool => InferredType::Bool,
@@ -1160,32 +1373,97 @@ impl<'a> FunctionAnalyzer<'a> {
         }
     }
 
+    /// Detect null guard patterns in an expression.
+    /// Returns Some(NullGuardInfo) if the expression is a null check like `x != ()` or `x == ()`.
+    fn detect_null_guard(&self, expr: &Expr) -> Option<NullGuardInfo> {
+        if let Expr::FnCall(call_expr, _) = expr {
+            let fn_name = call_expr.name.as_str();
+            if (fn_name == "==" || fn_name == "!=") && call_expr.args.len() == 2 {
+                // Check if one side is a variable and other is unit
+                let var_name = match (&call_expr.args[0], &call_expr.args[1]) {
+                    (Expr::Variable(var_box, _, _), Expr::Unit(_)) => {
+                        Some(var_box.1.to_string())
+                    }
+                    (Expr::Unit(_), Expr::Variable(var_box, _, _)) => {
+                        Some(var_box.1.to_string())
+                    }
+                    _ => None,
+                };
+
+                if let Some(name) = var_name {
+                    return if fn_name == "!=" {
+                        Some(NullGuardInfo::IsNotNull(name))
+                    } else {
+                        Some(NullGuardInfo::IsNull(name))
+                    };
+                }
+            }
+        }
+        None
+    }
+
     /// Extract null check patterns from a condition expression.
     /// e.g., `x == ()` or `x != ()` marks x as null-checked in the appropriate branch.
     fn extract_null_checks(&mut self, condition: &Expr) {
-        // Look for patterns like: var == () or var != ()
+        // Direct null check pattern: var == () or var != ()
+        if let Some(guard_info) = self.detect_null_guard(condition) {
+            let name = match &guard_info {
+                NullGuardInfo::IsNotNull(n) | NullGuardInfo::IsNull(n) => n.clone(),
+            };
+            // For `x != ()`, the variable is null-checked in the if branch
+            // For `x == ()`, the variable is null-checked in the else branch
+            // For simplicity, we mark it as checked in both cases
+            self.mark_null_checked(&name);
+            return;
+        }
+
+        // Check if condition is a variable that tracks a null guard
+        if let Expr::Variable(var_box, _, _) = condition {
+            let var_name = var_box.1.to_string();
+            if let Some(state) = self.lookup_var(&var_name) {
+                if let Some(guard_info) = &state.null_guard_of {
+                    // This variable was assigned from a null check
+                    let guarded_var = match guard_info {
+                        NullGuardInfo::IsNotNull(n) => n.clone(),
+                        NullGuardInfo::IsNull(n) => n.clone(),
+                    };
+                    self.mark_null_checked(&guarded_var);
+                    return;
+                }
+            }
+        }
+
+        // Handle Expr::And (&&) - recurse into both sides
+        if let Expr::And(boxed_exprs, _) = condition {
+            for expr in boxed_exprs.iter() {
+                self.extract_null_checks(expr);
+            }
+            return;
+        }
+
+        // Handle Expr::Or (||) - recurse into both sides
+        if let Expr::Or(boxed_exprs, _) = condition {
+            for expr in boxed_exprs.iter() {
+                self.extract_null_checks(expr);
+            }
+            return;
+        }
+
+        // Check for negation: !valid where valid is a null guard
         if let Expr::FnCall(call_expr, _) = condition {
             let fn_name = call_expr.name.as_str();
-            if fn_name == "==" || fn_name == "!=" {
-                if call_expr.args.len() == 2 {
-                    // Check if one side is a variable and other is unit
-                    let (var_name, is_null_check) = match (&call_expr.args[0], &call_expr.args[1]) {
-                        (Expr::Variable(var_box, _, _), Expr::Unit(_)) => {
-                            (Some(var_box.1.to_string()), true)
-                        }
-                        (Expr::Unit(_), Expr::Variable(var_box, _, _)) => {
-                            (Some(var_box.1.to_string()), true)
-                        }
-                        _ => (None, false),
-                    };
-
-                    if is_null_check {
-                        if let Some(name) = var_name {
-                            // For `x == ()`, the variable is null-checked in the else branch
-                            // For `x != ()`, the variable is null-checked in the if branch
-                            // For simplicity, we mark it as checked in both cases
-                            // (more precise analysis would track branches separately)
-                            self.mark_null_checked(&name);
+            if fn_name == "!" && call_expr.args.len() == 1 {
+                if let Expr::Variable(var_box, _, _) = &call_expr.args[0] {
+                    let var_name = var_box.1.to_string();
+                    if let Some(state) = self.lookup_var(&var_name) {
+                        if let Some(guard_info) = &state.null_guard_of {
+                            // !valid where valid = x != () means we're in the null case
+                            // But we still mark x as considered checked for simplicity
+                            let guarded_var = match guard_info {
+                                NullGuardInfo::IsNotNull(n) | NullGuardInfo::IsNull(n) => n.clone(),
+                            };
+                            self.mark_null_checked(&guarded_var);
+                            return;
                         }
                     }
                 }
@@ -2376,6 +2654,30 @@ impl ActionScriptValidator {
                 message: format!(
                     "In '{}()': Variable '{}' shadows a variable in outer scope",
                     handler_name, var_name
+                ),
+                line: pos.and_then(|p| p.line()),
+            });
+        }
+
+        // E700: Type mismatches in binary operations
+        for (msg, pos) in &analysis.type_mismatches {
+            errors.push(ActionValidationError {
+                code: "E700",
+                message: format!(
+                    "In '{}()': Type error - {}",
+                    handler_name, msg
+                ),
+                line: pos.and_then(|p| p.line()),
+            });
+        }
+
+        // W700: Implicit type coercions
+        for (msg, pos) in &analysis.implicit_coercions {
+            warnings.push(ActionValidationWarning {
+                code: "W700",
+                message: format!(
+                    "In '{}()': {}",
+                    handler_name, msg
                 ),
                 line: pos.and_then(|p| p.line()),
             });
@@ -4291,6 +4593,94 @@ fn handler(ctx, params) {
     }
 
     #[test]
+    fn test_function_analyzer_complex_null_guard() {
+        // Test: let valid = ship != ()  then  if valid { ship["name"] }
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    let valid = ship != ();
+    if valid {
+        let name = ship["name"];
+        return #{ success: true, data: name };
+    }
+    #{ success: false }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // The 'valid' variable tracks that ship was null-checked
+        // So accessing ship["name"] inside `if valid` should be safe
+        let ship_accesses: Vec<_> = analysis.unchecked_nullables
+            .iter()
+            .filter(|(name, _)| name == "ship")
+            .collect();
+        assert!(
+            ship_accesses.is_empty(),
+            "Complex null guard 'let valid = ship != ()' should protect access. Got: {:?}",
+            ship_accesses
+        );
+    }
+
+    #[test]
+    fn test_function_analyzer_complex_null_guard_negated() {
+        // Test: let is_null = ship == ()  then  if !is_null { ship["name"] }
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    let is_null = ship == ();
+    if !is_null {
+        let name = ship["name"];
+        return #{ success: true, data: name };
+    }
+    #{ success: false }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // The '!is_null' check should recognize the null guard
+        let ship_accesses: Vec<_> = analysis.unchecked_nullables
+            .iter()
+            .filter(|(name, _)| name == "ship")
+            .collect();
+        assert!(
+            ship_accesses.is_empty(),
+            "Negated null guard 'let is_null = ship == ()' with '!is_null' should protect. Got: {:?}",
+            ship_accesses
+        );
+    }
+
+    #[test]
+    fn test_function_analyzer_compound_null_check() {
+        // Test: if ship != () && other_condition { ship["name"] }
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    let enabled = true;
+    if ship != () && enabled {
+        let name = ship["name"];
+        return #{ success: true, data: name };
+    }
+    #{ success: false }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // Compound condition with null check should still protect
+        let ship_accesses: Vec<_> = analysis.unchecked_nullables
+            .iter()
+            .filter(|(name, _)| name == "ship")
+            .collect();
+        assert!(
+            ship_accesses.is_empty(),
+            "Compound condition 'ship != () && ...' should protect access. Got: {:?}",
+            ship_accesses
+        );
+    }
+
+    #[test]
     fn test_function_analyzer_return_map_keys() {
         // Use explicit return to ensure we capture map keys
         let content = r#"
@@ -4991,6 +5381,210 @@ fn handle_test(ctx, params) {
             w960_warnings.is_empty(),
             "Should not warn about dynamic keys on custom maps. Warnings: {:?}",
             w960_warnings
+        );
+    }
+
+    // ========================================================================
+    // Type Mismatch Tests (E700, W700)
+    // ========================================================================
+
+    #[test]
+    fn test_binary_op_rules() {
+        // Test valid operations
+        assert!(check_binary_op("+", &InferredType::Int, &InferredType::Int).is_ok());
+        assert!(check_binary_op("+", &InferredType::Float, &InferredType::Float).is_ok());
+        assert!(check_binary_op("+", &InferredType::String, &InferredType::String).is_ok());
+        assert!(check_binary_op("-", &InferredType::Int, &InferredType::Int).is_ok());
+        assert!(check_binary_op("*", &InferredType::Float, &InferredType::Float).is_ok());
+        assert!(check_binary_op("/", &InferredType::Int, &InferredType::Int).is_ok());
+        assert!(check_binary_op("<", &InferredType::Int, &InferredType::Int).is_ok());
+        assert!(check_binary_op("==", &InferredType::String, &InferredType::String).is_ok());
+        assert!(check_binary_op("&&", &InferredType::Bool, &InferredType::Bool).is_ok());
+
+        // Test implicit coercion (allowed but triggers warning)
+        assert!(check_binary_op("+", &InferredType::Int, &InferredType::Float).is_ok());
+        assert!(check_binary_op("+", &InferredType::Float, &InferredType::Int).is_ok());
+
+        // Test invalid operations
+        assert!(check_binary_op("+", &InferredType::String, &InferredType::Int).is_err());
+        assert!(check_binary_op("+", &InferredType::Int, &InferredType::String).is_err());
+        assert!(check_binary_op("-", &InferredType::String, &InferredType::String).is_err());
+        assert!(check_binary_op("&&", &InferredType::Int, &InferredType::Int).is_err());
+
+        // Dynamic types always pass
+        assert!(check_binary_op("+", &InferredType::Dynamic, &InferredType::Int).is_ok());
+        assert!(check_binary_op("+", &InferredType::String, &InferredType::Dynamic).is_ok());
+    }
+
+    #[test]
+    fn test_implicit_coercion_detection() {
+        assert!(is_implicit_coercion(&InferredType::Int, &InferredType::Float));
+        assert!(is_implicit_coercion(&InferredType::Float, &InferredType::Int));
+        assert!(!is_implicit_coercion(&InferredType::Int, &InferredType::Int));
+        assert!(!is_implicit_coercion(&InferredType::Float, &InferredType::Float));
+        assert!(!is_implicit_coercion(&InferredType::String, &InferredType::Int));
+    }
+
+    #[test]
+    fn test_type_mismatch_error_e700() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_e700.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test_action", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let msg = "hello";
+    let num = 42;
+    let result = msg + num;  // String + Int - type error!
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have E700 error for type mismatch
+        assert!(
+            result.errors.iter().any(|e| e.code == "E700" && e.message.contains("cannot apply")),
+            "Should error about type mismatch. Errors: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_implicit_coercion_warning_w700() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_w700.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test_action", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let int_val = 42;
+    let float_val = 3.14;
+    let result = int_val + float_val;  // Int + Float - implicit coercion
+    #{ success: true, data: result }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have W700 warning for implicit coercion
+        assert!(
+            result.warnings.iter().any(|w| w.code == "W700" && w.message.contains("implicit coercion")),
+            "Should warn about implicit coercion. Warnings: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_valid_binary_ops_no_errors() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_valid_ops.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test_action", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let a = 10;
+    let b = 20;
+    let sum = a + b;  // Int + Int - OK
+    let product = a * b;  // Int * Int - OK
+    let diff = b - a;  // Int - Int - OK
+
+    let x = 1.5;
+    let y = 2.5;
+    let total = x + y;  // Float + Float - OK
+
+    let s1 = "hello";
+    let s2 = " world";
+    let greeting = s1 + s2;  // String + String - OK
+
+    let flag = a < b;  // Int < Int -> Bool - OK
+    let cond = flag && true;  // Bool && Bool - OK
+
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have E700 errors
+        let e700_errors: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == "E700")
+            .collect();
+        assert!(
+            e700_errors.is_empty(),
+            "Should not have E700 errors for valid operations. Errors: {:?}",
+            e700_errors
+        );
+
+        // Should NOT have W700 warnings (no int/float mixing)
+        let w700_warnings: Vec<_> = result.warnings.iter()
+            .filter(|w| w.code == "W700")
+            .collect();
+        assert!(
+            w700_warnings.is_empty(),
+            "Should not have W700 warnings for same-type operations. Warnings: {:?}",
+            w700_warnings
+        );
+    }
+
+    #[test]
+    fn test_comparison_operators_valid() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_comparisons.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test_action", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let a = 10;
+    let b = 20;
+
+    // All comparison operators
+    let r1 = a < b;
+    let r2 = a <= b;
+    let r3 = a > b;
+    let r4 = a >= b;
+    let r5 = a == b;
+    let r6 = a != b;
+
+    // String comparisons
+    let s1 = "abc";
+    let s2 = "def";
+    let r7 = s1 < s2;
+
+    #{ success: r1 && r2 && !r3 }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have E700 errors
+        let e700_errors: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == "E700")
+            .collect();
+        assert!(
+            e700_errors.is_empty(),
+            "Should not have E700 errors for valid comparisons. Errors: {:?}",
+            e700_errors
         );
     }
 }

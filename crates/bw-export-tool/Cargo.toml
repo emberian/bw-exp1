@@ -1,0 +1,33 @@
+[package]
+name = "bw-export-tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "CLI tool for inspecting and manipulating Blackwing export files"
+
+[[bin]]
+name = "bw-export"
+path = "src/main.rs"
+
+[dependencies]
+# Export library
+bw-export = { path = "../bw-export" }
+bw-shared = { path = "../bw-shared" }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Output
+colored = "3.0"
+tabled = "0.17"
+
+# Error handling
+anyhow = { workspace = true }

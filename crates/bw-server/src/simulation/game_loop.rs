@@ -7,13 +7,13 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use bw_core::models::{MissionStatus, MissionType, Mission, ShipStatus};
-use bw_scripting::EntityType;
+use bw_game::EntityType;
 use bw_shared::{ServerMessage, dto::*, FAME_DECAY_INTERVAL, FAME_DECAY_RATE, TICK_DURATION_MS, TICK_RATE};
 use tokio::sync::watch;
 
 use super::combat_processor::process_sector_combats;
 use super::metrics::{SectorMetricsBuilder, TickMetricsBuilder};
-use super::npc_spawner::{cleanup_npcs, try_spawn_npcs};
+use super::npc_spawner::{cleanup_npcs, remove_npc_ship, try_spawn_npcs};
 use super::script_hooks::ScriptHooks;
 use super::sim_config::NpcSpawningConfig;
 use crate::config::config;
@@ -70,9 +70,11 @@ pub async fn run_game_loop(state: Arc<GameState>, shutdown: watch::Receiver<bool
         let npc_config = &sim_config.simulation.npc_spawning;
 
         metrics.start_phase("sectors_total");
-        for sector_ref in state.sectors.iter() {
-            let sector_id = *sector_ref.key();
-            let sector_name = sector_ref.sector.name.clone();
+        // Collect sector info first to avoid holding locks across async operations
+        let sectors: Vec<(uuid::Uuid, String)> = state.sectors.iter()
+            .map(|s| (*s.key(), s.sector.name.clone()))
+            .collect();
+        for (sector_id, sector_name) in sectors {
             let sector_timing = process_sector_tick_with_metrics(
                 &state,
                 sector_id,
@@ -261,6 +263,7 @@ async fn process_sector_tick_with_metrics(
     let mut ship_updates = Vec::new();
     let mut ship_spawns = Vec::new();
     let mut ship_despawns = Vec::new();
+    let mut mission_spawns = Vec::new();
     let mut mission_updates = Vec::new();
     let mut events = Vec::new();
 
@@ -270,9 +273,8 @@ async fn process_sector_tick_with_metrics(
         let ship_id = *ship_entry.key();
 
         if let Some(mut ship) = state.ships.get_mut(&ship_id) {
-            if let ShipStatus::InTransit { destination, target_id } = &ship.status {
+            if let ShipStatus::InTransit { destination, .. } = &ship.status {
                 let dest = *destination;
-                let _target = *target_id;
 
                 // Move ship towards destination
                 let speed = ship.ship_class.base_stats().speed * ship.resources.fuel_movement_modifier();
@@ -354,6 +356,8 @@ async fn process_sector_tick_with_metrics(
             if !state.scripts.has_script(script_path) {
                 if let Err(e) = state.scripts.load_script(script_path) {
                     tracing::warn!("Failed to load NPC behavior script {}: {}", script_path, e);
+                    // Remove the zombie NPC since it can't have behavior
+                    remove_npc_ship(state, &sector, ship_id);
                     continue;
                 }
             }
@@ -368,6 +372,8 @@ async fn process_sector_tick_with_metrics(
 
             if let Err(e) = result {
                 tracing::warn!("Failed to attach behavior to NPC {}: {}", ship_id, e);
+                // Remove the zombie NPC since behavior attachment failed
+                remove_npc_ship(state, &sector, ship_id);
             }
         }
         sector_metrics.end_phase();
@@ -388,7 +394,9 @@ async fn process_sector_tick_with_metrics(
     // === Mission Spawning (every 100 ticks) ===
     if tick % 100 == 0 && sector.missions.len() < 5 {
         sector_metrics.start_phase("mission_spawn");
-        maybe_spawn_mission(state, &sector, tick).await;
+        if let Some(mission_dto) = maybe_spawn_mission(state, &sector, tick).await {
+            mission_spawns.push(mission_dto);
+        }
         sector_metrics.end_phase();
     } else {
         sector_metrics.record_skipped("mission_spawn");
@@ -422,12 +430,13 @@ async fn process_sector_tick_with_metrics(
 
     // === Broadcasting ===
     sector_metrics.start_phase("broadcast");
-    if !ship_updates.is_empty() || !events.is_empty() || !ship_spawns.is_empty() || !ship_despawns.is_empty() || !mission_updates.is_empty() {
+    if !ship_updates.is_empty() || !events.is_empty() || !ship_spawns.is_empty() || !ship_despawns.is_empty() || !mission_spawns.is_empty() || !mission_updates.is_empty() {
         let update = ServerMessage::StateUpdate {
             tick,
             ship_updates,
             ship_spawns,
             ship_despawns,
+            mission_spawns,
             mission_updates,
             events,
         };
@@ -439,13 +448,13 @@ async fn process_sector_tick_with_metrics(
     sector_metrics.finish()
 }
 
-async fn maybe_spawn_mission(_state: &GameState, sector: &crate::SectorInstance, _tick: u64) {
+async fn maybe_spawn_mission(_state: &GameState, sector: &crate::SectorInstance, _tick: u64) -> Option<MissionDto> {
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
     // 10% chance per check (every 10 seconds)
     if rng.r#gen::<f32>() > 0.1 {
-        return;
+        return None;
     }
 
     // Pick a random mission type
@@ -485,5 +494,28 @@ async fn maybe_spawn_mission(_state: &GameState, sector: &crate::SectorInstance,
 
     tracing::info!("Spawned mission: {} in {}", mission.title, sector.sector.name);
 
+    // Create DTO for broadcast
+    let expires_in = mission.expires_at.map(|exp| {
+        let duration = exp - chrono::Utc::now();
+        duration.num_seconds().max(0) as u32
+    });
+
+    let mission_dto = MissionDto {
+        id: mission.id,
+        title: mission.title.clone(),
+        description: mission.description.clone(),
+        mission_type: format!("{:?}", mission.mission_type),
+        status: mission.display_state().to_string(),
+        priority: format!("{:?}", mission.priority),
+        reputation_reward: mission.reputation_reward,
+        fame_reward: mission.fame_reward,
+        is_high_profile: mission.is_high_profile,
+        expires_in_seconds: expires_in,
+        progress: mission.progress,
+        can_accept: true,
+    };
+
     sector.missions.insert(mission.id, mission);
+
+    Some(mission_dto)
 }

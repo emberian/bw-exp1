@@ -159,7 +159,7 @@ fn handle_disengage_combat(ctx, params) {
         if round < 3 {
             return #{
                 success: false,
-                error: "Cannot disengage until round 3 (currently round " + round + ")"
+                error: `Cannot disengage until round 3 (currently round ${round})`
             };
         }
     }
@@ -183,7 +183,7 @@ fn handle_disengage_combat(ctx, params) {
         modify_ship(ship_id, #{
             hull: current_hull - damage
         });
-        send_notification(player_id, "Escape attempt failed! Took " + damage + " damage.");
+        send_notification(player_id, `Escape attempt failed! Took ${damage} damage.`);
         return #{
             success: false,
             error: "Failed to disengage - enemy landed a hit!",
@@ -251,7 +251,7 @@ fn handle_fire_weapon(ctx, params) {
     // Check weapon cooldown
     let cooldown = weapon["cooldown_remaining"];
     if cooldown != () && cooldown > 0 {
-        return #{ success: false, error: "Weapon on cooldown (" + cooldown + " ticks remaining)" };
+        return #{ success: false, error: `Weapon on cooldown (${cooldown} ticks remaining)` };
     }
 
     // Check ammunition

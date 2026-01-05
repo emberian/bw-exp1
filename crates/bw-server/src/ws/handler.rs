@@ -149,14 +149,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                             };
 
                             // Handle game messages
-                            handle_game_message(
+                            if let Some(new_sector_id) = handle_game_message(
                                 &state,
                                 &tx,
                                 pid,
                                 sid,
                                 uname,
                                 client_msg,
-                            ).await;
+                            ).await {
+                                // Update local sector_id cache when player changes sectors
+                                sector_id = Some(new_sector_id);
+                            }
                         }
                     }
                 }
@@ -224,54 +227,48 @@ async fn send_initial_state(
         None => return,
     };
 
-    // Get player data for DTO
-    let player_ref = state.player_data.get(&player_id);
-    let (username, reputation, fame, faction_tag, squadron_tag) = match player_ref.as_ref() {
-        Some(p) => (
-            p.username.clone(),
-            p.resources.reputation,
-            p.resources.fame,
-            state.factions.get(&p.faction_id).map(|f| f.tag.clone()).unwrap_or_else(|| "COMPACT".to_string()),
-            p.squadron_id.and_then(|sid| state.squadrons.get(&sid).map(|s| s.tag.clone())),
-        ),
-        None => ("Player".to_string(), 100, 0, "COMPACT".to_string(), None),
+    // Build player DTO
+    let player_dto = match state.player_data.get(&player_id) {
+        Some(player) => {
+            let faction_tag = state.factions.get(&player.faction_id)
+                .map(|f| f.tag.clone())
+                .unwrap_or_else(|| "COMPACT".to_string());
+            let squadron_tag = player.squadron_id.and_then(|sid| {
+                state.squadrons.get(&sid).map(|s| s.tag.clone())
+            });
+            let is_admin = config().is_admin(&player.username);
+            PlayerDto::from_core(&player, faction_tag, squadron_tag, is_admin)
+        }
+        None => {
+            // Fallback for missing player data
+            PlayerDto {
+                id: player_id,
+                username: "Player".to_string(),
+                reputation: 100,
+                fame: 0,
+                faction_tag: "COMPACT".to_string(),
+                squadron_tag: None,
+                is_online: true,
+                is_admin: false,
+                // Script-only fields with defaults
+                credits: 0,
+                game_mode: "standard".to_string(),
+                owned_ships: vec![],
+                active_ship_id: session.ship_id,
+                sector_id,
+                faction_id: Uuid::nil(),
+                squadron_id: None,
+                missions_completed: 0,
+                missions_failed: 0,
+                is_disgraced: false,
+            }
+        }
     };
-    drop(player_ref);
 
-    // Check if admin
-    let is_admin = config().is_admin(&username);
-
-    // Build DTOs
-    let player_dto = PlayerDto {
-        id: player_id,
-        username,
-        reputation,
-        fame,
-        faction_tag,
-        squadron_tag,
-        is_online: true,
-        is_admin,
-    };
-
-    let ship_dto = ShipDto {
-        id: ship.id,
-        name: ship.name.clone(),
-        owner_id: ship.owner_id,
-        ship_class: format!("{:?}", ship.ship_class),
-        position: PositionDto {
-            x: ship.position.x,
-            y: ship.position.y,
-            z: ship.position.z,
-        },
-        hull_percent: ship.hull_integrity,
-        shield_percent: ship.shield_strength,
-        status: format!("{:?}", ship.status),
-        faction_tag: ship.faction_id.and_then(|fid| {
-            state.factions.get(&fid).map(|f| f.tag.clone())
-        }),
-        is_player: true,
-        is_hostile: false,
-    };
+    let ship_faction_tag = ship.faction_id.and_then(|fid| {
+        state.factions.get(&fid).map(|f| f.tag.clone())
+    });
+    let ship_dto = ShipDto::from_core(&ship, ship_faction_tag);
 
     let sector_dto = SectorDto {
         id: sector.sector.id,
@@ -300,24 +297,11 @@ async fn send_initial_state(
             if ship_id == session.ship_id {
                 return None; // Skip player's own ship
             }
-            state.ships.get(&ship_id).map(|s| ShipDto {
-                id: s.id,
-                name: s.name.clone(),
-                owner_id: s.owner_id,
-                ship_class: format!("{:?}", s.ship_class),
-                position: PositionDto {
-                    x: s.position.x,
-                    y: s.position.y,
-                    z: s.position.z,
-                },
-                hull_percent: s.hull_integrity,
-                shield_percent: s.shield_strength,
-                status: format!("{:?}", s.status),
-                faction_tag: s.faction_id.and_then(|fid| {
+            state.ships.get(&ship_id).map(|s| {
+                let faction_tag = s.faction_id.and_then(|fid| {
                     state.factions.get(&fid).map(|f| f.tag.clone())
-                }),
-                is_player: s.is_player_ship,
-                is_hostile: s.ship_class.is_hostile(),
+                });
+                ShipDto::from_core(&s, faction_tag)
             })
         })
         .collect();
@@ -360,6 +344,7 @@ async fn send_initial_state(
     sector.connections.insert(player_id, tx.clone());
 }
 
+/// Returns the new sector_id if the player changed sectors, None otherwise.
 async fn handle_game_message(
     state: &Arc<GameState>,
     tx: &mpsc::Sender<ServerMessage>,
@@ -367,7 +352,7 @@ async fn handle_game_message(
     sector_id: Uuid,
     username: &str,
     msg: ClientMessage,
-) {
+) -> Option<Uuid> {
     use super::admin_handler::handle_admin_message;
 
     match msg {
@@ -375,7 +360,8 @@ async fn handle_game_message(
 
         ClientMessage::JoinSector { sector_id: target_sector_id } => {
             // Direct sector join (usually after travel completes or for initial join)
-            handle_join_sector(state, tx, player_id, sector_id, target_sector_id).await;
+            // Return new sector_id to caller so it can update its cache
+            return handle_join_sector(state, tx, player_id, sector_id, target_sector_id).await;
         }
 
         ClientMessage::LeaveSector => {
@@ -392,7 +378,7 @@ async fn handle_game_message(
                     code: "CHAT_TOO_LONG".to_string(),
                     message: format!("Message exceeds {} characters", bw_shared::CHAT_MAX_LENGTH),
                 }).await;
-                return;
+                return None;
             }
 
             // Get player username
@@ -463,7 +449,7 @@ async fn handle_game_message(
                         error: Some("Session not found".to_string()),
                         data: None,
                     }).await;
-                    return;
+                    return None;
                 }
             };
 
@@ -481,7 +467,7 @@ async fn handle_game_message(
 
             // Apply mutations to game state
             if !result.mutations.is_empty() {
-                use bw_scripting::StateProvider;
+                use bw_game::state::StateProvider;
                 state.apply_mutations(result.mutations);
             }
 
@@ -498,6 +484,8 @@ async fn handle_game_message(
             tracing::debug!("Unhandled message from player {}: {:?}", player_id, msg);
         }
     }
+
+    None // No sector change
 }
 
 // ============================================================================
@@ -505,13 +493,14 @@ async fn handle_game_message(
 // ============================================================================
 
 /// Handle joining a new sector (transfers player/ship to target sector).
+/// Returns the new sector_id on success, None on failure.
 async fn handle_join_sector(
     state: &GameState,
     tx: &mpsc::Sender<ServerMessage>,
     player_id: Uuid,
     current_sector_id: Uuid,
     target_sector_id: Uuid,
-) {
+) -> Option<Uuid> {
     use bw_shared::dto::{PlayerDto, ShipDto, SectorDto, LocationDto, PositionDto, MissionDto, AdjacentSectorDto};
 
     // Don't allow joining the same sector
@@ -520,7 +509,7 @@ async fn handle_join_sector(
             code: "ALREADY_IN_SECTOR".to_string(),
             message: "You are already in this sector".to_string(),
         }).await;
-        return;
+        return None;
     }
 
     // Get player session
@@ -531,7 +520,7 @@ async fn handle_join_sector(
                 code: "SESSION_NOT_FOUND".to_string(),
                 message: "Session not found".to_string(),
             }).await;
-            return;
+            return None;
         }
     };
 
@@ -543,7 +532,7 @@ async fn handle_join_sector(
                 code: "SECTOR_NOT_FOUND".to_string(),
                 message: "Target sector not found".to_string(),
             }).await;
-            return;
+            return None;
         }
     };
 
@@ -555,7 +544,7 @@ async fn handle_join_sector(
                 code: "SHIP_NOT_FOUND".to_string(),
                 message: "Ship not found".to_string(),
             }).await;
-            return;
+            return None;
         }
     };
 
@@ -570,6 +559,7 @@ async fn handle_join_sector(
             ship_updates: vec![],
             ship_spawns: vec![],
             ship_despawns: vec![ship_id],
+            mission_spawns: vec![],
             mission_updates: vec![],
             events: vec![],
         };
@@ -592,61 +582,40 @@ async fn handle_join_sector(
 
     // Build DTOs for new sector
     let player = match state.player_data.get(&player_id) {
-        Some(p) => p.clone(),
+        Some(p) => (*p).clone(),
         None => {
             let _ = tx.send(ServerMessage::Error {
                 code: "PLAYER_NOT_FOUND".to_string(),
                 message: "Player data not found".to_string(),
             }).await;
-            return;
+            return None;
         }
     };
 
     let ship = match state.ships.get(&ship_id) {
-        Some(s) => s.clone(),
+        Some(s) => (*s).clone(),
         None => {
             let _ = tx.send(ServerMessage::Error {
                 code: "SHIP_NOT_FOUND".to_string(),
                 message: "Ship not found".to_string(),
             }).await;
-            return;
+            return None;
         }
     };
 
-    let player_dto = PlayerDto {
-        id: player.id,
-        username: player.username.clone(),
-        reputation: player.resources.reputation,
-        fame: player.resources.fame,
-        faction_tag: state.factions.get(&player.faction_id)
-            .map(|f| f.tag.clone())
-            .unwrap_or_default(),
-        squadron_tag: player.squadron_id.and_then(|sq_id| {
-            state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
-        }),
-        is_online: player.is_online,
-        is_admin: config().is_admin(&player.username),
-    };
+    let faction_tag = state.factions.get(&player.faction_id)
+        .map(|f| f.tag.clone())
+        .unwrap_or_default();
+    let squadron_tag = player.squadron_id.and_then(|sq_id| {
+        state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
+    });
+    let is_admin = config().is_admin(&player.username);
+    let player_dto = PlayerDto::from_core(&player, faction_tag, squadron_tag, is_admin);
 
-    let ship_dto = ShipDto {
-        id: ship.id,
-        name: ship.name.clone(),
-        owner_id: ship.owner_id,
-        ship_class: format!("{:?}", ship.ship_class),
-        position: PositionDto {
-            x: ship.position.x,
-            y: ship.position.y,
-            z: ship.position.z,
-        },
-        hull_percent: ship.hull_integrity,
-        shield_percent: ship.shield_strength,
-        status: format!("{:?}", ship.status),
-        faction_tag: ship.faction_id.and_then(|fid| {
-            state.factions.get(&fid).map(|f| f.tag.clone())
-        }),
-        is_player: true,
-        is_hostile: false,
-    };
+    let ship_faction_tag = ship.faction_id.and_then(|fid| {
+        state.factions.get(&fid).map(|f| f.tag.clone())
+    });
+    let ship_dto = ShipDto::from_core(&ship, ship_faction_tag);
 
     let sector_dto = SectorDto {
         id: target_sector.sector.id,
@@ -684,24 +653,11 @@ async fn handle_join_sector(
             if other_ship_id == ship_id {
                 return None;
             }
-            state.ships.get(&other_ship_id).map(|s| ShipDto {
-                id: s.id,
-                name: s.name.clone(),
-                owner_id: s.owner_id,
-                ship_class: format!("{:?}", s.ship_class),
-                position: PositionDto {
-                    x: s.position.x,
-                    y: s.position.y,
-                    z: s.position.z,
-                },
-                hull_percent: s.hull_integrity,
-                shield_percent: s.shield_strength,
-                status: format!("{:?}", s.status),
-                faction_tag: s.faction_id.and_then(|fid| {
+            state.ships.get(&other_ship_id).map(|s| {
+                let faction_tag = s.faction_id.and_then(|fid| {
                     state.factions.get(&fid).map(|f| f.tag.clone())
-                }),
-                is_player: s.is_player_ship,
-                is_hostile: s.ship_class.is_hostile(),
+                });
+                ShipDto::from_core(&s, faction_tag)
             })
         })
         .collect();
@@ -742,31 +698,17 @@ async fn handle_join_sector(
     if let Some(new_sector) = state.sectors.get(&target_sector_id) {
         let ship = state.ships.get(&ship_id);
         if let Some(ship) = ship {
-            let spawn_dto = ShipDto {
-                id: ship.id,
-                name: ship.name.clone(),
-                owner_id: ship.owner_id,
-                ship_class: format!("{:?}", ship.ship_class),
-                position: PositionDto {
-                    x: ship.position.x,
-                    y: ship.position.y,
-                    z: ship.position.z,
-                },
-                hull_percent: ship.hull_integrity,
-                shield_percent: ship.shield_strength,
-                status: format!("{:?}", ship.status),
-                faction_tag: ship.faction_id.and_then(|fid| {
-                    state.factions.get(&fid).map(|f| f.tag.clone())
-                }),
-                is_player: true,
-                is_hostile: false,
-            };
+            let spawn_faction_tag = ship.faction_id.and_then(|fid| {
+                state.factions.get(&fid).map(|f| f.tag.clone())
+            });
+            let spawn_dto = ShipDto::from_core(&ship, spawn_faction_tag);
 
             let spawn_msg = ServerMessage::StateUpdate {
                 tick: state.get_tick(),
                 ship_updates: vec![],
                 ship_spawns: vec![spawn_dto],
                 ship_despawns: vec![],
+                mission_spawns: vec![],
                 mission_updates: vec![],
                 events: vec![],
             };
@@ -781,6 +723,7 @@ async fn handle_join_sector(
     }
 
     tracing::info!("Player {} joined sector {}", player_id, target_sector_id);
+    Some(target_sector_id)
 }
 
 /// Handle leaving the current sector.
@@ -813,6 +756,7 @@ async fn handle_leave_sector(
             ship_updates: vec![],
             ship_spawns: vec![],
             ship_despawns: vec![ship_id],
+            mission_spawns: vec![],
             mission_updates: vec![],
             events: vec![],
         };

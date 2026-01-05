@@ -171,6 +171,7 @@ async fn process_playtest_sector_tick(
             ship_updates,
             ship_spawns: Vec::new(),
             ship_despawns,
+            mission_spawns: Vec::new(),
             mission_updates,
             events,
         };

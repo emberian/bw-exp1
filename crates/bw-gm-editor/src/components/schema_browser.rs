@@ -90,10 +90,14 @@ pub fn SchemaBrowser() -> impl IntoView {
                                 };
                                 view! {
                                     <button
-                                        class="w-full text-left px-3 py-2 rounded text-sm transition-colors"
-                                        class:bg-amber-500/20=is_selected
-                                        class:text-amber-500=is_selected
-                                        class:hover:bg-slate-700=move || !is_selected()
+                                        class=move || format!(
+                                            "w-full text-left px-3 py-2 rounded text-sm transition-colors {}",
+                                            if is_selected() {
+                                                "bg-amber-500/20 text-amber-500"
+                                            } else {
+                                                "hover:bg-slate-700"
+                                            }
+                                        )
                                         on:click=move |_| on_select(type_name_click.clone())
                                     >
                                         <div class="font-medium">{schema.name.clone()}</div>

@@ -504,8 +504,8 @@ impl GameState {
         self.ship_class.set(ship.ship_class.clone());
         self.position_x.set(ship.position.x);
         self.position_y.set(ship.position.y);
-        self.ship_hull.set(ship.hull_percent);
-        self.ship_shields.set(ship.shield_percent);
+        self.ship_hull.set(ship.hull);
+        self.ship_shields.set(ship.shields);
         self.ship_status.set(ship.status.clone());
 
         // Update docked state based on ship status
@@ -537,7 +537,7 @@ impl GameState {
             ship_class: s.ship_class,
             x: s.position.x,
             y: s.position.y,
-            hull_percent: s.hull_percent,
+            hull_percent: s.hull,
             is_player: s.is_player,
             is_hostile: s.is_hostile,
             status: s.status,
@@ -568,6 +568,7 @@ impl GameState {
         ship_updates: Vec<ShipUpdateDto>,
         ship_spawns: Vec<ShipDto>,
         ship_despawns: Vec<Uuid>,
+        mission_spawns: Vec<MissionDto>,
         mission_updates: Vec<MissionUpdateDto>,
         events: Vec<GameEventDto>,
     ) {
@@ -635,13 +636,34 @@ impl GameState {
                     ship_class: spawn.ship_class,
                     x: spawn.position.x,
                     y: spawn.position.y,
-                    hull_percent: spawn.hull_percent,
+                    hull_percent: spawn.hull,
                     is_player: spawn.is_player,
                     is_hostile: spawn.is_hostile,
                     status: spawn.status,
                 });
             }
         });
+
+        // Add spawned missions to available missions
+        if !mission_spawns.is_empty() {
+            self.available_missions.update(|missions| {
+                for spawn in mission_spawns {
+                    missions.push(MissionInfo {
+                        id: spawn.id,
+                        title: spawn.title,
+                        description: spawn.description,
+                        mission_type: spawn.mission_type,
+                        status: spawn.status,
+                        reputation_reward: spawn.reputation_reward,
+                        fame_reward: spawn.fame_reward,
+                        expires_in_seconds: spawn.expires_in_seconds,
+                        progress: spawn.progress,
+                        can_accept: spawn.can_accept,
+                        is_high_profile: spawn.is_high_profile,
+                    });
+                }
+            });
+        }
 
         // Process mission updates
         for update in mission_updates {

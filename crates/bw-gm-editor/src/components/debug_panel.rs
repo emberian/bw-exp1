@@ -6,19 +6,22 @@
 //! - Call stack visualization
 //! - Variable inspection
 //! - Breakpoint management
+//! - Script error tracking
 
 use leptos::prelude::*;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use bw_shared::dto::{DebugTargetDto, PauseReasonDto};
 
 use crate::api::with_admin_ws;
-use crate::state::DebugPanelState;
+use crate::state::{DebugPanelState, GMEditorState, ScriptErrorEntry};
 
 /// Main debug panel component
 #[component]
 pub fn DebugPanel() -> impl IntoView {
     let debug_state = expect_context::<DebugPanelState>();
+    let gm_state = use_context::<GMEditorState>();
 
     view! {
         <div class="debug-panel h-full flex flex-col bg-slate-800">
@@ -28,11 +31,19 @@ pub fn DebugPanel() -> impl IntoView {
             // Main content area when session is active
             <Show
                 when=move || debug_state.session_id.get().is_some()
-                fallback=|| view! {
-                    <div class="flex-1 flex items-center justify-center text-slate-500">
-                        <div class="text-center">
-                            <div class="text-lg mb-2">"No debug session active"</div>
-                            <div class="text-sm">"Start a debug session to begin debugging scripts"</div>
+                fallback=move || view! {
+                    <div class="flex-1 flex flex-col">
+                        // Show script errors even when no session
+                        {move || gm_state.map(|state| view! {
+                            <ScriptErrorsView errors=state.script_errors />
+                        })}
+
+                        // Placeholder when no session
+                        <div class="flex-1 flex items-center justify-center text-slate-500">
+                            <div class="text-center">
+                                <div class="text-lg mb-2">"No debug session active"</div>
+                                <div class="text-sm">"Start a debug session to begin debugging scripts"</div>
+                            </div>
                         </div>
                     </div>
                 }
@@ -60,6 +71,11 @@ pub fn DebugPanel() -> impl IntoView {
 
                     // Breakpoints
                     <BreakpointListView />
+
+                    // Script errors
+                    {move || gm_state.map(|state| view! {
+                        <ScriptErrorsView errors=state.script_errors />
+                    })}
                 </div>
             </Show>
 
@@ -635,6 +651,168 @@ fn CloseIcon() -> impl IntoView {
     view! {
         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 16 16">
             <path d="M4 4l8 8M12 4l-8 8"/>
+        </svg>
+    }
+}
+
+// =============================================================================
+// Script Errors View
+// =============================================================================
+
+/// Script errors grouped by script file
+#[component]
+fn ScriptErrorsView(errors: RwSignal<Vec<ScriptErrorEntry>>) -> impl IntoView {
+    // Group errors by script
+    let grouped_errors = Memo::new(move |_| {
+        let mut groups: HashMap<String, Vec<ScriptErrorEntry>> = HashMap::new();
+        for error in errors.get() {
+            groups.entry(error.script.clone()).or_default().push(error);
+        }
+        // Sort by script name
+        let mut sorted: Vec<_> = groups.into_iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        sorted
+    });
+
+    let total_count = move || errors.get().len();
+
+    view! {
+        <div class="border-b border-slate-700">
+            <CollapsibleSection title="Script Errors" default_open=true>
+                <Show
+                    when=move || { total_count() > 0 }
+                    fallback=|| view! {
+                        <div class="px-3 py-2 text-slate-500 text-sm">"No script errors"</div>
+                    }
+                >
+                    <div class="divide-y divide-slate-700/50">
+                        <For
+                            each=move || grouped_errors.get()
+                            key=|(script, _): &(String, Vec<ScriptErrorEntry>)| script.clone()
+                            children=move |(script, errors)| {
+                                view! {
+                                    <ScriptErrorGroup script=script errors=errors />
+                                }
+                            }
+                        />
+                    </div>
+                </Show>
+            </CollapsibleSection>
+        </div>
+    }
+}
+
+/// Error group for a single script file
+#[component]
+fn ScriptErrorGroup(script: String, errors: Vec<ScriptErrorEntry>) -> impl IntoView {
+    let is_expanded = RwSignal::new(true);
+    let error_count = errors.len();
+    let script_name = script.clone();
+
+    view! {
+        <div class="bg-slate-900/30">
+            <button
+                class="w-full px-3 py-2 flex items-center gap-2 hover:bg-slate-700/30 text-left"
+                on:click=move |_| is_expanded.update(|v| *v = !*v)
+            >
+                <span class="text-slate-500 text-xs transition-transform"
+                    class:rotate-90=move || is_expanded.get()
+                >
+                    ">"
+                </span>
+                <span class="flex-1 text-sm text-amber-400 font-mono truncate">{script_name}</span>
+                <span class="px-1.5 py-0.5 bg-red-900/50 text-red-400 text-xs rounded">
+                    {error_count}
+                </span>
+            </button>
+
+            <Show when=move || is_expanded.get()>
+                <div class="divide-y divide-slate-700/30">
+                    {errors.clone().into_iter().map(|error| {
+                        view! {
+                            <ScriptErrorRow error=error />
+                        }
+                    }).collect_view()}
+                </div>
+            </Show>
+        </div>
+    }
+}
+
+/// Single error row
+#[component]
+fn ScriptErrorRow(error: ScriptErrorEntry) -> impl IntoView {
+    let gm_state = use_context::<GMEditorState>();
+
+    let script_path = error.script.clone();
+
+    // Open script in editor at the error line
+    let open_in_editor = move |_| {
+        if let Some(state) = gm_state {
+            state.selected_script.set(Some(script_path.clone()));
+            // Request script content - the editor will scroll to line when loaded
+            with_admin_ws(|ws| ws.read_script(&script_path));
+        }
+    };
+
+    // Determine if this is a runtime error or validation error
+    let (badge_class, badge_text) = if error.function == "validate" {
+        ("bg-yellow-900/50 text-yellow-400", "validation")
+    } else {
+        ("bg-red-900/50 text-red-400", "runtime")
+    };
+
+    view! {
+        <div class="px-3 py-2 hover:bg-slate-700/30 group">
+            <div class="flex items-start gap-2">
+                // Error indicator
+                <div class="mt-0.5">
+                    <ErrorDotIcon />
+                </div>
+
+                <div class="flex-1 min-w-0">
+                    // Error message
+                    <div class="text-sm text-slate-300">{error.message.clone()}</div>
+
+                    // Location and type
+                    <div class="flex items-center gap-2 mt-1 text-xs">
+                        <span class="text-slate-500 font-mono">
+                            {format!("{}:{}:{}", error.function, error.line, error.column)}
+                        </span>
+                        <span class=format!("px-1 py-0.5 rounded {}", badge_class)>
+                            {badge_text}
+                        </span>
+                        <span class="text-slate-600">
+                            "tick "{error.tick}
+                        </span>
+                    </div>
+                </div>
+
+                // Open in editor button
+                <button
+                    class="p-1 hover:bg-slate-700 rounded opacity-0 group-hover:opacity-100 text-slate-400 hover:text-amber-400"
+                    title="Open in Editor"
+                    on:click=open_in_editor
+                >
+                    <OpenFileIcon />
+                </button>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn ErrorDotIcon() -> impl IntoView {
+    view! {
+        <div class="w-2 h-2 rounded-full bg-red-500"></div>
+    }
+}
+
+#[component]
+fn OpenFileIcon() -> impl IntoView {
+    view! {
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 16 16">
+            <path d="M2 4v9h9M5 2h9v9M5 11L14 2"/>
         </svg>
     }
 }

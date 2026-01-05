@@ -535,10 +535,11 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
             ship_updates,
             ship_spawns,
             ship_despawns,
+            mission_spawns,
             mission_updates,
             events,
         } => {
-            game_state.handle_state_update(tick, ship_updates, ship_spawns, ship_despawns, mission_updates, events);
+            game_state.handle_state_update(tick, ship_updates, ship_spawns, ship_despawns, mission_spawns, mission_updates, events);
         }
 
         ServerMessage::ResourceUpdate {

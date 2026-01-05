@@ -270,17 +270,24 @@ impl MissionState {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    /// Returns the string representation of this state.
+    pub fn as_str(&self) -> &str {
         match self {
-            Self::Started => "started".to_string(),
-            Self::AwaitingChoice => "awaiting_choice".to_string(),
-            Self::InCombat => "in_combat".to_string(),
-            Self::InProgress => "in_progress".to_string(),
-            Self::CompletedSuccess => "completed_success".to_string(),
-            Self::CompletedFailure => "completed_failure".to_string(),
-            Self::Abandoned => "abandoned".to_string(),
-            Self::Custom(s) => s.clone(),
+            Self::Started => "started",
+            Self::AwaitingChoice => "awaiting_choice",
+            Self::InCombat => "in_combat",
+            Self::InProgress => "in_progress",
+            Self::CompletedSuccess => "completed_success",
+            Self::CompletedFailure => "completed_failure",
+            Self::Abandoned => "abandoned",
+            Self::Custom(s) => s,
         }
+    }
+}
+
+impl std::fmt::Display for MissionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 

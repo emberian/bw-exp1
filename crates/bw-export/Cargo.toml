@@ -1,0 +1,31 @@
+[package]
+name = "bw-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Export format library for Blackwing game state"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+ciborium = "0.2"  # CBOR serialization
+
+# Compression and archive
+zip = { version = "2.2", default-features = false, features = ["deflate", "time"] }
+crc32fast = "1.4"
+
+# Database (for SQLite exports)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Core types
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+# Internal crates
+bw-shared = { path = "../bw-shared" }
+
+[dev-dependencies]
+tempfile = "3.14"

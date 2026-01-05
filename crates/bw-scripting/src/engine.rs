@@ -745,6 +745,30 @@ impl ScriptEngine {
         result
     }
 
+    /// Run a script function with an existing scope.
+    ///
+    /// This allows passing local variables and state to the function.
+    /// Used by the coroutine scheduler to preserve state across yields.
+    pub fn call_function_with_scope(
+        &self,
+        script_name: &str,
+        function: &str,
+        scope: &mut Scope,
+        args: impl rhai::FuncArgs,
+    ) -> Result<Dynamic, ScriptError> {
+        let scripts = self.scripts.read();
+        let ast = scripts.get(script_name)
+            .ok_or_else(|| ScriptError::NotFound(script_name.to_string()))?;
+
+        let start = Instant::now();
+        let result = self.engine
+            .call_fn::<Dynamic>(scope, ast, function, args)
+            .map_err(|e| ScriptError::from_eval_error(script_name, e));
+        self.profiler.record(script_name, function, start.elapsed());
+
+        result
+    }
+
     /// Run a script function with a custom engine (e.g., debug-enabled).
     ///
     /// This allows executing scripts with a specially configured engine,

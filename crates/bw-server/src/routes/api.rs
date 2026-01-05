@@ -169,20 +169,14 @@ async fn get_current_player(
     let player = state.player_data.get(&auth.player_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let dto = PlayerDto {
-        id: player.id,
-        username: player.username.clone(),
-        reputation: player.resources.reputation,
-        fame: player.resources.fame,
-        faction_tag: state.factions.get(&player.faction_id)
-            .map(|f| f.tag.clone())
-            .unwrap_or_default(),
-        squadron_tag: player.squadron_id.and_then(|sq_id| {
-            state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
-        }),
-        is_online: player.is_online,
-        is_admin: crate::config::config().is_admin(&player.username),
-    };
+    let faction_tag = state.factions.get(&player.faction_id)
+        .map(|f| f.tag.clone())
+        .unwrap_or_default();
+    let squadron_tag = player.squadron_id.and_then(|sq_id| {
+        state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
+    });
+    let is_admin = crate::config::config().is_admin(&player.username);
+    let dto = PlayerDto::from_core(&player, faction_tag, squadron_tag, is_admin);
 
     Ok(Json(dto))
 }
@@ -195,20 +189,14 @@ async fn get_player(
     let player = state.player_data.get(&player_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let dto = PlayerDto {
-        id: player.id,
-        username: player.username.clone(),
-        reputation: player.resources.reputation,
-        fame: player.resources.fame,
-        faction_tag: state.factions.get(&player.faction_id)
-            .map(|f| f.tag.clone())
-            .unwrap_or_default(),
-        squadron_tag: player.squadron_id.and_then(|sq_id| {
-            state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
-        }),
-        is_online: player.is_online,
-        is_admin: crate::config::config().is_admin(&player.username),
-    };
+    let faction_tag = state.factions.get(&player.faction_id)
+        .map(|f| f.tag.clone())
+        .unwrap_or_default();
+    let squadron_tag = player.squadron_id.and_then(|sq_id| {
+        state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
+    });
+    let is_admin = crate::config::config().is_admin(&player.username);
+    let dto = PlayerDto::from_core(&player, faction_tag, squadron_tag, is_admin);
 
     Ok(Json(dto))
 }
@@ -228,24 +216,11 @@ async fn get_my_ships(
 ) -> Json<ShipsResponse> {
     let ships: Vec<ShipDto> = state.ships.iter()
         .filter(|s| s.owner_id == Some(auth.player_id))
-        .map(|s| ShipDto {
-            id: s.id,
-            name: s.name.clone(),
-            owner_id: s.owner_id,
-            ship_class: format!("{:?}", s.ship_class),
-            position: PositionDto {
-                x: s.position.x,
-                y: s.position.y,
-                z: s.position.z,
-            },
-            hull_percent: s.hull_integrity,
-            shield_percent: s.shield_strength,
-            status: format!("{:?}", s.status),
-            faction_tag: s.faction_id.and_then(|fid| {
+        .map(|s| {
+            let faction_tag = s.faction_id.and_then(|fid| {
                 state.factions.get(&fid).map(|f| f.tag.clone())
-            }),
-            is_player: true,
-            is_hostile: false,
+            });
+            ShipDto::from_core(&s, faction_tag)
         })
         .collect();
 
@@ -260,25 +235,10 @@ async fn get_ship(
     let ship = state.ships.get(&ship_id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let dto = ShipDto {
-        id: ship.id,
-        name: ship.name.clone(),
-        owner_id: ship.owner_id,
-        ship_class: format!("{:?}", ship.ship_class),
-        position: PositionDto {
-            x: ship.position.x,
-            y: ship.position.y,
-            z: ship.position.z,
-        },
-        hull_percent: ship.hull_integrity,
-        shield_percent: ship.shield_strength,
-        status: format!("{:?}", ship.status),
-        faction_tag: ship.faction_id.and_then(|fid| {
-            state.factions.get(&fid).map(|f| f.tag.clone())
-        }),
-        is_player: ship.is_player_ship,
-        is_hostile: ship.ship_class.is_hostile(),
-    };
+    let faction_tag = ship.faction_id.and_then(|fid| {
+        state.factions.get(&fid).map(|f| f.tag.clone())
+    });
+    let dto = ShipDto::from_core(&ship, faction_tag);
 
     Ok(Json(dto))
 }

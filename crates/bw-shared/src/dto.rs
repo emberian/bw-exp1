@@ -1,14 +1,166 @@
 //! Data Transfer Objects
 //!
-//! DTOs are simplified versions of models for network transfer.
-//! They contain only the data clients need to see.
+//! Unified types for network transfer and script access.
+//! Types use `#[serde(skip)]` to exclude script-only fields from network serialization.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Player DTO (what clients see about players).
+#[cfg(feature = "scripting")]
+use bw_scripting_macros::RhaiSerialize;
+
+// =============================================================================
+// Unified Ship Type
+// =============================================================================
+
+/// Unified ship representation for both network and scripts.
+///
+/// Core fields are serialized for network transfer.
+/// Script-only fields are marked with `#[serde(skip)]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlayerDto {
+#[cfg_attr(feature = "scripting", derive(RhaiSerialize))]
+pub struct Ship {
+    // === Core fields (serialized to clients) ===
+    #[cfg_attr(feature = "scripting", rhai(as_string))]
+    pub id: Uuid,
+    pub name: String,
+    pub owner_id: Option<Uuid>,
+    pub ship_class: String,
+    pub position: PositionDto,
+    pub hull: f32,
+    pub shields: f32,
+    pub status: String,
+    pub is_player: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub faction_tag: Option<String>,
+    #[serde(default)]
+    pub is_hostile: bool,
+
+    // === Script-only fields (not sent to clients) ===
+    #[serde(skip)]
+    #[cfg_attr(feature = "scripting", rhai(as_string))]
+    pub sector_id: Uuid,
+    #[serde(skip)]
+    pub ammunition: f32,
+    #[serde(skip)]
+    pub fuel: f32,
+    #[serde(skip)]
+    pub morale: f32,
+    #[serde(skip)]
+    pub experience: i32,
+    #[serde(skip)]
+    pub faction_id: Option<Uuid>,
+    #[serde(skip)]
+    pub can_attack: bool,
+    #[serde(skip)]
+    pub can_move: bool,
+    #[serde(skip)]
+    pub attack: f32,
+    #[serde(skip)]
+    pub defense: f32,
+    #[serde(skip)]
+    pub speed: f32,
+    #[serde(skip)]
+    pub sensor_range: f32,
+    #[serde(skip)]
+    pub combat_stance: String,
+    #[serde(skip)]
+    pub locked_target: Option<Uuid>,
+    #[serde(skip)]
+    pub cargo: Vec<CargoItem>,
+    #[serde(skip)]
+    pub cargo_capacity: u32,
+    #[serde(skip)]
+    pub cargo_used: u32,
+    #[serde(skip)]
+    pub upgrades: Vec<InstalledUpgrade>,
+}
+
+/// Cargo item for script access.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "scripting", derive(RhaiSerialize))]
+pub struct CargoItem {
+    #[cfg_attr(feature = "scripting", rhai(rename = "type"))]
+    pub cargo_type: String,
+    pub quantity: u32,
+    #[cfg_attr(feature = "scripting", rhai(rename = "price"))]
+    pub purchase_price: i64,
+}
+
+/// Installed upgrade for script access.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "scripting", derive(RhaiSerialize))]
+pub struct InstalledUpgrade {
+    pub upgrade_id: String,
+    pub slot: String,
+}
+
+impl Ship {
+    /// Create a Ship from a core Ship model.
+    ///
+    /// The `faction_tag` must be resolved externally since it requires
+    /// looking up the faction by ID.
+    pub fn from_core(ship: &bw_core::models::Ship, faction_tag: Option<String>) -> Self {
+        let combat_stats = ship.combat_effectiveness();
+        Self {
+            id: ship.id,
+            name: ship.name.clone(),
+            owner_id: ship.owner_id,
+            ship_class: format!("{:?}", ship.ship_class),
+            position: PositionDto {
+                x: ship.position.x,
+                y: ship.position.y,
+                z: ship.position.z,
+            },
+            hull: ship.hull_integrity,
+            shields: ship.shield_strength,
+            status: format_status(&ship.status),
+            is_player: ship.is_player_ship,
+            faction_tag,
+            is_hostile: ship.ship_class.is_hostile(),
+            // Script-only fields
+            sector_id: ship.sector_id,
+            ammunition: ship.resources.ammunition,
+            fuel: ship.resources.fuel,
+            morale: ship.crew.morale,
+            experience: ship.crew.experience,
+            faction_id: ship.faction_id,
+            can_attack: ship.can_attack(),
+            can_move: ship.can_move(),
+            attack: combat_stats.attack,
+            defense: combat_stats.defense,
+            speed: combat_stats.speed,
+            sensor_range: combat_stats.sensor_range,
+            combat_stance: format_combat_stance(&ship.combat_stance),
+            locked_target: ship.locked_target,
+            cargo: ship.cargo.iter().map(|c| CargoItem {
+                cargo_type: c.cargo_type.clone(),
+                quantity: c.quantity,
+                purchase_price: c.purchase_price,
+            }).collect(),
+            cargo_capacity: ship.cargo_capacity(),
+            cargo_used: ship.cargo_used(),
+            upgrades: ship.upgrades.iter().map(|u| InstalledUpgrade {
+                upgrade_id: u.upgrade_id.clone(),
+                slot: u.slot.clone(),
+            }).collect(),
+        }
+    }
+}
+
+/// Type alias for backward compatibility
+pub type ShipDto = Ship;
+
+// =============================================================================
+// Unified Player Type
+// =============================================================================
+
+/// Unified player representation for both network and scripts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "scripting", derive(RhaiSerialize))]
+pub struct Player {
+    // === Core fields (serialized to clients) ===
+    #[cfg_attr(feature = "scripting", rhai(as_string))]
     pub id: Uuid,
     pub username: String,
     pub reputation: i32,
@@ -16,25 +168,104 @@ pub struct PlayerDto {
     pub faction_tag: String,
     pub squadron_tag: Option<String>,
     pub is_online: bool,
-    /// Whether this player has admin/GM privileges
     #[serde(default)]
     pub is_admin: bool,
+
+    // === Script-only fields ===
+    #[serde(skip)]
+    pub credits: i64,
+    #[serde(skip)]
+    pub game_mode: String,
+    #[serde(skip)]
+    pub owned_ships: Vec<Uuid>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "scripting", rhai(as_string))]
+    pub active_ship_id: Uuid,
+    #[serde(skip)]
+    #[cfg_attr(feature = "scripting", rhai(as_string))]
+    pub sector_id: Uuid,
+    #[serde(skip)]
+    #[cfg_attr(feature = "scripting", rhai(as_string))]
+    pub faction_id: Uuid,
+    #[serde(skip)]
+    pub squadron_id: Option<Uuid>,
+    #[serde(skip)]
+    pub missions_completed: i32,
+    #[serde(skip)]
+    pub missions_failed: i32,
+    #[serde(skip)]
+    pub is_disgraced: bool,
 }
 
-/// Ship DTO (what clients see about ships).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShipDto {
-    pub id: Uuid,
-    pub name: String,
-    pub owner_id: Option<Uuid>,
-    pub ship_class: String,
-    pub position: PositionDto,
-    pub hull_percent: f32,
-    pub shield_percent: f32,
-    pub status: String,
-    pub faction_tag: Option<String>,
-    pub is_player: bool,
-    pub is_hostile: bool,
+impl Player {
+    /// Create a Player from a core Player model.
+    ///
+    /// `is_admin` must be provided externally (from database or session).
+    pub fn from_core(
+        player: &bw_core::models::Player,
+        faction_tag: String,
+        squadron_tag: Option<String>,
+        is_admin: bool,
+    ) -> Self {
+        Self {
+            id: player.id,
+            username: player.username.clone(),
+            reputation: player.resources.reputation,
+            fame: player.resources.fame,
+            faction_tag,
+            squadron_tag,
+            is_online: player.is_online,
+            is_admin,
+            // Script-only fields
+            credits: player.credits,
+            game_mode: format_game_mode(&player.game_mode),
+            owned_ships: player.owned_ships.clone(),
+            active_ship_id: player.active_ship_id,
+            sector_id: player.patrol_sector_id,
+            faction_id: player.faction_id,
+            squadron_id: player.squadron_id,
+            missions_completed: player.missions_completed,
+            missions_failed: player.missions_failed,
+            is_disgraced: player.is_disgraced(),
+        }
+    }
+}
+
+/// Type alias for backward compatibility
+pub type PlayerDto = Player;
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+fn format_status(status: &bw_core::models::ShipStatus) -> String {
+    use bw_core::models::ShipStatus;
+    match status {
+        ShipStatus::Idle => "idle".to_string(),
+        ShipStatus::InTransit { .. } => "in_transit".to_string(),
+        ShipStatus::InCombat { .. } => "in_combat".to_string(),
+        ShipStatus::Docked { .. } => "docked".to_string(),
+        ShipStatus::Disabled => "disabled".to_string(),
+        ShipStatus::Destroyed => "destroyed".to_string(),
+    }
+}
+
+fn format_combat_stance(stance: &bw_core::models::CombatStance) -> String {
+    use bw_core::models::CombatStance;
+    match stance {
+        CombatStance::Aggressive => "aggressive".to_string(),
+        CombatStance::Balanced => "balanced".to_string(),
+        CombatStance::Defensive => "defensive".to_string(),
+        CombatStance::Evasive => "evasive".to_string(),
+    }
+}
+
+fn format_game_mode(mode: &bw_core::models::GameMode) -> String {
+    use bw_core::models::GameMode;
+    match mode {
+        GameMode::Standard => "standard".to_string(),
+        GameMode::Hardcore => "hardcore".to_string(),
+    }
 }
 
 /// Ship update DTO (delta update for existing ship).
@@ -48,7 +279,8 @@ pub struct ShipUpdateDto {
 }
 
 /// Position DTO.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "scripting", derive(RhaiSerialize))]
 pub struct PositionDto {
     pub x: f64,
     pub y: f64,

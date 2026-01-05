@@ -71,7 +71,7 @@ fn handle_create_squadron(ctx, params) {
     if player["reputation"] < min_rep {
         return #{
             success: false,
-            error: "Need " + min_rep + " reputation to create a squadron"
+            error: `Need ${min_rep} reputation to create a squadron`
         };
     }
 

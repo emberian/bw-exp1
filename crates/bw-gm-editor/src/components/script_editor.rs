@@ -41,14 +41,14 @@ pub fn ScriptEditor() -> impl IntoView {
 
             if let Some(el) = editor_ref.get() {
                 if let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>() {
-                    if !cm_initialized.load(Ordering::Relaxed) && !content.is_empty() {
+                    if !cm_initialized.load(Ordering::SeqCst) && !content.is_empty() {
                         // First initialization
                         let on_change = move |new_content: String| {
                             gm_state.script_content.set(new_content);
                         };
                         init_codemirror(html_el, &content, on_change);
-                        cm_initialized.store(true, Ordering::Relaxed);
-                    } else if cm_initialized.load(Ordering::Relaxed) {
+                        cm_initialized.store(true, Ordering::SeqCst);
+                    } else if cm_initialized.load(Ordering::SeqCst) {
                         // Update existing editor
                         update_codemirror_content(html_el, &content);
                     }

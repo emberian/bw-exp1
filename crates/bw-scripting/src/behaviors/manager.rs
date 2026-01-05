@@ -145,8 +145,15 @@ impl BehaviorManager {
         } else {
             // Remove on failure
             self.behaviors.write().remove(&id);
-            if let Some(ids) = self.by_entity.write().get_mut(&entity_id) {
-                ids.retain(|i| *i != id);
+            {
+                let mut by_entity = self.by_entity.write();
+                if let Some(ids) = by_entity.get_mut(&entity_id) {
+                    ids.retain(|i| *i != id);
+                    // Clean up empty vectors to prevent memory leak
+                    if ids.is_empty() {
+                        by_entity.remove(&entity_id);
+                    }
+                }
             }
 
             return Err(ScriptError::runtime(
@@ -164,8 +171,15 @@ impl BehaviorManager {
 
         if let Some(mut behavior) = behavior {
             // Remove from entity index
-            if let Some(ids) = self.by_entity.write().get_mut(&behavior.entity_id) {
-                ids.retain(|id| *id != behavior_id);
+            {
+                let mut by_entity = self.by_entity.write();
+                if let Some(ids) = by_entity.get_mut(&behavior.entity_id) {
+                    ids.retain(|id| *id != behavior_id);
+                    // Clean up empty vectors to prevent memory leak
+                    if ids.is_empty() {
+                        by_entity.remove(&behavior.entity_id);
+                    }
+                }
             }
 
             // Call on_destroy
@@ -265,6 +279,16 @@ impl BehaviorManager {
 
                 // Run the behavior tree
                 let result = self.bt_runner.run(rhai_engine, tree, &ctx, &behavior.script_path);
+
+                // Save updated local_data if any was returned
+                if let Some(updated_data) = result.updated_data {
+                    if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
+                        // Merge updated data into existing local_data
+                        for (key, value) in updated_data {
+                            behavior.local_data.insert(key, value);
+                        }
+                    }
+                }
 
                 if let Some(error) = result.error {
                     tracing::warn!(
@@ -438,8 +462,9 @@ impl BehaviorManager {
             let data = serde_json::to_vec(&behavior.local_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
 
-            // Use "behavior" namespace with entity_id as key
-            store.save("behavior", &entity_id.to_string(), &data)?;
+            // Use "behavior" namespace with behavior.id as key (not entity_id)
+            // to avoid collision when entity has multiple behaviors
+            store.save("behavior", &behavior.id.to_string(), &data)?;
 
             tracing::debug!(
                 entity_id = %entity_id,
@@ -464,7 +489,8 @@ impl BehaviorManager {
             let data = serde_json::to_vec(&behavior.local_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
 
-            store.save("behavior", &behavior.entity_id.to_string(), &data)?;
+            // Use behavior.id as key to avoid collision when entity has multiple behaviors
+            store.save("behavior", &behavior.id.to_string(), &data)?;
             count += 1;
         }
 
@@ -480,37 +506,59 @@ impl BehaviorManager {
             return Ok(false);
         };
 
-        let Some(data) = store.load("behavior", &entity_id.to_string())? else {
-            return Ok(false); // No saved state
-        };
+        // Find all behaviors for this entity and restore each one individually
+        let behavior_ids: Vec<Uuid> = self.behaviors.read()
+            .values()
+            .filter(|b| b.entity_id == entity_id && b.state == BehaviorState::Active)
+            .map(|b| b.id)
+            .collect();
 
-        // Deserialize local_data
-        let local_data: Map = serde_json::from_slice(&data)
-            .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
+        let mut any_restored = false;
+        for behavior_id in behavior_ids {
+            let Some(data) = store.load("behavior", &behavior_id.to_string())? else {
+                continue; // No saved state for this behavior
+            };
 
-        // Apply to the behavior
-        let mut behaviors = self.behaviors.write();
-        for behavior in behaviors.values_mut() {
-            if behavior.entity_id == entity_id && behavior.state == BehaviorState::Active {
-                behavior.local_data = local_data.clone();
+            // Deserialize local_data
+            let local_data: Map = serde_json::from_slice(&data)
+                .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
+
+            // Apply to the behavior
+            if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
+                behavior.local_data = local_data;
                 tracing::debug!(
                     entity_id = %entity_id,
-                    behavior_id = %behavior.id,
+                    behavior_id = %behavior_id,
                     "Restored behavior state"
                 );
+                any_restored = true;
             }
         }
 
-        Ok(true)
+        Ok(any_restored)
     }
 
-    /// Clear persisted state for an entity.
+    /// Clear persisted state for an entity's behaviors.
     pub fn clear_persisted_state(&self, entity_id: Uuid) -> Result<bool, PersistenceError> {
         let Some(store) = &self.state_store else {
             return Ok(false);
         };
 
-        store.delete("behavior", &entity_id.to_string())
+        // Find all behaviors for this entity and clear each one
+        let behavior_ids: Vec<Uuid> = self.behaviors.read()
+            .values()
+            .filter(|b| b.entity_id == entity_id)
+            .map(|b| b.id)
+            .collect();
+
+        let mut any_deleted = false;
+        for behavior_id in behavior_ids {
+            if store.delete("behavior", &behavior_id.to_string())? {
+                any_deleted = true;
+            }
+        }
+
+        Ok(any_deleted)
     }
 
     // === Private helpers ===

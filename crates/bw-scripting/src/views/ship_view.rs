@@ -104,7 +104,7 @@ impl ShipView {
             accessor.get_ship(self.id)
                 .ok()
                 .flatten()
-                .map(|s| s.is_player_ship)
+                .map(|s| s.is_player)
                 .unwrap_or(false)
         }).unwrap_or(false)
     }

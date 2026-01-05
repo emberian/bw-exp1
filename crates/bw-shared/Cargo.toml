@@ -3,6 +3,10 @@ name = "bw-shared"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+scripting = ["dep:bw-scripting-macros", "dep:rhai"]
+
 [dependencies]
 bw-core = { path = "../bw-core" }
 uuid.workspace = true
@@ -10,3 +14,7 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rmp-serde.workspace = true
+
+# Optional scripting support (for RhaiSerialize derives)
+bw-scripting-macros = { path = "../bw-scripting-macros", optional = true }
+rhai = { workspace = true, optional = true }

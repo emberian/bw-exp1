@@ -204,6 +204,7 @@ pub enum ServerMessage {
         ship_updates: Vec<ShipUpdateDto>,
         ship_spawns: Vec<ShipDto>,
         ship_despawns: Vec<Uuid>,
+        mission_spawns: Vec<MissionDto>,
         mission_updates: Vec<MissionUpdateDto>,
         events: Vec<GameEventDto>,
     },

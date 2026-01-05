@@ -11,8 +11,9 @@ use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use bw_core::models::{Faction, Mission, Player, Sector, Ship, Squadron};
+use bw_game::state::StateAccessor;
 use bw_game::systems::CombatEngagement;
-use bw_scripting::{BehaviorManager, EntityBehavior, StateAccessor};
+use bw_scripting::{BehaviorManager, EntityBehavior};
 use bw_shared::ServerMessage;
 
 use super::config::PlaytestError;
@@ -90,7 +91,7 @@ impl PlaytestInstance {
     /// This must be called after the instance is registered with the PlaytestManager
     /// because the StateAccessor needs a reference to the instance as a StateProvider.
     pub fn initialize_scripting(self: &Arc<Self>) {
-        use bw_scripting::StateAccessor;
+        use bw_game::state::StateAccessor;
 
         // Create state accessor with self as provider
         let accessor = Arc::new(StateAccessor::new(self.clone()));

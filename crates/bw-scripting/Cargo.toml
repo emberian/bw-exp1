@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 bw-core = { path = "../bw-core" }
+bw-shared = { path = "../bw-shared" }
 bw-game = { path = "../bw-game" }
 bw-ai = { path = "../bw-ai" }
 bw-scripting-macros = { path = "../bw-scripting-macros" }

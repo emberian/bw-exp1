@@ -13,7 +13,7 @@ pub fn register(engine: &mut Engine) {
     // === Yield functions ===
 
     // yield_ticks(count: i64) -> ()
-    // Pause execution for a number of game ticks (at 10 TPS)
+    // Pause execution for a number of game ticks
     engine.register_fn("yield_ticks", |ticks: i64| {
         let ticks = ticks.max(0) as u64;
         YIELD_REQUEST.with(|req| {
@@ -78,7 +78,7 @@ pub fn register(engine: &mut Engine) {
     // schedule_seconds(delay: f64, callback: String) -> ()
     // Schedule with delay in seconds
     engine.register_fn("schedule_seconds", |delay: f64, callback: String| {
-        let delay_ticks = (delay.max(0.0) * 10.0).ceil() as u64;
+        let delay_ticks = (delay.max(0.0) * bw_shared::constants::TICK_RATE as f64).ceil() as u64;
         YIELD_REQUEST.with(|req| {
             *req.borrow_mut() = Some(YieldRequest {
                 yield_type: YieldType::Schedule {

@@ -68,23 +68,25 @@ pub struct BtResult {
     pub trace: Vec<String>,
     /// Any error that occurred.
     pub error: Option<String>,
+    /// Updated local data from script execution (if any).
+    pub updated_data: Option<Map>,
 }
 
 impl BtResult {
     pub fn success() -> Self {
-        Self { status: BtStatus::Success, trace: vec![], error: None }
+        Self { status: BtStatus::Success, trace: vec![], error: None, updated_data: None }
     }
 
     pub fn failure() -> Self {
-        Self { status: BtStatus::Failure, trace: vec![], error: None }
+        Self { status: BtStatus::Failure, trace: vec![], error: None, updated_data: None }
     }
 
     pub fn running() -> Self {
-        Self { status: BtStatus::Running, trace: vec![], error: None }
+        Self { status: BtStatus::Running, trace: vec![], error: None, updated_data: None }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { status: BtStatus::Failure, trace: vec![], error: Some(msg.into()) }
+        Self { status: BtStatus::Failure, trace: vec![], error: Some(msg.into()), updated_data: None }
     }
 }
 
@@ -105,6 +107,8 @@ pub struct BehaviorTreeRunner {
     subtrees: RwLock<HashMap<String, BtNode>>,
     /// Enable debug tracing.
     debug: bool,
+    /// Accumulated data updates from script execution (per-run).
+    pending_data_updates: RwLock<Option<Map>>,
 }
 
 impl BehaviorTreeRunner {
@@ -141,13 +145,20 @@ impl BehaviorTreeRunner {
         ctx: &AiContext,
         script_path: &str,
     ) -> BtResult {
+        // Clear any pending data updates from previous run
+        *self.pending_data_updates.write() = None;
+
         let mut trace = if self.debug { Some(Vec::new()) } else { None };
         let result = self.run_node(engine, tree, ctx, script_path, "root", &mut trace);
+
+        // Take accumulated data updates
+        let updated_data = self.pending_data_updates.write().take();
 
         BtResult {
             status: result,
             trace: trace.unwrap_or_default(),
             error: None,
+            updated_data,
         }
     }
 
@@ -296,7 +307,24 @@ impl BehaviorTreeRunner {
         let ctx_dynamic = ctx.to_dynamic();
 
         match engine.call_fn::<Dynamic>(&mut scope, ast, name, (ctx_dynamic,)) {
-            Ok(result) => parse_status_result(result),
+            Ok(result) => {
+                let (status, local_data) = parse_status_and_data(result);
+
+                // Merge any returned local_data into pending updates
+                if let Some(data) = local_data {
+                    let mut pending = self.pending_data_updates.write();
+                    if let Some(ref mut existing) = *pending {
+                        // Merge new data into existing
+                        for (key, value) in data {
+                            existing.insert(key, value);
+                        }
+                    } else {
+                        *pending = Some(data);
+                    }
+                }
+
+                status
+            }
             Err(e) => {
                 if !e.to_string().contains("Function not found") {
                     tracing::warn!("Action '{}' failed: {}", name, e);
@@ -576,39 +604,51 @@ impl BehaviorTreeRunner {
     }
 }
 
-/// Parse a Dynamic result into a BtStatus.
-fn parse_status_result(result: Dynamic) -> BtStatus {
+/// Parse a Dynamic result into a BtStatus and optional local_data.
+fn parse_status_and_data(result: Dynamic) -> (BtStatus, Option<Map>) {
     // Check for string status
     if let Some(status_str) = result.clone().try_cast::<String>() {
-        return match status_str.to_lowercase().as_str() {
+        let status = match status_str.to_lowercase().as_str() {
             "success" => BtStatus::Success,
             "failure" | "fail" => BtStatus::Failure,
             "running" => BtStatus::Running,
             _ => BtStatus::Success,
         };
+        return (status, None);
     }
 
     // Check for bool
     if let Some(success) = result.clone().try_cast::<bool>() {
-        return if success { BtStatus::Success } else { BtStatus::Failure };
+        let status = if success { BtStatus::Success } else { BtStatus::Failure };
+        return (status, None);
     }
 
     // Check for map with status field
     if let Some(map) = result.try_cast::<Map>() {
-        if let Some(status) = map.get("status") {
-            if let Some(s) = status.clone().try_cast::<String>() {
-                return match s.to_lowercase().as_str() {
+        let status = if let Some(status_val) = map.get("status") {
+            if let Some(s) = status_val.clone().try_cast::<String>() {
+                match s.to_lowercase().as_str() {
                     "success" => BtStatus::Success,
                     "failure" | "fail" => BtStatus::Failure,
                     "running" => BtStatus::Running,
                     _ => BtStatus::Success,
-                };
+                }
+            } else {
+                BtStatus::Success
             }
-        }
+        } else {
+            BtStatus::Success
+        };
+
+        // Extract local_data if present
+        let local_data = map.get("local_data")
+            .and_then(|d| d.clone().try_cast::<Map>());
+
+        return (status, local_data);
     }
 
     // Default to success if function completed without error
-    BtStatus::Success
+    (BtStatus::Success, None)
 }
 
 #[cfg(test)]

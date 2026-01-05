@@ -101,24 +101,9 @@ pub fn try_spawn_npcs(
     let ship_id = npc_ship.id;
     let sector_id = sector.sector.id;
 
-    // Create DTO for broadcast
-    let ship_dto = ShipDto {
-        id: ship_id,
-        name: npc_ship.name.clone(),
-        owner_id: None,
-        ship_class: format!("{:?}", ship_class),
-        position: PositionDto {
-            x: position.x,
-            y: position.y,
-            z: position.z,
-        },
-        hull_percent: npc_ship.hull_integrity,
-        shield_percent: npc_ship.shield_strength,
-        status: "Idle".to_string(),
-        faction_tag: faction_id.and_then(|fid| state.factions.get(&fid).map(|f| f.tag.clone())),
-        is_player: false,
-        is_hostile: ship_class.is_hostile(),
-    };
+    // Create DTO for broadcast (before inserting ship into state)
+    let faction_tag = faction_id.and_then(|fid| state.factions.get(&fid).map(|f| f.tag.clone()));
+    let ship_dto = ShipDto::from_core(&npc_ship, faction_tag);
 
     // Add to state
     state.ships.insert(ship_id, npc_ship);
@@ -201,6 +186,14 @@ pub fn cleanup_npcs(
     }
 
     despawned
+}
+
+/// Remove a single NPC ship from the game.
+/// Used for cleanup when behavior attachment fails.
+pub fn remove_npc_ship(state: &GameState, sector: &SectorInstance, ship_id: Uuid) {
+    sector.ship_ids.remove(&ship_id);
+    state.ships.remove(&ship_id);
+    tracing::debug!("Removed NPC {} due to failed behavior attachment", ship_id);
 }
 
 // =============================================================================

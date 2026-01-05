@@ -1,10 +1,18 @@
 //! GM Editor state management
 
 mod debug_state;
+mod export_state;
+mod inspector_state;
+mod schema_state;
 mod staged_changes;
+mod validation_state;
 
 pub use debug_state::*;
+pub use export_state::*;
+pub use inspector_state::*;
+pub use schema_state::*;
 pub use staged_changes::*;
+pub use validation_state::*;
 
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -12,7 +20,7 @@ use uuid::Uuid;
 use bw_shared::{ScriptFileInfo, EntitySummary, SectorSummaryAdmin};
 
 /// A script error entry for display
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)] // Fields read by UI components (not yet implemented)
 pub struct ScriptErrorEntry {
     pub script: String,

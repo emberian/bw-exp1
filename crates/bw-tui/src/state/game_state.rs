@@ -35,8 +35,8 @@ impl From<ShipDto> for ShipInfo {
             name: dto.name,
             ship_class: dto.ship_class,
             position: (dto.position.x, dto.position.y),
-            hull_percent: dto.hull_percent,
-            shield_percent: dto.shield_percent,
+            hull_percent: dto.hull,
+            shield_percent: dto.shields,
             is_player: dto.is_player,
             is_hostile: dto.is_hostile,
             status: dto.status,
@@ -329,8 +329,8 @@ impl GameState {
                 self.ship_id = Some(ship.id);
                 self.ship_name = ship.name;
                 self.ship_class = ship.ship_class;
-                self.ship_hull = ship.hull_percent;
-                self.ship_shields = ship.shield_percent;
+                self.ship_hull = ship.hull;
+                self.ship_shields = ship.shields;
                 self.ship_status = ship.status;
                 self.position = (ship.position.x, ship.position.y);
 
@@ -360,6 +360,7 @@ impl GameState {
                 ship_updates,
                 ship_spawns,
                 ship_despawns,
+                mission_spawns,
                 mission_updates,
                 events,
             } => {
@@ -409,6 +410,11 @@ impl GameState {
 
                 // Remove despawned ships
                 self.ships.retain(|s| !ship_despawns.contains(&s.id));
+
+                // Add spawned missions
+                for mission in mission_spawns {
+                    self.available_missions.push(MissionInfo::from(mission));
+                }
 
                 // Update missions
                 for update in mission_updates {

@@ -5,7 +5,7 @@
 use uuid::Uuid;
 
 use bw_core::models::{CombatStance, Position, Ship};
-use bw_scripting::{
+use bw_game::state::{
     MutationResult, PlayerSnapshot, SectorSnapshot, ShipSnapshot, StateProvider, StateMutation,
 };
 use bw_shared::ServerMessage;
@@ -14,7 +14,12 @@ use super::instance::PlaytestInstance;
 
 impl StateProvider for PlaytestInstance {
     fn get_ship(&self, ship_id: Uuid) -> Option<ShipSnapshot> {
-        self.ships.get(&ship_id).map(|ship| ShipSnapshot::from_ship(&ship))
+        self.ships.get(&ship_id).map(|ship| {
+            let faction_tag = ship.faction_id.and_then(|fid| {
+                self.factions.get(&fid).map(|f| f.tag.clone())
+            });
+            ShipSnapshot::from_core(&ship, faction_tag)
+        })
     }
 
     fn get_ships_in_sector(&self, sector_id: Uuid) -> Vec<ShipSnapshot> {
@@ -25,7 +30,12 @@ impl StateProvider for PlaytestInstance {
                     .ship_ids
                     .iter()
                     .filter_map(|entry| self.ships.get(entry.key()))
-                    .map(|ship| ShipSnapshot::from_ship(&ship))
+                    .map(|ship| {
+                        let faction_tag = ship.faction_id.and_then(|fid| {
+                            self.factions.get(&fid).map(|f| f.tag.clone())
+                        });
+                        ShipSnapshot::from_core(&ship, faction_tag)
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -45,7 +55,12 @@ impl StateProvider for PlaytestInstance {
                     .iter()
                     .filter_map(|entry| self.ships.get(entry.key()))
                     .filter(|ship| ship.position.distance_to(&position) <= range)
-                    .map(|ship| ShipSnapshot::from_ship(&ship))
+                    .map(|ship| {
+                        let faction_tag = ship.faction_id.and_then(|fid| {
+                            self.factions.get(&fid).map(|f| f.tag.clone())
+                        });
+                        ShipSnapshot::from_core(&ship, faction_tag)
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -54,7 +69,15 @@ impl StateProvider for PlaytestInstance {
     fn get_player(&self, player_id: Uuid) -> Option<PlayerSnapshot> {
         self.player_data
             .get(&player_id)
-            .map(|player| PlayerSnapshot::from_player(&player))
+            .map(|player| {
+                let faction_tag = self.factions.get(&player.faction_id)
+                    .map(|f| f.tag.clone())
+                    .unwrap_or_default();
+                let squadron_tag = player.squadron_id.and_then(|sid| {
+                    self.squadrons.get(&sid).map(|s| s.tag.clone())
+                });
+                PlayerSnapshot::from_core(&player, faction_tag, squadron_tag, false)
+            })
     }
 
     fn get_sector(&self, sector_id: Uuid) -> Option<SectorSnapshot> {

@@ -1,198 +1,79 @@
 //! Read-only state snapshots for scripts
 //!
-//! Snapshots are immutable views of game state that scripts receive when querying.
-//! They can be converted to Rhai Dynamic maps for script consumption.
+//! Re-exports unified types from bw-shared and provides conversion helpers.
+//! Scripts receive these immutable views when querying game state.
 
 use uuid::Uuid;
 
 use bw_core::models::{
-    DangerLevel, Position, Ship, ShipStatus, Player, Sector, Location,
-    LocationType, TrafficDensity, CombatStance, CargoItem, GameMode, InstalledUpgrade,
+    DangerLevel, Position, Ship as CoreShip, Player as CorePlayer, Sector, Location,
+    LocationType, TrafficDensity,
 };
 use crate::RhaiSerialize;
 
-/// Read-only snapshot of a ship's state.
-#[derive(Debug, Clone, RhaiSerialize)]
-pub struct ShipSnapshot {
-    #[rhai(as_string)]
-    pub id: Uuid,
-    pub name: String,
-    pub owner_id: Option<Uuid>,
-    pub ship_class: String,
-    #[rhai(as_string)]
-    pub sector_id: Uuid,
-    pub position: PositionSnapshot,
-    pub hull: f32,
-    pub shields: f32,
-    pub ammunition: f32,
-    pub fuel: f32,
-    pub morale: f32,
-    pub experience: i32,
-    pub status: String,
-    pub is_player_ship: bool,
-    pub faction_id: Option<Uuid>,
-    pub can_attack: bool,
-    pub can_move: bool,
-    // Calculated combat stats
-    pub attack: f32,
-    pub defense: f32,
-    pub speed: f32,
-    pub sensor_range: f32,
-    // Combat control
-    pub combat_stance: String,
-    pub locked_target: Option<Uuid>,
-    // Cargo
-    pub cargo: Vec<CargoSnapshot>,
-    pub cargo_capacity: u32,
-    pub cargo_used: u32,
-    // Upgrades
-    pub upgrades: Vec<UpgradeSnapshot>,
+// =============================================================================
+// Re-export unified types from bw-shared
+// =============================================================================
+
+/// Unified ship snapshot - re-exported from bw-shared.
+pub use bw_shared::dto::Ship as ShipSnapshot;
+
+/// Unified player snapshot - re-exported from bw-shared.
+pub use bw_shared::dto::Player as PlayerSnapshot;
+
+/// Position snapshot - re-exported from bw-shared.
+pub use bw_shared::dto::PositionDto as PositionSnapshot;
+
+/// Cargo item snapshot - re-exported from bw-shared.
+pub use bw_shared::dto::CargoItem as CargoSnapshot;
+
+/// Installed upgrade snapshot - re-exported from bw-shared.
+pub use bw_shared::dto::InstalledUpgrade as UpgradeSnapshot;
+
+// =============================================================================
+// Conversion helpers
+// =============================================================================
+
+/// Create a ShipSnapshot from a core Ship model.
+///
+/// The `faction_tag` must be resolved externally since it requires
+/// looking up the faction by ID.
+pub fn ship_snapshot_from_ship(ship: &CoreShip, faction_tag: Option<String>) -> ShipSnapshot {
+    bw_shared::dto::Ship::from_core(ship, faction_tag)
 }
 
-/// Read-only snapshot of an installed upgrade.
-#[derive(Debug, Clone, RhaiSerialize)]
-pub struct UpgradeSnapshot {
-    pub upgrade_id: String,
-    pub slot: String,
+/// Create a PlayerSnapshot from a core Player model.
+///
+/// Tags and admin status must be resolved externally.
+pub fn player_snapshot_from_player(
+    player: &CorePlayer,
+    faction_tag: String,
+    squadron_tag: Option<String>,
+    is_admin: bool,
+) -> PlayerSnapshot {
+    bw_shared::dto::Player::from_core(player, faction_tag, squadron_tag, is_admin)
 }
 
-impl UpgradeSnapshot {
-    pub fn from_upgrade(upgrade: &InstalledUpgrade) -> Self {
-        Self {
-            upgrade_id: upgrade.upgrade_id.clone(),
-            slot: upgrade.slot.clone(),
-        }
+/// Create a PositionSnapshot from a Position.
+pub fn position_from_core(pos: &Position) -> PositionSnapshot {
+    PositionSnapshot {
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
     }
 }
 
-/// Read-only snapshot of a cargo item.
-#[derive(Debug, Clone, RhaiSerialize)]
-pub struct CargoSnapshot {
-    #[rhai(rename = "type")]
-    pub cargo_type: String,
-    pub quantity: u32,
-    #[rhai(rename = "price")]
-    pub purchase_price: i64,
+/// Calculate distance between two positions.
+pub fn position_distance(a: &PositionSnapshot, b: &PositionSnapshot) -> f64 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    let dz = a.z - b.z;
+    (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-impl CargoSnapshot {
-    pub fn from_cargo(item: &CargoItem) -> Self {
-        Self {
-            cargo_type: item.cargo_type.clone(),
-            quantity: item.quantity,
-            purchase_price: item.purchase_price,
-        }
-    }
-}
-
-impl ShipSnapshot {
-    /// Create a snapshot from a Ship reference.
-    pub fn from_ship(ship: &Ship) -> Self {
-        let combat_stats = ship.combat_effectiveness();
-
-        Self {
-            id: ship.id,
-            name: ship.name.clone(),
-            owner_id: ship.owner_id,
-            ship_class: format!("{:?}", ship.ship_class),
-            sector_id: ship.sector_id,
-            position: PositionSnapshot::from_position(&ship.position),
-            hull: ship.hull_integrity,
-            shields: ship.shield_strength,
-            ammunition: ship.resources.ammunition,
-            fuel: ship.resources.fuel,
-            morale: ship.crew.morale,
-            experience: ship.crew.experience,
-            status: status_to_string(&ship.status),
-            is_player_ship: ship.is_player_ship,
-            faction_id: ship.faction_id,
-            can_attack: ship.can_attack(),
-            can_move: ship.can_move(),
-            attack: combat_stats.attack,
-            defense: combat_stats.defense,
-            speed: combat_stats.speed,
-            sensor_range: combat_stats.sensor_range,
-            combat_stance: combat_stance_to_string(&ship.combat_stance),
-            locked_target: ship.locked_target,
-            cargo: ship.cargo.iter().map(CargoSnapshot::from_cargo).collect(),
-            cargo_capacity: ship.cargo_capacity(),
-            cargo_used: ship.cargo_used(),
-            upgrades: ship.upgrades.iter().map(UpgradeSnapshot::from_upgrade).collect(),
-        }
-    }
-}
-
-/// Read-only snapshot of a position.
-#[derive(Debug, Clone, Copy, RhaiSerialize)]
-pub struct PositionSnapshot {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-}
-
-impl PositionSnapshot {
-    pub fn from_position(pos: &Position) -> Self {
-        Self {
-            x: pos.x,
-            y: pos.y,
-            z: pos.z,
-        }
-    }
-
-    pub fn distance_to(&self, other: &PositionSnapshot) -> f64 {
-        let dx = self.x - other.x;
-        let dy = self.y - other.y;
-        let dz = self.z - other.z;
-        (dx * dx + dy * dy + dz * dz).sqrt()
-    }
-}
-
-/// Read-only snapshot of a player's state.
-#[derive(Debug, Clone, RhaiSerialize)]
-pub struct PlayerSnapshot {
-    #[rhai(as_string)]
-    pub id: Uuid,
-    pub username: String,
-    pub reputation: i32,
-    pub fame: i32,
-    pub credits: i64,
-    pub game_mode: String,
-    pub owned_ships: Vec<Uuid>,
-    #[rhai(as_string)]
-    pub active_ship_id: Uuid,
-    #[rhai(as_string)]
-    pub sector_id: Uuid,
-    #[rhai(as_string)]
-    pub faction_id: Uuid,
-    pub squadron_id: Option<Uuid>,
-    pub is_online: bool,
-    pub missions_completed: i32,
-    pub missions_failed: i32,
-    pub is_disgraced: bool,
-}
-
-impl PlayerSnapshot {
-    /// Create a snapshot from a Player reference.
-    pub fn from_player(player: &Player) -> Self {
-        Self {
-            id: player.id,
-            username: player.username.clone(),
-            reputation: player.resources.reputation,
-            fame: player.resources.fame,
-            credits: player.credits,
-            game_mode: game_mode_to_string(&player.game_mode),
-            owned_ships: player.owned_ships.clone(),
-            active_ship_id: player.active_ship_id,
-            sector_id: player.patrol_sector_id,
-            faction_id: player.faction_id,
-            squadron_id: player.squadron_id,
-            is_online: player.is_online,
-            missions_completed: player.missions_completed,
-            missions_failed: player.missions_failed,
-            is_disgraced: player.is_disgraced(),
-        }
-    }
-}
+// =============================================================================
+// Sector and Location snapshots (kept local for now)
+// =============================================================================
 
 /// Read-only snapshot of a sector's state.
 #[derive(Debug, Clone, RhaiSerialize)]
@@ -243,7 +124,7 @@ impl LocationSnapshot {
             id: loc.id,
             name: loc.name.clone(),
             location_type: location_type_to_string(&loc.location_type),
-            position: PositionSnapshot::from_position(&loc.position),
+            position: position_from_core(&loc.position),
             faction_id: loc.faction_id,
             is_active: loc.is_active,
             is_dockable: loc.location_type.is_dockable(),
@@ -251,18 +132,9 @@ impl LocationSnapshot {
     }
 }
 
-// Helper functions to convert enums to strings
-
-fn status_to_string(status: &ShipStatus) -> String {
-    match status {
-        ShipStatus::Idle => "idle".to_string(),
-        ShipStatus::InTransit { .. } => "in_transit".to_string(),
-        ShipStatus::InCombat { .. } => "in_combat".to_string(),
-        ShipStatus::Docked { .. } => "docked".to_string(),
-        ShipStatus::Disabled => "disabled".to_string(),
-        ShipStatus::Destroyed => "destroyed".to_string(),
-    }
-}
+// =============================================================================
+// Helper functions
+// =============================================================================
 
 fn danger_level_to_string(level: &DangerLevel) -> String {
     match level {
@@ -298,21 +170,5 @@ fn location_type_to_string(loc_type: &LocationType) -> String {
         LocationType::FreePort => "free_port".to_string(),
         LocationType::Archive => "archive".to_string(),
         LocationType::Shipyard => "shipyard".to_string(),
-    }
-}
-
-fn combat_stance_to_string(stance: &CombatStance) -> String {
-    match stance {
-        CombatStance::Aggressive => "aggressive".to_string(),
-        CombatStance::Balanced => "balanced".to_string(),
-        CombatStance::Defensive => "defensive".to_string(),
-        CombatStance::Evasive => "evasive".to_string(),
-    }
-}
-
-fn game_mode_to_string(mode: &GameMode) -> String {
-    match mode {
-        GameMode::Standard => "standard".to_string(),
-        GameMode::Hardcore => "hardcore".to_string(),
     }
 }

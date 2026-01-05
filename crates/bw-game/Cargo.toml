@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 bw-core = { path = "../bw-core" }
+bw-shared = { path = "../bw-shared", features = ["scripting"] }
 bw-scripting-macros = { path = "../bw-scripting-macros" }
 uuid.workspace = true
 serde.workspace = true

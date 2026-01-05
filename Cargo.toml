@@ -11,6 +11,8 @@ members = [
     "crates/bw-frontend",
     "crates/bw-gm-editor",
     "crates/bw-tui",
+    "crates/bw-export",
+    "crates/bw-export-tool",
 ]
 
 [workspace.package]
