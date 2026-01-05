@@ -4,6 +4,7 @@
 
 use leptos::prelude::*;
 use uuid::Uuid;
+use wasm_bindgen::prelude::*;
 
 use crate::api::WsService;
 use crate::state::{GameState, MissionInfo};
@@ -97,12 +98,9 @@ where
         }
     };
 
-    // Format expiry time
-    let expiry_text = expires_in.map(|secs| {
-        let mins = secs / 60;
-        let remaining_secs = secs % 60;
-        format!("{}:{:02}", mins, remaining_secs)
-    });
+    // Expiry countdown (if applicable)
+    let has_expiry = expires_in.is_some();
+    let expiry_seconds = expires_in.unwrap_or(0);
 
     // Type indicator color
     let type_color = match mission_type.as_str() {
@@ -139,9 +137,9 @@ where
                         <span class="text-xs text-amber-500 font-bold">"HIGH PROFILE"</span>
                     </Show>
                 </div>
-                {expiry_text.map(|text| view! {
-                    <span class="text-xs text-slate-400">{text}</span>
-                })}
+                <Show when=move || has_expiry>
+                    <CountdownTimer initial_seconds=expiry_seconds />
+                </Show>
             </div>
             <p class="text-sm text-slate-400 mb-3">{description}</p>
             <div class="flex justify-between items-center">
@@ -220,5 +218,74 @@ where
                 </button>
             </div>
         </div>
+    }
+}
+
+/// Countdown timer component for mission expiry.
+#[component]
+fn CountdownTimer(initial_seconds: u32) -> impl IntoView {
+    let remaining = RwSignal::new(initial_seconds);
+
+    // Store interval handle in a signal for cleanup
+    let interval_handle = RwSignal::new(Option::<i32>::None);
+
+    // Create the interval callback
+    let tick = Closure::wrap(Box::new(move || {
+        remaining.update(|secs| {
+            if *secs > 0 {
+                *secs -= 1;
+            }
+        });
+    }) as Box<dyn FnMut()>);
+
+    // Start the interval (1000ms = 1 second)
+    if let Some(window) = web_sys::window() {
+        if let Ok(handle) = window.set_interval_with_callback_and_timeout_and_arguments_0(
+            tick.as_ref().unchecked_ref(),
+            1000,
+        ) {
+            interval_handle.set(Some(handle));
+        }
+    }
+
+    // Keep the closure alive
+    tick.forget();
+
+    // Clean up interval on unmount - use a signal which is Send+Sync
+    on_cleanup(move || {
+        if let Some(handle) = interval_handle.get_untracked() {
+            if let Some(window) = web_sys::window() {
+                window.clear_interval_with_handle(handle);
+            }
+        }
+    });
+
+    // Format the time display
+    let time_text = move || {
+        let secs = remaining.get();
+        if secs == 0 {
+            "Expired".to_string()
+        } else {
+            let mins = secs / 60;
+            let remaining_secs = secs % 60;
+            format!("{}:{:02}", mins, remaining_secs)
+        }
+    };
+
+    let time_class = move || {
+        let secs = remaining.get();
+        if secs == 0 {
+            "text-xs text-red-400"
+        } else if secs < 60 {
+            "text-xs text-red-400 animate-pulse"
+        } else if secs < 300 {
+            "text-xs text-amber-400"
+        } else {
+            "text-xs text-slate-400"
+        }
+    };
+
+    view! {
+        <span class=time_class>{time_text}</span>
     }
 }

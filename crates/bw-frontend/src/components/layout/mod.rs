@@ -1,3 +1,7 @@
 //! Layout components
 
-// Layout components will be added here as needed
+mod navbar;
+mod footer;
+
+pub use navbar::Navbar;
+pub use footer::Footer;

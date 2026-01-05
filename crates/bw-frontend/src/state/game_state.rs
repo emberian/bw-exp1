@@ -31,18 +31,31 @@ pub struct GameState {
 
     // Ship state
     pub ship_id: RwSignal<Option<Uuid>>,
+    pub ship_name: RwSignal<String>,
+    pub ship_class: RwSignal<String>,
     pub ship_hull: RwSignal<f32>,
     pub ship_shields: RwSignal<f32>,
+    pub ship_max_hull: RwSignal<f32>,
+    pub ship_max_shields: RwSignal<f32>,
     pub ship_status: RwSignal<String>,
+    pub ship_weapons: RwSignal<Vec<WeaponInfo>>,
 
     // Position
     pub position_x: RwSignal<f64>,
     pub position_y: RwSignal<f64>,
 
+    // Docked state
+    pub docked_station_id: RwSignal<Option<Uuid>>,
+    pub docked_station_name: RwSignal<String>,
+    pub docked_station_services: RwSignal<Vec<String>>,
+
     // Current sector
     pub sector_id: RwSignal<Option<Uuid>>,
     pub sector_name: RwSignal<String>,
     pub sector_danger: RwSignal<String>,
+
+    // Adjacent sectors
+    pub adjacent_sectors: RwSignal<Vec<AdjacentSectorInfo>>,
 
     // Locations in sector
     pub locations: RwSignal<Vec<LocationInfo>>,
@@ -67,6 +80,10 @@ pub struct GameState {
     pub selected_target: RwSignal<Option<Uuid>>,
     pub show_squadron_dialog: RwSignal<bool>,
     pub show_mission_dialog: RwSignal<bool>,
+
+    // Pending invitations/proposals
+    pub pending_squadron_invites: RwSignal<Vec<SquadronInviteInfo>>,
+    pub pending_alliance_proposals: RwSignal<Vec<AllianceProposalInfo>>,
 
     // Combat state
     pub combat_engagement_id: RwSignal<Option<Uuid>>,
@@ -176,6 +193,43 @@ pub struct CombatEventInfo {
     pub message: String,
 }
 
+/// Weapon info for display.
+#[derive(Clone, Debug, Default)]
+pub struct WeaponInfo {
+    pub name: String,
+    pub weapon_type: String,
+    pub damage: f32,
+    pub accuracy: f32,
+    pub ammo_cost: f32,
+}
+
+/// Adjacent sector info for display.
+#[derive(Clone, Debug, Default)]
+pub struct AdjacentSectorInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub danger_level: String,
+}
+
+/// Squadron invite info for display.
+#[derive(Clone, Debug)]
+pub struct SquadronInviteInfo {
+    pub invite_id: Uuid,
+    pub squadron_id: Uuid,
+    pub squadron_name: String,
+    pub squadron_tag: String,
+    pub inviter_name: String,
+}
+
+/// Alliance proposal info for display.
+#[derive(Clone, Debug)]
+pub struct AllianceProposalInfo {
+    pub proposal_id: Uuid,
+    pub from_squadron_id: Uuid,
+    pub from_squadron_name: String,
+    pub from_squadron_tag: String,
+}
+
 impl Default for GameState {
     fn default() -> Self {
         Self::new()
@@ -200,16 +254,27 @@ impl GameState {
             experience: RwSignal::new(0),
 
             ship_id: RwSignal::new(None),
+            ship_name: RwSignal::new("Unknown Ship".to_string()),
+            ship_class: RwSignal::new("Unknown".to_string()),
             ship_hull: RwSignal::new(100.0),
             ship_shields: RwSignal::new(50.0),
+            ship_max_hull: RwSignal::new(100.0),
+            ship_max_shields: RwSignal::new(50.0),
             ship_status: RwSignal::new("Idle".to_string()),
+            ship_weapons: RwSignal::new(vec![]),
 
             position_x: RwSignal::new(0.0),
             position_y: RwSignal::new(0.0),
 
+            docked_station_id: RwSignal::new(None),
+            docked_station_name: RwSignal::new(String::new()),
+            docked_station_services: RwSignal::new(vec![]),
+
             sector_id: RwSignal::new(None),
             sector_name: RwSignal::new("Unknown Sector".to_string()),
             sector_danger: RwSignal::new("Unknown".to_string()),
+
+            adjacent_sectors: RwSignal::new(vec![]),
 
             locations: RwSignal::new(vec![]),
             ships: RwSignal::new(vec![]),
@@ -225,6 +290,9 @@ impl GameState {
             selected_target: RwSignal::new(None),
             show_squadron_dialog: RwSignal::new(false),
             show_mission_dialog: RwSignal::new(false),
+
+            pending_squadron_invites: RwSignal::new(vec![]),
+            pending_alliance_proposals: RwSignal::new(vec![]),
 
             combat_engagement_id: RwSignal::new(None),
             combat_round: RwSignal::new(0),
@@ -290,16 +358,35 @@ impl GameState {
 
         // Ship info
         self.ship_id.set(Some(ship.id));
+        self.ship_name.set(ship.name.clone());
+        self.ship_class.set(ship.ship_class.clone());
         self.position_x.set(ship.position.x);
         self.position_y.set(ship.position.y);
         self.ship_hull.set(ship.hull_percent);
         self.ship_shields.set(ship.shield_percent);
-        self.ship_status.set(ship.status);
+        self.ship_status.set(ship.status.clone());
+
+        // Update docked state based on ship status
+        if ship.status == "Docked" {
+            // Will be populated when station info is available
+        } else {
+            self.docked_station_id.set(None);
+            self.docked_station_name.set(String::new());
+            self.docked_station_services.set(vec![]);
+        }
 
         // Sector info
         self.sector_id.set(Some(sector.id));
-        self.sector_name.set(sector.name);
+        self.sector_name.set(sector.name.clone());
         self.sector_danger.set(sector.danger_level);
+
+        // Adjacent sectors
+        let adjacent: Vec<AdjacentSectorInfo> = sector.adjacent_sectors.into_iter().map(|s| AdjacentSectorInfo {
+            id: s.id,
+            name: s.name,
+            danger_level: s.danger_level,
+        }).collect();
+        self.adjacent_sectors.set(adjacent);
 
         // Locations
         let locs: Vec<LocationInfo> = sector.locations.into_iter().map(|l| LocationInfo {
@@ -350,6 +437,8 @@ impl GameState {
         ship_updates: Vec<ShipUpdateDto>,
         ship_spawns: Vec<ShipDto>,
         ship_despawns: Vec<Uuid>,
+        mission_updates: Vec<MissionUpdateDto>,
+        events: Vec<GameEventDto>,
     ) {
         self.server_tick.set(tick);
 
@@ -369,6 +458,12 @@ impl GameState {
                         self.ship_shields.set(shields);
                     }
                     if let Some(status) = update.status.clone() {
+                        // Clear docked state if no longer docked
+                        if status != "Docked" {
+                            self.docked_station_id.set(None);
+                            self.docked_station_name.set(String::new());
+                            self.docked_station_services.set(vec![]);
+                        }
                         self.ship_status.set(status);
                     }
                 }
@@ -406,6 +501,49 @@ impl GameState {
                 });
             }
         });
+
+        // Process mission updates
+        for update in mission_updates {
+            // Clone status for use in both closures
+            let status_for_available = update.status.clone();
+            let status_for_active = update.status.clone();
+            let update_id = update.id;
+            let update_progress = update.progress;
+
+            self.available_missions.update(|missions| {
+                if let Some(mission) = missions.iter_mut().find(|m| m.id == update_id) {
+                    if let Some(status) = status_for_available {
+                        mission.status = status;
+                    }
+                    if let Some(progress) = update_progress {
+                        mission.progress = progress;
+                    }
+                }
+            });
+
+            // Also update active mission if it matches
+            self.active_mission.update(|active| {
+                if let Some(mission) = active {
+                    if mission.id == update_id {
+                        if let Some(status) = status_for_active {
+                            mission.status = status;
+                        }
+                        if let Some(progress) = update_progress {
+                            mission.progress = progress;
+                        }
+                    }
+                }
+            });
+        }
+
+        // Process game events - show them as notifications
+        for event in events {
+            // Create a human-readable notification from the event
+            let message = format_event_message(&event);
+            if !message.is_empty() {
+                self.notification.set(Some(message));
+            }
+        }
     }
 
     /// Handle mission choice from server.
@@ -543,5 +681,58 @@ impl GameState {
     /// Check if player can manage squadron (leader or officer).
     pub fn can_manage_squadron(&self) -> bool {
         self.squadron.get().map(|s| s.is_leader || s.is_officer).unwrap_or(false)
+    }
+}
+
+/// Format a game event into a human-readable notification message.
+fn format_event_message(event: &GameEventDto) -> String {
+    let event_type = event.event_type.as_str();
+
+    match event_type {
+        "ship_destroyed" => {
+            if let (Some(actor), Some(target)) = (&event.actor_name, &event.target_name) {
+                format!("{} destroyed {}!", actor, target)
+            } else {
+                event.message.clone()
+            }
+        }
+        "player_joined" => {
+            if let Some(actor) = &event.actor_name {
+                format!("{} has entered the sector", actor)
+            } else {
+                event.message.clone()
+            }
+        }
+        "player_left" => {
+            if let Some(actor) = &event.actor_name {
+                format!("{} has left the sector", actor)
+            } else {
+                event.message.clone()
+            }
+        }
+        "mission_completed" => {
+            if let Some(actor) = &event.actor_name {
+                format!("{} completed a mission!", actor)
+            } else {
+                "Mission completed!".to_string()
+            }
+        }
+        "combat_started" => {
+            if let (Some(actor), Some(target)) = (&event.actor_name, &event.target_name) {
+                format!("{} engaged {}!", actor, target)
+            } else {
+                "Combat has started!".to_string()
+            }
+        }
+        "distress_signal" => {
+            "Distress signal detected nearby!".to_string()
+        }
+        "sera_incursion" => {
+            "WARNING: Sera incursion detected!".to_string()
+        }
+        "drone_swarm" => {
+            "WARNING: Drone swarm approaching!".to_string()
+        }
+        _ => event.message.clone(),
     }
 }

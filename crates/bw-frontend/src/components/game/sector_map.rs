@@ -4,9 +4,10 @@
 
 use leptos::prelude::*;
 use uuid::Uuid;
+use wasm_bindgen::JsCast;
 
 use crate::api::WsService;
-use crate::state::{GameState, LocationInfo, ShipInfo};
+use crate::state::{GameState, LocationInfo, ShipInfo, AdjacentSectorInfo};
 
 use super::CombatIndicator;
 
@@ -26,6 +27,11 @@ pub fn SectorMap() -> impl IntoView {
     let selected_target = move || game_state.selected_target.get();
     let sector_name = move || game_state.sector_name.get();
     let sector_danger = move || game_state.sector_danger.get();
+    let adjacent_sectors = move || game_state.adjacent_sectors.get();
+
+    // State for jumpgate/travel panel
+    let show_jump_panel = RwSignal::new(false);
+    let selected_jumpgate = RwSignal::new(Option::<Uuid>::None);
 
     // Click handler for map movement
     let on_click = move |ev: web_sys::MouseEvent| {
@@ -33,10 +39,17 @@ pub fn SectorMap() -> impl IntoView {
         let click_x = ev.offset_x() as f64;
         let click_y = ev.offset_y() as f64;
 
-        // Assume standard map size for coordinate conversion
-        // The actual element size is determined by CSS flex
-        let map_width = 800.0; // Approximate width
-        let map_height = 600.0; // Approximate height
+        // Get actual element dimensions from the target
+        let target = ev.current_target().unwrap();
+        let element: web_sys::Element = target.dyn_into().unwrap();
+        let rect = element.get_bounding_client_rect();
+        let map_width = rect.width();
+        let map_height = rect.height();
+
+        // Avoid division by zero
+        if map_width <= 0.0 || map_height <= 0.0 {
+            return;
+        }
 
         // Convert to sector coordinates (0-1000 range)
         let sector_x = (click_x / map_width) * SECTOR_SIZE;
@@ -70,11 +83,19 @@ pub fn SectorMap() -> impl IntoView {
                 key=|l| l.id
                 children=move |location| {
                     let ws = ws;
+                    let is_jumpgate = location.location_type == "jumpgate";
+                    let location_id = location.id;
                     view! {
                         <LocationMarker
                             location=location.clone()
                             on_click=move |id| {
-                                ws.move_to_location(id);
+                                if is_jumpgate {
+                                    // Show jump panel for jumpgates
+                                    selected_jumpgate.set(Some(location_id));
+                                    show_jump_panel.set(true);
+                                } else {
+                                    ws.move_to_location(id);
+                                }
                             }
                         />
                     }
@@ -140,6 +161,18 @@ pub fn SectorMap() -> impl IntoView {
                         view! { <div /> }.into_any()
                     }
                 }}
+            </Show>
+
+            // Jump/travel panel for inter-sector travel
+            <Show when=move || show_jump_panel.get()>
+                <JumpPanel
+                    adjacent_sectors=adjacent_sectors
+                    on_jump=move |sector_id| {
+                        ws.move_to_sector(sector_id);
+                        show_jump_panel.set(false);
+                    }
+                    on_close=move || show_jump_panel.set(false)
+                />
             </Show>
         </div>
     }
@@ -430,5 +463,78 @@ fn danger_color(danger: &str) -> &'static str {
         "high" | "dangerous" => "text-orange-400",
         "extreme" | "critical" => "text-red-400",
         _ => "text-slate-400",
+    }
+}
+
+/// Jump panel for inter-sector travel.
+#[component]
+fn JumpPanel<S, J, C>(adjacent_sectors: S, on_jump: J, on_close: C) -> impl IntoView
+where
+    S: Fn() -> Vec<AdjacentSectorInfo> + 'static + Clone + Send + Sync,
+    J: Fn(Uuid) + 'static + Clone + Send + Sync,
+    C: Fn() + 'static + Clone + Send + Sync,
+{
+    let on_close_clone = on_close.clone();
+
+    view! {
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-900/95 border border-purple-500/50 rounded-lg p-4 w-80 shadow-lg z-50">
+            // Header
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-semibold text-purple-400">"Jumpgate Navigation"</h3>
+                <button
+                    class="text-slate-400 hover:text-slate-200"
+                    on:click=move |_| on_close_clone()
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
+            // Adjacent sectors list
+            <div class="space-y-2">
+                <div class="text-xs text-slate-400 mb-2">"Available Destinations:"</div>
+                {
+                    let adjacent_for_list = adjacent_sectors.clone();
+                    let adjacent_for_show = adjacent_sectors.clone();
+                    view! {
+                        <For
+                            each=adjacent_for_list
+                            key=|s| s.id
+                            children=move |sector| {
+                                let sector_id = sector.id;
+                                let name = sector.name.clone();
+                                let danger = sector.danger_level.clone();
+                                let danger_display = danger.clone();
+                                let on_jump = on_jump.clone();
+
+                                view! {
+                                    <button
+                                        class="w-full text-left px-3 py-2 bg-slate-800 hover:bg-purple-900/50 rounded-lg border border-slate-700 hover:border-purple-500/50 transition-colors"
+                                        on:click=move |_| on_jump(sector_id)
+                                    >
+                                        <div class="flex justify-between items-center">
+                                            <span class="text-slate-200 font-medium">{name}</span>
+                                            <span class=danger_color(&danger)>{danger_display}</span>
+                                        </div>
+                                    </button>
+                                }
+                            }
+                        />
+
+                        <Show when=move || adjacent_for_show().is_empty()>
+                            <div class="text-sm text-slate-500 italic text-center py-4">
+                                "No connected sectors"
+                            </div>
+                        </Show>
+                    }
+                }
+            </div>
+
+            // Warning
+            <div class="mt-4 pt-3 border-t border-slate-700 text-xs text-slate-500">
+                "Jump travel consumes fuel. Higher danger sectors have more hostile encounters."
+            </div>
+        </div>
     }
 }

@@ -31,7 +31,7 @@ pub fn GamePage() -> impl IntoView {
     });
 
     // Reactive state for UI
-    let connected = move || game_state.connected.get();
+    let _connected = move || game_state.connected.get();
     let server_tick = move || game_state.server_tick.get();
     let sector_name = move || game_state.sector_name.get();
     let ship_status = move || game_state.ship_status.get();
@@ -51,6 +51,10 @@ pub fn GamePage() -> impl IntoView {
         // Find nearest station and dock
         let locations = game_state.locations.get();
         if let Some(station) = locations.iter().find(|l| l.location_type == "station") {
+            // Set docked station info before docking
+            game_state.docked_station_id.set(Some(station.id));
+            game_state.docked_station_name.set(station.name.clone());
+            game_state.docked_station_services.set(station.services.clone());
             ws_dock.dock(station.id);
         } else {
             game_state.set_error("No station nearby to dock at".to_string());
@@ -119,6 +123,12 @@ pub fn GamePage() -> impl IntoView {
                 // Center - sector map
                 <main class="flex-1 relative">
                     <SectorMap />
+
+                    // Station panel (when docked)
+                    <StationPanel />
+
+                    // Pending invites/proposals notifications
+                    <NotificationsPanel />
 
                     // Notification overlay
                     <Show when=move || notification().is_some()>
@@ -218,14 +228,33 @@ pub fn GamePage() -> impl IntoView {
                     // Connection status
                     <div class="flex items-center gap-2">
                         <div class=move || {
-                            if connected() {
-                                "w-2 h-2 rounded-full bg-green-500"
-                            } else {
-                                "w-2 h-2 rounded-full bg-red-500 animate-pulse"
+                            let state = ws.state.get();
+                            match state {
+                                crate::api::ConnectionState::Connected => "w-2 h-2 rounded-full bg-green-500",
+                                crate::api::ConnectionState::Connecting => "w-2 h-2 rounded-full bg-yellow-500 animate-pulse",
+                                crate::api::ConnectionState::Reconnecting => "w-2 h-2 rounded-full bg-amber-500 animate-pulse",
+                                crate::api::ConnectionState::Disconnected => "w-2 h-2 rounded-full bg-red-500",
                             }
                         } />
-                        <span class="text-slate-400">
-                            {move || if connected() { "Connected" } else { "Disconnected" }}
+                        <span class=move || {
+                            let state = ws.state.get();
+                            match state {
+                                crate::api::ConnectionState::Connected => "text-green-400",
+                                crate::api::ConnectionState::Reconnecting => "text-amber-400",
+                                _ => "text-slate-400",
+                            }
+                        }>
+                            {move || {
+                                let state = ws.state.get();
+                                match state {
+                                    crate::api::ConnectionState::Connected => "Connected".to_string(),
+                                    crate::api::ConnectionState::Connecting => "Connecting...".to_string(),
+                                    crate::api::ConnectionState::Reconnecting => {
+                                        format!("Reconnecting ({}/10)...", ws.reconnect_attempt())
+                                    },
+                                    crate::api::ConnectionState::Disconnected => "Disconnected".to_string(),
+                                }
+                            }}
                         </span>
                     </div>
 
@@ -258,10 +287,9 @@ enum RightTab {
 #[component]
 fn TabButton<A, C>(label: &'static str, active: A, on_click: C) -> impl IntoView
 where
-    A: Fn() -> bool + 'static + Clone + Send,
-    C: Fn(web_sys::MouseEvent) + 'static + Clone + Send,
+    A: Fn() -> bool + 'static + Clone + Send + Sync,
+    C: Fn(web_sys::MouseEvent) + 'static + Clone + Send + Sync,
 {
-    let active = active.clone();
     view! {
         <button
             class=move || {

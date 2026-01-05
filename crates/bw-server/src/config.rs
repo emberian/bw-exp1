@@ -5,7 +5,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher, EventKind, event::ModifyKind};
 use parking_lot::RwLock;
@@ -156,7 +155,6 @@ impl ConfigManager {
 
         // Set up file watcher
         let manager_weak = Arc::downgrade(&manager);
-        let watch_path = path.clone();
 
         let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
             match res {

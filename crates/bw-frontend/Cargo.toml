@@ -25,6 +25,8 @@ web-sys = { version = "0.3", features = [
     "Window",
     "Document",
     "Element",
+    "HtmlElement",
+    "DomRect",
     "WebSocket",
     "MessageEvent",
     "BinaryType",
@@ -41,3 +43,4 @@ gloo-timers = "0.3"
 # Utils
 futures.workspace = true
 rmp-serde.workspace = true
+console_error_panic_hook = "0.1"

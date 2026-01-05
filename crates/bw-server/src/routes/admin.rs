@@ -20,6 +20,9 @@ use crate::scripting::{LogLevel, ScriptLogEntry};
 /// Build the admin router.
 pub fn router() -> Router<Arc<GameState>> {
     Router::new()
+        // Full reload (config + scripts)
+        .route("/reload", post(reload_all))
+        .route("/reload/config", post(reload_config))
         // Script management
         .route("/scripts", get(list_scripts))
         .route("/scripts/reload", post(reload_all_scripts))
@@ -44,6 +47,110 @@ pub fn router() -> Router<Arc<GameState>> {
         .route("/logs/clear", post(clear_logs))
         // Stats
         .route("/stats", get(get_stats))
+        // Config info
+        .route("/config", get(get_config))
+}
+
+// =============================================================================
+// Reload Management
+// =============================================================================
+
+/// Reload all watchable resources (config + scripts).
+async fn reload_all(
+    admin: AdminAuth,
+    State(state): State<Arc<GameState>>,
+) -> Json<ActionResponse> {
+    tracing::info!(admin = %admin.username, "Reloading all resources via admin API");
+
+    // Reload config
+    if let Some(config) = crate::config::try_config() {
+        config.reload();
+    }
+
+    // Reload scripts
+    match state.scripts.load_all_scripts() {
+        Ok(()) => {
+            let count = state.scripts.loaded_scripts().len();
+            state.log_script_info(format!("All resources reloaded by {} (HTTP)", admin.username));
+            Json(ActionResponse {
+                success: true,
+                message: Some(format!("Reloaded config and {} scripts", count)),
+            })
+        }
+        Err(e) => Json(ActionResponse {
+            success: false,
+            message: Some(format!("Script reload failed: {}", e)),
+        }),
+    }
+}
+
+/// Reload only the config file.
+async fn reload_config(
+    admin: AdminAuth,
+) -> Json<ActionResponse> {
+    tracing::info!(admin = %admin.username, "Reloading config via admin API");
+
+    if let Some(config) = crate::config::try_config() {
+        config.reload();
+        Json(ActionResponse {
+            success: true,
+            message: Some("Config reloaded".to_string()),
+        })
+    } else {
+        Json(ActionResponse {
+            success: false,
+            message: Some("Config manager not initialized".to_string()),
+        })
+    }
+}
+
+/// Get current config (non-sensitive parts).
+#[derive(Serialize)]
+pub struct ConfigResponse {
+    server: ServerConfigInfo,
+    admin: AdminConfigInfo,
+    scripting: ScriptingConfigInfo,
+}
+
+#[derive(Serialize)]
+pub struct ServerConfigInfo {
+    host: String,
+    port: u16,
+    database_configured: bool,
+}
+
+#[derive(Serialize)]
+pub struct AdminConfigInfo {
+    admin_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct ScriptingConfigInfo {
+    scripts_dir: String,
+    hot_reload: bool,
+    max_log_entries: usize,
+}
+
+async fn get_config(
+    _admin: AdminAuth,
+) -> Json<ConfigResponse> {
+    let config = crate::config::config().get();
+
+    Json(ConfigResponse {
+        server: ServerConfigInfo {
+            host: config.server.host.clone(),
+            port: config.server.port,
+            database_configured: config.server.database_url.is_some(),
+        },
+        admin: AdminConfigInfo {
+            admin_count: config.admin.usernames.len(),
+        },
+        scripting: ScriptingConfigInfo {
+            scripts_dir: config.scripting.scripts_dir.clone(),
+            hot_reload: config.scripting.hot_reload,
+            max_log_entries: config.scripting.max_log_entries,
+        },
+    })
 }
 
 // =============================================================================

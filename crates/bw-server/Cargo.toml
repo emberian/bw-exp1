@@ -55,3 +55,6 @@ base64.workspace = true
 
 # File watching (hot-reload, debug only)
 notify = "7.0"
+
+[dev-dependencies]
+tempfile = "3.14"

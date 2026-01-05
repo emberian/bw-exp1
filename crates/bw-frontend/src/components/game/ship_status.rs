@@ -45,7 +45,7 @@ pub fn ShipStatus() -> impl IntoView {
             // Ship info with status
             <div class="mb-6">
                 <div class="flex justify-between items-center">
-                    <div class="text-slate-200 font-medium">"Patrol Corvette"</div>
+                    <div class="text-slate-200 font-medium">{move || game_state.ship_name.get()}</div>
                     <span class=move || {
                         let status = game_state.ship_status.get();
                         let color = match status.as_str() {
@@ -61,21 +61,21 @@ pub fn ShipStatus() -> impl IntoView {
                         {move || game_state.ship_status.get()}
                     </span>
                 </div>
-                <div class="text-sm text-slate-400">"Class: PatrolCorvette"</div>
+                <div class="text-sm text-slate-400">"Class: "{move || game_state.ship_class.get()}</div>
             </div>
 
             // Hull & Shields - reactive
             <div class="space-y-3 mb-6">
-                <ReactiveStatusBar
+                <ReactiveStatusBarDynamic
                     label="Hull"
                     value=game_state.ship_hull
-                    max=100.0
+                    max=game_state.ship_max_hull
                     critical_threshold=25.0
                 />
-                <ReactiveStatusBar
+                <ReactiveStatusBarDynamic
                     label="Shields"
                     value=game_state.ship_shields
-                    max=50.0
+                    max=game_state.ship_max_shields
                     critical_threshold=10.0
                 />
             </div>
@@ -109,12 +109,12 @@ pub fn ShipStatus() -> impl IntoView {
     }
 }
 
-/// Reactive status bar that updates from signals.
+/// Reactive status bar with dynamic max value from signal.
 #[component]
-fn ReactiveStatusBar(
+fn ReactiveStatusBarDynamic(
     label: &'static str,
     value: RwSignal<f32>,
-    max: f32,
+    max: RwSignal<f32>,
     critical_threshold: f32,
 ) -> impl IntoView {
     let bar_color = move || {
@@ -141,13 +141,20 @@ fn ReactiveStatusBar(
             <div class="flex justify-between text-xs mb-1">
                 <span class="text-slate-400">{label}</span>
                 <span class=text_color>
-                    {move || format!("{:.0}/{:.0}", value.get(), max)}
+                    {move || format!("{:.0}/{:.0}", value.get(), max.get())}
                 </span>
             </div>
             <div class="h-2 bg-slate-700 rounded overflow-hidden">
                 <div
                     class=move || format!("h-full transition-all duration-300 {}", bar_color())
-                    style=move || format!("width: {}%", (value.get() / max * 100.0).min(100.0))
+                    style=move || {
+                        let max_val = max.get();
+                        if max_val > 0.0 {
+                            format!("width: {}%", (value.get() / max_val * 100.0).min(100.0))
+                        } else {
+                            "width: 0%".to_string()
+                        }
+                    }
                 />
             </div>
         </div>

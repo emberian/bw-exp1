@@ -14,7 +14,7 @@ use web_sys::{MessageEvent, WebSocket};
 use bw_shared::messages::*;
 use bw_shared::{ChatChannel, deserialize_message, serialize_message};
 
-use crate::state::{GameState, SquadronInfo};
+use crate::state::{GameState, SquadronInfo, SquadronInviteInfo, AllianceProposalInfo};
 
 /// WebSocket connection state
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,12 +29,25 @@ pub enum ConnectionState {
 #[derive(Clone, Debug)]
 pub struct OutgoingMessage(pub ClientMessage);
 
+/// Maximum reconnect attempts before giving up.
+const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+/// Base delay for reconnection (in milliseconds).
+const BASE_RECONNECT_DELAY_MS: u32 = 1000;
+/// Maximum delay between reconnect attempts.
+const MAX_RECONNECT_DELAY_MS: u32 = 30000;
+
 /// WebSocket service for game communication.
 /// Uses signals for thread-safe state management.
 #[derive(Clone, Copy)]
 pub struct WsService {
     pub state: RwSignal<ConnectionState>,
     pub outgoing: RwSignal<Option<OutgoingMessage>>,
+    /// Stored auth token for reconnection
+    auth_token: RwSignal<Option<String>>,
+    /// Reconnect attempt counter
+    reconnect_attempts: RwSignal<u32>,
+    /// Whether auto-reconnect is enabled
+    auto_reconnect: RwSignal<bool>,
 }
 
 impl Default for WsService {
@@ -48,7 +61,33 @@ impl WsService {
         Self {
             state: RwSignal::new(ConnectionState::Disconnected),
             outgoing: RwSignal::new(None),
+            auth_token: RwSignal::new(None),
+            reconnect_attempts: RwSignal::new(0),
+            auto_reconnect: RwSignal::new(true),
         }
+    }
+
+    /// Get the current reconnect attempt count.
+    pub fn reconnect_attempt(&self) -> u32 {
+        self.reconnect_attempts.get()
+    }
+
+    /// Calculate reconnect delay with exponential backoff.
+    #[allow(dead_code)]
+    fn reconnect_delay(&self) -> u32 {
+        let attempts = self.reconnect_attempts.get();
+        let delay = BASE_RECONNECT_DELAY_MS * 2u32.pow(attempts.min(10));
+        delay.min(MAX_RECONNECT_DELAY_MS)
+    }
+
+    /// Disable auto-reconnect (e.g., on manual disconnect).
+    pub fn disable_reconnect(&self) {
+        self.auto_reconnect.set(false);
+    }
+
+    /// Enable auto-reconnect.
+    pub fn enable_reconnect(&self) {
+        self.auto_reconnect.set(true);
     }
 
     /// Get current connection state.
@@ -159,6 +198,46 @@ impl WsService {
         self.send(ClientMessage::SquadronAction { action });
     }
 
+    /// Invite a player to your squadron.
+    pub fn invite_to_squadron(&self, player_id: Uuid) {
+        self.send(ClientMessage::InviteToSquadron { player_id });
+    }
+
+    /// Accept a squadron invitation.
+    pub fn accept_squadron_invite(&self, invite_id: Uuid) {
+        self.send(ClientMessage::AcceptSquadronInvite { invite_id });
+    }
+
+    /// Decline a squadron invitation.
+    pub fn decline_squadron_invite(&self, invite_id: Uuid) {
+        self.send(ClientMessage::DeclineSquadronInvite { invite_id });
+    }
+
+    /// Accept an alliance proposal.
+    pub fn accept_alliance(&self, proposal_id: Uuid) {
+        self.send(ClientMessage::AcceptAlliance { proposal_id });
+    }
+
+    /// Decline an alliance proposal.
+    pub fn decline_alliance(&self, proposal_id: Uuid) {
+        self.send(ClientMessage::DeclineAlliance { proposal_id });
+    }
+
+    /// Request to move to another sector.
+    pub fn move_to_sector(&self, sector_id: Uuid) {
+        self.send(ClientMessage::MoveToSector { sector_id });
+    }
+
+    /// Join a specific sector.
+    pub fn join_sector(&self, sector_id: Uuid) {
+        self.send(ClientMessage::JoinSector { sector_id });
+    }
+
+    /// Leave current sector.
+    pub fn leave_sector(&self) {
+        self.send(ClientMessage::LeaveSector);
+    }
+
     /// Send a ping for latency measurement.
     pub fn ping(&self) {
         let timestamp = js_sys::Date::now() as u64;
@@ -170,6 +249,20 @@ impl WsService {
     /// This establishes the WebSocket connection and sets up event handlers.
     /// The connection will automatically authenticate with the provided token.
     pub fn connect(&self, game_state: GameState, token: String) {
+        // Store token for potential reconnection
+        self.auth_token.set(Some(token.clone()));
+
+        // Reset reconnect attempts on fresh connection
+        self.reconnect_attempts.set(0);
+
+        // Enable auto-reconnect
+        self.auto_reconnect.set(true);
+
+        self.connect_internal(game_state, token);
+    }
+
+    /// Internal connect method used for both initial connection and reconnection.
+    fn connect_internal(&self, game_state: GameState, token: String) {
         // Set connecting state
         self.state.set(ConnectionState::Connecting);
 
@@ -205,8 +298,12 @@ impl WsService {
         // onopen handler
         let ws_open = ws_ref.clone();
         let token_clone = token.clone();
+        let reconnect_attempts_signal = self.reconnect_attempts;
         let onopen = Closure::wrap(Box::new(move |_: web_sys::Event| {
             state_signal.set(ConnectionState::Connected);
+
+            // Reset reconnect attempts on successful connection
+            reconnect_attempts_signal.set(0);
 
             // Send authentication message
             if let Some(ref ws) = *ws_open.borrow() {
@@ -236,11 +333,64 @@ impl WsService {
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         onmessage.forget();
 
-        // onclose handler
+        // onclose handler - with auto-reconnect support
         let game_state_close = game_state;
+        let auth_token_signal = self.auth_token;
+        let reconnect_attempts_signal = self.reconnect_attempts;
+        let auto_reconnect_signal = self.auto_reconnect;
+        let ws_service = *self;
         let onclose = Closure::wrap(Box::new(move |_: web_sys::CloseEvent| {
-            state_signal.set(ConnectionState::Disconnected);
             game_state_close.connected.set(false);
+
+            // Check if we should attempt reconnection
+            let attempts = reconnect_attempts_signal.get();
+            let should_reconnect = auto_reconnect_signal.get()
+                && attempts < MAX_RECONNECT_ATTEMPTS
+                && auth_token_signal.get().is_some();
+
+            if should_reconnect {
+                // Set reconnecting state
+                state_signal.set(ConnectionState::Reconnecting);
+                reconnect_attempts_signal.set(attempts + 1);
+
+                // Calculate delay with exponential backoff
+                let delay = BASE_RECONNECT_DELAY_MS * 2u32.pow(attempts.min(10));
+                let delay = delay.min(MAX_RECONNECT_DELAY_MS);
+
+                // Schedule reconnection
+                let game_state_reconnect = game_state_close;
+                let ws_service_reconnect = ws_service;
+                let token = auth_token_signal.get().unwrap();
+                let reconnect_closure = Closure::once(Box::new(move || {
+                    // Only reconnect if still in reconnecting state
+                    if ws_service_reconnect.state.get() == ConnectionState::Reconnecting {
+                        ws_service_reconnect.connect_internal(game_state_reconnect, token);
+                    }
+                }) as Box<dyn FnOnce()>);
+
+                let _ = web_sys::window()
+                    .expect("no window")
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(
+                        reconnect_closure.as_ref().unchecked_ref(),
+                        delay as i32,
+                    );
+                reconnect_closure.forget();
+
+                // Notify user
+                game_state_close.notification.set(Some(format!(
+                    "Connection lost. Reconnecting in {}s (attempt {}/{})",
+                    delay / 1000,
+                    attempts + 1,
+                    MAX_RECONNECT_ATTEMPTS
+                )));
+            } else {
+                // No reconnection - set disconnected
+                state_signal.set(ConnectionState::Disconnected);
+
+                if attempts >= MAX_RECONNECT_ATTEMPTS {
+                    game_state_close.set_error("Connection lost. Max reconnect attempts reached.".to_string());
+                }
+            }
         }) as Box<dyn FnMut(web_sys::CloseEvent)>);
         ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
         onclose.forget();
@@ -308,10 +458,10 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
             ship_updates,
             ship_spawns,
             ship_despawns,
-            mission_updates: _,
-            events: _,
+            mission_updates,
+            events,
         } => {
-            game_state.handle_state_update(tick, ship_updates, ship_spawns, ship_despawns);
+            game_state.handle_state_update(tick, ship_updates, ship_spawns, ship_despawns, mission_updates, events);
         }
 
         ServerMessage::ResourceUpdate {
@@ -409,12 +559,24 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
         }
 
         ServerMessage::SquadronInvite {
-            invite_id: _,
-            squadron_id: _,
+            invite_id,
+            squadron_id,
             squadron_name,
             squadron_tag,
             inviter_name,
         } => {
+            // Store the invite for UI to display
+            game_state.pending_squadron_invites.update(|invites| {
+                // Remove any existing invite from same squadron
+                invites.retain(|i| i.squadron_id != squadron_id);
+                invites.push(SquadronInviteInfo {
+                    invite_id,
+                    squadron_id,
+                    squadron_name: squadron_name.clone(),
+                    squadron_tag: squadron_tag.clone(),
+                    inviter_name: inviter_name.clone(),
+                });
+            });
             game_state.notification.set(Some(format!(
                 "Squadron invite from {}: {} [{}]",
                 inviter_name, squadron_name, squadron_tag
@@ -422,11 +584,22 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
         }
 
         ServerMessage::AllianceProposal {
-            proposal_id: _,
-            from_squadron_id: _,
+            proposal_id,
+            from_squadron_id,
             from_squadron_name,
             from_squadron_tag,
         } => {
+            // Store the proposal for UI to display
+            game_state.pending_alliance_proposals.update(|proposals| {
+                // Remove any existing proposal from same squadron
+                proposals.retain(|p| p.from_squadron_id != from_squadron_id);
+                proposals.push(AllianceProposalInfo {
+                    proposal_id,
+                    from_squadron_id,
+                    from_squadron_name: from_squadron_name.clone(),
+                    from_squadron_tag: from_squadron_tag.clone(),
+                });
+            });
             game_state.notification.set(Some(format!(
                 "Alliance proposal from {} [{}]",
                 from_squadron_name, from_squadron_tag

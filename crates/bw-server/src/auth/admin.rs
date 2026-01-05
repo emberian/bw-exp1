@@ -1,8 +1,7 @@
 //! Admin authentication
 //!
 //! Provides an extractor that requires admin privileges.
-//! Admin users are identified by the ADMIN_USERNAMES environment variable,
-//! which should be a comma-separated list of usernames.
+//! Admin users are configured in config.toml under [admin].usernames.
 
 use axum::{
     extract::FromRequestParts,
@@ -11,12 +10,15 @@ use axum::{
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{auth::hash_token, state::GameState};
+use crate::{auth::hash_token, config::try_config, state::GameState};
 
 /// Extractor that validates a session token and requires admin privileges.
 ///
-/// Admin users are determined by the `ADMIN_USERNAMES` environment variable,
-/// which should contain a comma-separated list of usernames.
+/// Admin users are configured in `config.toml`:
+/// ```toml
+/// [admin]
+/// usernames = ["admin", "gm", "superuser"]
+/// ```
 ///
 /// Usage in a handler:
 /// ```ignore
@@ -97,49 +99,12 @@ impl FromRequestParts<Arc<GameState>> for AdminAuth {
 
 /// Check if a username is an admin.
 ///
-/// Reads from the `ADMIN_USERNAMES` environment variable.
-fn is_admin(username: &str) -> bool {
-    // Get admin usernames from environment
-    let admin_usernames = std::env::var("ADMIN_USERNAMES")
-        .unwrap_or_default();
-
-    // Parse comma-separated list
-    admin_usernames
-        .split(',')
-        .map(|s| s.trim().to_lowercase())
-        .any(|admin| admin == username.to_lowercase())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_admin_with_env() {
-        // SAFETY: Test-only, single-threaded access to env vars
-        unsafe {
-            std::env::set_var("ADMIN_USERNAMES", "admin, superuser, GM");
-        }
-
-        assert!(is_admin("admin"));
-        assert!(is_admin("ADMIN")); // Case insensitive
-        assert!(is_admin("superuser"));
-        assert!(is_admin("gm"));
-        assert!(!is_admin("regularuser"));
-        assert!(!is_admin(""));
-
-        // SAFETY: Test-only cleanup
-        unsafe {
-            std::env::remove_var("ADMIN_USERNAMES");
-        }
-    }
-
-    #[test]
-    fn test_is_admin_empty_env() {
-        // SAFETY: Test-only, single-threaded access to env vars
-        unsafe {
-            std::env::remove_var("ADMIN_USERNAMES");
-        }
-        assert!(!is_admin("admin"));
+/// Reads from the config manager (config.toml).
+pub fn is_admin(username: &str) -> bool {
+    if let Some(config) = try_config() {
+        config.is_admin(username)
+    } else {
+        // Config not initialized - no admins
+        false
     }
 }
