@@ -9,7 +9,7 @@ use uuid::Uuid;
 use bw_core::events::{GameEvent, GameEventType};
 use crate::engine::ScriptEngine;
 use crate::state::{StateAccessor, AccessPermissions, StateMutation};
-use crate::bindings::state_api::{set_current_accessor, clear_current_accessor};
+use crate::context::{ScriptExecutionContext, ExecutionGuard};
 
 use super::{EventRegistry, EventSubscription};
 
@@ -154,8 +154,8 @@ impl EventDispatcher {
             return Err(format!("Script not found: {}", handler.script_path));
         }
 
-        // Set up state accessor
-        if let Some(ref accessor) = self.state_accessor {
+        // Set up execution context if state accessor is available
+        let _guard = if let Some(ref accessor) = self.state_accessor {
             let perms = if let Some(entity_id) = handler.owner_entity_id {
                 if let Some(sector_id) = handler.sector_id {
                     AccessPermissions::npc_behavior(entity_id, sector_id)
@@ -170,8 +170,30 @@ impl EventDispatcher {
             if let Some(sector_id) = handler.sector_id {
                 accessor.set_context_sector(sector_id);
             }
-            set_current_accessor(accessor.clone());
-        }
+
+            // Build unified execution context
+            let mut exec_ctx = ScriptExecutionContext::new(accessor.clone())
+                .with_script_path(&handler.script_path)
+                .with_event_registry(self.registry.clone());
+
+            if let Some(entity_id) = handler.owner_entity_id {
+                exec_ctx = exec_ctx.with_owner_entity(entity_id);
+            }
+            if let Some(sector_id) = handler.sector_id {
+                exec_ctx = exec_ctx.with_sector(sector_id);
+            }
+
+            // Enter execution context (RAII guard handles cleanup)
+            match ExecutionGuard::enter(exec_ctx) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    tracing::warn!("Failed to enter execution context for event handler: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Build context map for handler
         let mut ctx = Map::new();
@@ -190,15 +212,14 @@ impl EventDispatcher {
             (Dynamic::from(ctx), event_data),
         );
 
-        // Collect mutations
+        // Collect mutations before guard drops
         let mutations = if let Some(ref accessor) = self.state_accessor {
             accessor.take_mutations()
         } else {
             Vec::new()
         };
 
-        // Clear accessor
-        clear_current_accessor();
+        // Guard drops here automatically
 
         match result {
             Ok(_) => Ok(mutations),

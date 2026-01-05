@@ -25,7 +25,7 @@ pub fn StationPanel() -> impl IntoView {
         <Show when=is_docked>
             // Responsive positioning: above mobile nav on small screens, full-width on mobile
             // bottom-nav accounts for nav bar height + safe area on mobile
-            <div class="absolute bottom-nav md:bottom-4 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40">
+            <div data-testid="station-panel" class="absolute bottom-nav md:bottom-4 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40">
                 // Header
                 <div class="flex justify-between items-center mb-3 md:mb-4">
                     <div>
@@ -33,6 +33,7 @@ pub fn StationPanel() -> impl IntoView {
                         <h3 class="font-semibold text-amber-400">{station_name}</h3>
                     </div>
                     <button
+                        data-testid="undock-button"
                         class="px-3 py-2 md:py-1 bg-red-900 hover:bg-red-800 rounded text-xs text-red-100 transition-colors min-h-[44px] md:min-h-0"
                         on:click=handle_undock
                     >
@@ -46,6 +47,7 @@ pub fn StationPanel() -> impl IntoView {
                         name="Refuel"
                         description="Restore fuel to 100%"
                         service="Refuel"
+                        testid="service-refuel"
                         game_state=game_state
                         ws=ws
                     />
@@ -53,6 +55,7 @@ pub fn StationPanel() -> impl IntoView {
                         name="Rearm"
                         description="Restore ammunition to 100%"
                         service="Rearm"
+                        testid="service-rearm"
                         game_state=game_state
                         ws=ws
                     />
@@ -60,6 +63,7 @@ pub fn StationPanel() -> impl IntoView {
                         name="Repair"
                         description="Restore hull integrity"
                         service="Repair"
+                        testid="service-repair"
                         game_state=game_state
                         ws=ws
                     />
@@ -67,6 +71,7 @@ pub fn StationPanel() -> impl IntoView {
                         name="Shore Leave"
                         description="Restore crew morale"
                         service="ShoreLeave"
+                        testid="service-shore-leave"
                         game_state=game_state
                         ws=ws
                     />
@@ -94,6 +99,7 @@ fn StationServiceButton(
     name: &'static str,
     description: &'static str,
     service: &'static str,
+    testid: &'static str,
     game_state: GameState,
     ws: WsService,
 ) -> impl IntoView {
@@ -136,6 +142,7 @@ fn StationServiceButton(
             if is_available_check() {
                 view! {
                     <button
+                        data-testid=testid
                         class=move || {
                             // Touch-friendly size on mobile with min-h-[56px]
                             let base = "px-3 py-3 rounded text-center transition-colors flex flex-col items-center gap-1 min-h-[56px] md:min-h-0";

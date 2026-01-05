@@ -10,7 +10,7 @@ use uuid::Uuid;
 use bw_shared::{
     AdminClientMessage, AdminServerMessage, EntityFilter, EntitySummary, EntityType,
     ScriptFileInfo, SectorSummaryAdmin, ServerMessage, StagedChange, ChangePreview,
-    ValidationError, SimConfigSection,
+    ValidationError, SimConfigSection, ScriptErrorDto,
     ForkConfigDto, PromoteConfigDto, PlaytestSummaryDto, PlaytestDetailDto, PlaytestParticipantDto,
 };
 use crate::{config::config, GameState};
@@ -119,6 +119,30 @@ pub async fn handle_admin_message(
 
         AdminClientMessage::PreviewPromote { playtest_id, promote_config } => {
             handle_preview_promote(state, tx, _player_id, playtest_id, promote_config).await;
+        }
+
+        // === Script Debugging ===
+
+        AdminClientMessage::SubscribeScriptErrors => {
+            // Script error subscription is handled by a separate mechanism
+            // For now, just acknowledge
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::SubscribedToScriptErrors)).await;
+        }
+
+        AdminClientMessage::UnsubscribeScriptErrors => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::UnsubscribedFromScriptErrors)).await;
+        }
+
+        AdminClientMessage::ReloadScript { path } => {
+            handle_reload_script(state, tx, &path).await;
+        }
+
+        AdminClientMessage::ReloadDefinitions => {
+            handle_reload_definitions(state, tx).await;
+        }
+
+        AdminClientMessage::GetRecentScriptErrors { limit } => {
+            handle_get_recent_errors(tx, limit).await;
         }
     }
 
@@ -282,6 +306,89 @@ async fn handle_write_script(tx: &mpsc::Sender<ServerMessage>, path: &str, conte
             })).await;
         }
     }
+}
+
+async fn handle_reload_script(state: &Arc<GameState>, tx: &mpsc::Sender<ServerMessage>, path: &str) {
+    // Validate path
+    if path.contains("..") || path.starts_with('/') {
+        let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+            code: "INVALID_PATH".to_string(),
+            message: "Invalid script path".to_string(),
+        })).await;
+        return;
+    }
+
+    // Try to reload the script in the engine
+    match state.scripts.reload_script(path) {
+        Ok(warnings) => {
+            tracing::info!("Reloaded script: {}", path);
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ScriptReloaded {
+                path: path.to_string(),
+                success: true,
+                error: None,
+                warnings,
+            })).await;
+        }
+        Err(e) => {
+            tracing::warn!("Failed to reload script {}: {}", path, e);
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ScriptReloaded {
+                path: path.to_string(),
+                success: false,
+                error: Some(e.to_string()),
+                warnings: vec![],
+            })).await;
+        }
+    }
+}
+
+async fn handle_reload_definitions(state: &Arc<GameState>, tx: &mpsc::Sender<ServerMessage>) {
+    // Reload archetype definitions
+    match state.scripts.reload_definitions() {
+        Ok((ships, weapons, errors)) => {
+            tracing::info!("Reloaded definitions: {} ships, {} weapons", ships, weapons);
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DefinitionsReloaded {
+                file: "definitions".to_string(),
+                ships_loaded: ships,
+                weapons_loaded: weapons,
+                errors,
+            })).await;
+        }
+        Err(e) => {
+            tracing::warn!("Failed to reload definitions: {}", e);
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "RELOAD_FAILED".to_string(),
+                message: format!("Failed to reload definitions: {}", e),
+            })).await;
+        }
+    }
+}
+
+async fn handle_get_recent_errors(tx: &mpsc::Sender<ServerMessage>, limit: usize) {
+    // Get errors from the thread-local buffer
+    // Note: This gets errors from the current thread only
+    // A more robust implementation would use a shared error buffer
+    let errors: Vec<ScriptErrorDto> = bw_scripting::take_errors()
+        .into_iter()
+        .take(limit)
+        .map(|e| {
+            let timestamp_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            ScriptErrorDto {
+                script: e.script,
+                function: e.function,
+                message: e.message,
+                line: e.line,
+                column: e.column,
+                tick: e.tick,
+                timestamp_ms,
+            }
+        })
+        .collect();
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ScriptErrors { errors })).await;
 }
 
 // =============================================================================

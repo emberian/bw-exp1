@@ -69,6 +69,14 @@ pub enum ClientMessage {
 
     /// Admin/GM message (requires admin privileges)
     Admin(AdminClientMessage),
+
+    /// Script-handled action (game logic delegated to scripts)
+    ScriptAction {
+        /// Action identifier (e.g., "dock", "accept_mission", "attack")
+        action: String,
+        /// JSON parameters for the action
+        params: serde_json::Value,
+    },
 }
 
 /// Messages sent from server to client.
@@ -199,6 +207,18 @@ pub enum ServerMessage {
         description: String,
         choices: Vec<ChoiceDto>,
     },
+
+    /// Result from a script action
+    ScriptActionResult {
+        /// The action that was executed
+        action: String,
+        /// Whether the action succeeded
+        success: bool,
+        /// Error message if failed
+        error: Option<String>,
+        /// Optional response data
+        data: Option<serde_json::Value>,
+    },
 }
 
 /// Chat channels.
@@ -277,6 +297,82 @@ pub enum AdminClientMessage {
 
     /// Commit staged changes atomically
     CommitStaged { changes: Vec<StagedChange> },
+
+    // === Playtest Management ===
+
+    /// Create a new playtest forked from live state
+    CreatePlaytest {
+        name: String,
+        fork_config: ForkConfigDto,
+    },
+
+    /// List all active playtests
+    ListPlaytests,
+
+    /// Get details of a specific playtest
+    GetPlaytest { playtest_id: Uuid },
+
+    /// Join a playtest (as GM or invited player)
+    JoinPlaytest { playtest_id: Uuid },
+
+    /// Leave current playtest (return to live)
+    LeavePlaytest,
+
+    /// Invite a player to the playtest
+    InviteToPlaytest {
+        playtest_id: Uuid,
+        player_id: Uuid,
+    },
+
+    /// Remove a player from playtest
+    KickFromPlaytest {
+        playtest_id: Uuid,
+        player_id: Uuid,
+    },
+
+    /// Pause/unpause playtest simulation
+    SetPlaytestPaused {
+        playtest_id: Uuid,
+        paused: bool,
+    },
+
+    /// Set playtest time scale (0.5 = half speed, 2.0 = double speed)
+    SetPlaytestTimeScale {
+        playtest_id: Uuid,
+        scale: f32,
+    },
+
+    /// Discard and destroy a playtest
+    DestroyPlaytest { playtest_id: Uuid },
+
+    /// Promote playtest changes to live state
+    PromotePlaytest {
+        playtest_id: Uuid,
+        promote_config: PromoteConfigDto,
+    },
+
+    /// Preview what would be promoted
+    PreviewPromote {
+        playtest_id: Uuid,
+        promote_config: PromoteConfigDto,
+    },
+
+    // === Script Debugging ===
+
+    /// Subscribe to script errors (real-time streaming)
+    SubscribeScriptErrors,
+
+    /// Unsubscribe from script errors
+    UnsubscribeScriptErrors,
+
+    /// Reload a specific script file
+    ReloadScript { path: String },
+
+    /// Reload archetype definitions (ships, weapons)
+    ReloadDefinitions,
+
+    /// Get recent script errors
+    GetRecentScriptErrors { limit: usize },
 }
 
 /// Admin messages sent from server to client.
@@ -327,6 +423,110 @@ pub enum AdminServerMessage {
 
     /// Admin error response
     AdminError { code: String, message: String },
+
+    // === Playtest Responses ===
+
+    /// Playtest created successfully
+    PlaytestCreated {
+        playtest_id: Uuid,
+        name: String,
+    },
+
+    /// List of active playtests
+    PlaytestList {
+        playtests: Vec<PlaytestSummaryDto>,
+    },
+
+    /// Full playtest details
+    PlaytestDetails {
+        playtest: PlaytestDetailDto,
+    },
+
+    /// Joined playtest successfully
+    PlaytestJoined {
+        playtest_id: Uuid,
+        /// Initial state within playtest
+        ship_id: Uuid,
+        sector_id: Uuid,
+    },
+
+    /// Left playtest, returned to live
+    PlaytestLeft,
+
+    /// Player invited to playtest
+    PlaytestInviteSent {
+        playtest_id: Uuid,
+        player_id: Uuid,
+    },
+
+    /// Player kicked from playtest
+    PlaytestPlayerKicked {
+        playtest_id: Uuid,
+        player_id: Uuid,
+    },
+
+    /// Playtest state changed (pause, time scale, etc.)
+    PlaytestStateChanged {
+        playtest_id: Uuid,
+        paused: bool,
+        time_scale: f32,
+        tick: u64,
+    },
+
+    /// Playtest destroyed
+    PlaytestDestroyed { playtest_id: Uuid },
+
+    /// Preview of promotion results
+    PromotePreview {
+        ships_to_update: usize,
+        players_to_update: usize,
+        new_entities: usize,
+        deletions: usize,
+    },
+
+    /// Promotion completed
+    PromoteResult {
+        success: bool,
+        applied_count: usize,
+        errors: Vec<String>,
+    },
+
+    // === Script Debugging ===
+
+    /// Single script error (streamed to subscribers)
+    ScriptError {
+        script: String,
+        function: String,
+        message: String,
+        line: usize,
+        column: usize,
+        tick: u64,
+    },
+
+    /// Batch of script errors (response to GetRecentScriptErrors)
+    ScriptErrors { errors: Vec<ScriptErrorDto> },
+
+    /// Script hot-reload result
+    ScriptReloaded {
+        path: String,
+        success: bool,
+        error: Option<String>,
+        warnings: Vec<String>,
+    },
+
+    /// Archetype definition reload result
+    DefinitionsReloaded {
+        file: String,
+        ships_loaded: usize,
+        weapons_loaded: usize,
+        errors: Vec<String>,
+    },
+
+    /// Subscribed to script errors
+    SubscribedToScriptErrors,
+
+    /// Unsubscribed from script errors
+    UnsubscribedFromScriptErrors,
 }
 
 /// Entity types for admin queries.
@@ -470,4 +670,23 @@ pub struct ValidationError {
     pub field: String,
     /// Error message
     pub message: String,
+}
+
+/// Script error information for GM tools.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptErrorDto {
+    /// Script file path
+    pub script: String,
+    /// Function that generated the error
+    pub function: String,
+    /// Error message
+    pub message: String,
+    /// Line number (0 if unknown)
+    pub line: usize,
+    /// Column number (0 if unknown)
+    pub column: usize,
+    /// Server tick when error occurred
+    pub tick: u64,
+    /// Unix timestamp in milliseconds
+    pub timestamp_ms: u64,
 }

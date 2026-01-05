@@ -44,6 +44,10 @@ pub struct ServerSettings {
     pub database_url: Option<String>,
     /// Allowed CORS origins (empty = allow all, which is insecure)
     pub cors_origins: Vec<String>,
+    /// Directory containing the WASM frontend (served at /play)
+    pub play_dir: String,
+    /// Directory containing static landing page (served at /)
+    pub static_dir: String,
 }
 
 impl Default for ServerSettings {
@@ -53,6 +57,8 @@ impl Default for ServerSettings {
             port: 3000,
             database_url: None,
             cors_origins: vec![],
+            play_dir: "play".to_string(),
+            static_dir: "static".to_string(),
         }
     }
 }

@@ -2,6 +2,23 @@
 //!
 //! Allows scripts to be attached to entities (ships, stations, etc.) with
 //! lifecycle hooks: on_spawn, on_update, on_destroy.
+//!
+//! # Behavior Trees
+//!
+//! Entities can optionally have behavior trees for AI decision making.
+//! Set the behavior tree in `on_spawn`:
+//!
+//! ```rhai
+//! fn on_spawn(ctx) {
+//!     ctx.local_data.behavior_tree = bt_selector([
+//!         bt_sequence([
+//!             bt_condition("is_low_health"),
+//!             bt_action("flee")
+//!         ]),
+//!         bt_action("patrol")
+//!     ]);
+//! }
+//! ```
 
 mod manager;
 
@@ -9,6 +26,8 @@ pub use manager::*;
 
 use rhai::{Dynamic, Map};
 use uuid::Uuid;
+
+use crate::ai::BtNode;
 
 /// A behavior script attached to an entity.
 #[derive(Debug, Clone)]
@@ -27,6 +46,8 @@ pub struct EntityBehavior {
     pub local_data: Map,
     /// Sector the entity is in
     pub sector_id: Option<Uuid>,
+    /// Optional behavior tree for AI decision making
+    pub behavior_tree: Option<BtNode>,
 }
 
 impl EntityBehavior {
@@ -44,6 +65,7 @@ impl EntityBehavior {
             state: BehaviorState::Initializing,
             local_data: Map::new(),
             sector_id: None,
+            behavior_tree: None,
         }
     }
 
@@ -53,9 +75,20 @@ impl EntityBehavior {
         self
     }
 
+    /// Set the behavior tree.
+    pub fn with_behavior_tree(mut self, tree: BtNode) -> Self {
+        self.behavior_tree = Some(tree);
+        self
+    }
+
     /// Check if behavior is active.
     pub fn is_active(&self) -> bool {
         matches!(self.state, BehaviorState::Active)
+    }
+
+    /// Check if behavior has a behavior tree.
+    pub fn has_behavior_tree(&self) -> bool {
+        self.behavior_tree.is_some()
     }
 }
 

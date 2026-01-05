@@ -11,7 +11,7 @@ use bw_core::models::*;
 use bw_scripting::{
     ScriptEngine, BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher,
     StateAccessor, StateProvider, ShipSnapshot, PlayerSnapshot, SectorSnapshot,
-    StateMutation, MutationResult,
+    StateMutation, MutationResult, FileStore,
 };
 use bw_shared::ServerMessage;
 
@@ -196,11 +196,23 @@ impl GameState {
         // Create state accessor with self as provider
         let accessor = Arc::new(StateAccessor::new(self.clone()));
 
+        // Create script state store for persistence
+        let state_store = match FileStore::shared("./data/script_state") {
+            Ok(store) => Some(store),
+            Err(e) => {
+                tracing::warn!("Failed to create script state store: {}. Behavior state will not persist.", e);
+                None
+            }
+        };
+
         // Wire up behavior manager
         {
             let mut bm = self.behavior_manager.write();
             bm.set_state_accessor(accessor.clone());
             bm.set_event_registry(self.event_registry.clone());
+            if let Some(store) = state_store {
+                bm.set_state_store(store);
+            }
         }
 
         // Wire up coroutine scheduler

@@ -13,7 +13,7 @@ use bw_core::models::Position;
 use super::{
     ShipSnapshot, PlayerSnapshot, SectorSnapshot,
     StateMutation, ShipChanges, PlayerChanges, ShipSpawnConfig,
-    MutationResult, EntityType, ChoiceOption,
+    MutationResult, EntityType, ChoiceOption, MutationOverlay,
 };
 
 /// Error type for state access operations.
@@ -157,12 +157,16 @@ impl AccessPermissions {
 /// State accessor that scripts use to interact with game state.
 ///
 /// Provides read access via snapshots and queues mutations for batch application.
+/// The overlay tracks pending mutations for read-your-own-writes semantics.
 pub struct StateAccessor {
     provider: Arc<dyn StateProvider>,
     permissions: RwLock<AccessPermissions>,
     pending_mutations: RwLock<Vec<StateMutation>>,
     /// Current context sector (for relative queries)
     context_sector_id: RwLock<Option<Uuid>>,
+    /// Overlay for read-your-own-writes (tracks pending changes).
+    /// Uses RwLock for thread-safety since StateAccessor may be shared across threads.
+    overlay: RwLock<MutationOverlay>,
 }
 
 impl StateAccessor {
@@ -173,6 +177,7 @@ impl StateAccessor {
             permissions: RwLock::new(AccessPermissions::default()),
             pending_mutations: RwLock::new(Vec::new()),
             context_sector_id: RwLock::new(None),
+            overlay: RwLock::new(MutationOverlay::new()),
         }
     }
 
@@ -192,7 +197,14 @@ impl StateAccessor {
     }
 
     /// Get a ship by ID.
+    ///
+    /// Applies any pending mutations from the overlay for read-your-own-writes.
     pub fn get_ship(&self, ship_id: Uuid) -> Result<Option<ShipSnapshot>, AccessError> {
+        // Check if destroyed in overlay first
+        if self.overlay.read().is_destroyed(ship_id) {
+            return Ok(None);
+        }
+
         let perms = self.permissions.read();
         if !perms.can_read_ships {
             return Err(AccessError::PermissionDenied("Cannot read ships".into()));
@@ -209,10 +221,13 @@ impl StateAccessor {
             }
         }
 
-        Ok(snapshot)
+        // Apply overlay for read-your-own-writes
+        Ok(snapshot.and_then(|s| self.overlay.read().apply_to_ship(s)))
     }
 
     /// Get all ships in a sector.
+    ///
+    /// Applies overlay and filters destroyed ships.
     pub fn get_ships_in_sector(&self, sector_id: Uuid) -> Result<Vec<ShipSnapshot>, AccessError> {
         let perms = self.permissions.read();
         if !perms.can_read_ships {
@@ -224,10 +239,16 @@ impl StateAccessor {
             ));
         }
 
-        Ok(self.provider.get_ships_in_sector(sector_id))
+        let ships = self.provider.get_ships_in_sector(sector_id);
+        let overlay = self.overlay.read();
+        Ok(ships.into_iter()
+            .filter_map(|s| overlay.apply_to_ship(s))
+            .collect())
     }
 
     /// Get ships within range of a position.
+    ///
+    /// Applies overlay and filters destroyed ships.
     pub fn get_ships_in_range(
         &self,
         sector_id: Uuid,
@@ -244,17 +265,24 @@ impl StateAccessor {
             ));
         }
 
-        Ok(self.provider.get_ships_in_range(sector_id, position, range))
+        let ships = self.provider.get_ships_in_range(sector_id, position, range);
+        let overlay = self.overlay.read();
+        Ok(ships.into_iter()
+            .filter_map(|s| overlay.apply_to_ship(s))
+            .collect())
     }
 
     /// Get a player by ID.
+    ///
+    /// Applies any pending mutations from the overlay for read-your-own-writes.
     pub fn get_player(&self, player_id: Uuid) -> Result<Option<PlayerSnapshot>, AccessError> {
         let perms = self.permissions.read();
         if !perms.can_read_players {
             return Err(AccessError::PermissionDenied("Cannot read players".into()));
         }
 
-        Ok(self.provider.get_player(player_id))
+        let snapshot = self.provider.get_player(player_id);
+        Ok(snapshot.and_then(|p| self.overlay.read().apply_to_player(p)))
     }
 
     /// Get a sector by ID.
@@ -279,6 +307,8 @@ impl StateAccessor {
     }
 
     /// Queue a ship modification.
+    ///
+    /// Also records the change in the overlay for read-your-own-writes.
     pub fn modify_ship(&self, ship_id: Uuid, changes: ShipChanges) -> Result<(), AccessError> {
         let perms = self.permissions.read();
         if !perms.can_write_ships {
@@ -294,6 +324,10 @@ impl StateAccessor {
             return Ok(());
         }
 
+        // Record in overlay for read-your-own-writes
+        self.overlay.write().record_ship_change(ship_id, &changes);
+
+        // Queue for actual application
         self.pending_mutations.write().push(StateMutation::ModifyShip {
             ship_id,
             changes,
@@ -303,6 +337,8 @@ impl StateAccessor {
     }
 
     /// Queue a player modification.
+    ///
+    /// Also records the change in the overlay for read-your-own-writes.
     pub fn modify_player(&self, player_id: Uuid, changes: PlayerChanges) -> Result<(), AccessError> {
         let perms = self.permissions.read();
         if !perms.can_write_players {
@@ -313,6 +349,10 @@ impl StateAccessor {
             return Ok(());
         }
 
+        // Record in overlay for read-your-own-writes
+        self.overlay.write().record_player_change(player_id, &changes);
+
+        // Queue for actual application
         self.pending_mutations.write().push(StateMutation::ModifyPlayer {
             player_id,
             changes,
@@ -339,11 +379,16 @@ impl StateAccessor {
     }
 
     /// Queue an entity destruction.
+    ///
+    /// Also records in the overlay so destroyed entities are filtered from reads.
     pub fn destroy_entity(&self, entity_id: Uuid, entity_type: EntityType) -> Result<(), AccessError> {
         let perms = self.permissions.read();
         if !perms.can_destroy_entities {
             return Err(AccessError::PermissionDenied("Cannot destroy entities".into()));
         }
+
+        // Record in overlay so entity appears destroyed immediately
+        self.overlay.write().record_destroy(entity_id);
 
         self.pending_mutations.write().push(StateMutation::DestroyEntity {
             entity_id,
@@ -434,8 +479,9 @@ impl StateAccessor {
         Ok(())
     }
 
-    /// Take all pending mutations (clears the queue).
+    /// Take all pending mutations (clears the queue and overlay).
     pub fn take_mutations(&self) -> Vec<StateMutation> {
+        self.overlay.write().clear();
         std::mem::take(&mut *self.pending_mutations.write())
     }
 
@@ -455,7 +501,41 @@ impl StateAccessor {
 
     /// Clear pending mutations without applying.
     pub fn clear_mutations(&self) {
+        self.overlay.write().clear();
         self.pending_mutations.write().clear();
+    }
+
+    /// Clear just the overlay (for testing or special cases).
+    pub fn clear_overlay(&self) {
+        self.overlay.write().clear();
+    }
+
+    // =========================================================================
+    // Transaction support
+    // =========================================================================
+
+    /// Begin a transaction by returning a checkpoint (current mutation count).
+    ///
+    /// Use with `rollback_to_checkpoint()` to discard mutations added after
+    /// the checkpoint if something goes wrong.
+    pub fn begin_transaction(&self) -> usize {
+        self.pending_mutations.read().len()
+    }
+
+    /// Rollback to a checkpoint, discarding all mutations added after it.
+    pub fn rollback_to_checkpoint(&self, checkpoint: usize) {
+        let mut mutations = self.pending_mutations.write();
+        if checkpoint < mutations.len() {
+            mutations.truncate(checkpoint);
+        }
+    }
+
+    /// Commit a transaction (no-op, mutations are already queued).
+    ///
+    /// This exists for symmetry and clarity in scripts.
+    pub fn commit_transaction(&self) {
+        // Mutations are already in the queue, nothing to do.
+        // The commit just confirms the mutations should stay.
     }
 }
 

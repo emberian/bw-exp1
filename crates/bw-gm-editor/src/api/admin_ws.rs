@@ -197,6 +197,33 @@ impl AdminWsClient {
     pub fn commit_staged(&self, changes: Vec<StagedChange>) {
         self.send(AdminClientMessage::CommitStaged { changes });
     }
+
+    /// Subscribe to script errors
+    pub fn subscribe_script_errors(&self) {
+        self.send(AdminClientMessage::SubscribeScriptErrors);
+    }
+
+    /// Unsubscribe from script errors
+    pub fn unsubscribe_script_errors(&self) {
+        self.send(AdminClientMessage::UnsubscribeScriptErrors);
+    }
+
+    /// Request reload of a specific script
+    pub fn reload_script(&self, path: &str) {
+        self.send(AdminClientMessage::ReloadScript {
+            path: path.to_string(),
+        });
+    }
+
+    /// Request reload of archetype definitions
+    pub fn reload_definitions(&self) {
+        self.send(AdminClientMessage::ReloadDefinitions);
+    }
+
+    /// Get recent script errors
+    pub fn get_recent_errors(&self, limit: usize) {
+        self.send(AdminClientMessage::GetRecentScriptErrors { limit });
+    }
 }
 
 /// Handle incoming server messages
@@ -306,6 +333,118 @@ fn handle_admin_message(msg: AdminServerMessage) {
                 state.error.set(Some(format!("{}: {}", code, message)));
                 state.clear_error_delayed();
             }
+        }
+
+        // Playtest messages - not yet handled in GM editor UI
+        AdminServerMessage::PlaytestCreated { playtest_id, name } => {
+            tracing::info!("[gm-ws] Playtest created: {} ({})", name, playtest_id);
+        }
+        AdminServerMessage::PlaytestList { playtests } => {
+            tracing::info!("[gm-ws] Received {} playtests", playtests.len());
+        }
+        AdminServerMessage::PlaytestDetails { playtest } => {
+            tracing::info!("[gm-ws] Playtest details: {}", playtest.name);
+        }
+        AdminServerMessage::PlaytestJoined { playtest_id, .. } => {
+            tracing::info!("[gm-ws] Joined playtest: {}", playtest_id);
+        }
+        AdminServerMessage::PlaytestLeft => {
+            tracing::info!("[gm-ws] Left playtest");
+        }
+        AdminServerMessage::PlaytestInviteSent { playtest_id, player_id } => {
+            tracing::info!("[gm-ws] Invite sent to {} for playtest {}", player_id, playtest_id);
+        }
+        AdminServerMessage::PlaytestPlayerKicked { playtest_id, player_id } => {
+            tracing::info!("[gm-ws] Player {} kicked from playtest {}", player_id, playtest_id);
+        }
+        AdminServerMessage::PlaytestStateChanged { playtest_id, paused, time_scale, tick } => {
+            tracing::info!("[gm-ws] Playtest {} state: paused={}, scale={}, tick={}", playtest_id, paused, time_scale, tick);
+        }
+        AdminServerMessage::PlaytestDestroyed { playtest_id } => {
+            tracing::info!("[gm-ws] Playtest destroyed: {}", playtest_id);
+        }
+        AdminServerMessage::PromotePreview { ships_to_update, players_to_update, new_entities, deletions } => {
+            tracing::info!("[gm-ws] Promote preview: {} ships, {} players, {} new, {} deleted",
+                ships_to_update, players_to_update, new_entities, deletions);
+        }
+        AdminServerMessage::PromoteResult { success, applied_count, errors } => {
+            if success {
+                tracing::info!("[gm-ws] Promote succeeded: {} changes applied", applied_count);
+            } else {
+                tracing::warn!("[gm-ws] Promote failed: {:?}", errors);
+            }
+        }
+
+        // === Script Debugging ===
+
+        AdminServerMessage::ScriptError { script, function, message, line, column, tick } => {
+            tracing::warn!("[gm-ws] Script error in {}::{}:{}: {} (tick {})",
+                script, function, line, message, tick);
+            if let Some(state) = gm_state {
+                state.add_script_error(script, function, message, line, column, tick);
+            }
+        }
+
+        AdminServerMessage::ScriptErrors { errors } => {
+            tracing::info!("[gm-ws] Received {} script errors", errors.len());
+            if let Some(state) = gm_state {
+                for error in errors {
+                    state.add_script_error(
+                        error.script,
+                        error.function,
+                        error.message,
+                        error.line,
+                        error.column,
+                        error.tick,
+                    );
+                }
+            }
+        }
+
+        AdminServerMessage::ScriptReloaded { path, success, error, warnings } => {
+            if success {
+                tracing::info!("[gm-ws] Script reloaded: {} ({} warnings)", path, warnings.len());
+                if let Some(state) = gm_state {
+                    state.add_notification(format!("Reloaded: {}", path), "success".to_string());
+                    for warning in warnings {
+                        state.add_notification(format!("Warning: {}", warning), "warning".to_string());
+                    }
+                }
+            } else {
+                tracing::warn!("[gm-ws] Script reload failed: {} - {:?}", path, error);
+                if let Some(state) = gm_state {
+                    state.add_notification(
+                        format!("Reload failed: {} - {}", path, error.unwrap_or_default()),
+                        "error".to_string(),
+                    );
+                }
+            }
+        }
+
+        AdminServerMessage::DefinitionsReloaded { file, ships_loaded, weapons_loaded, errors } => {
+            tracing::info!("[gm-ws] Definitions reloaded: {} ships, {} weapons from {}",
+                ships_loaded, weapons_loaded, file);
+            if let Some(state) = gm_state {
+                if errors.is_empty() {
+                    state.add_notification(
+                        format!("Reloaded: {} ships, {} weapons", ships_loaded, weapons_loaded),
+                        "success".to_string(),
+                    );
+                } else {
+                    state.add_notification(
+                        format!("Partial reload: {} errors", errors.len()),
+                        "warning".to_string(),
+                    );
+                }
+            }
+        }
+
+        AdminServerMessage::SubscribedToScriptErrors => {
+            tracing::info!("[gm-ws] Subscribed to script errors");
+        }
+
+        AdminServerMessage::UnsubscribedFromScriptErrors => {
+            tracing::info!("[gm-ws] Unsubscribed from script errors");
         }
     }
 }

@@ -30,6 +30,15 @@ pub fn register_all(engine: &mut Engine) {
     // Register facade views for fluent script API
     crate::views::register(engine);
 
+    // Register transaction support for atomic operations
+    crate::transaction::register(engine);
+
+    // Register AI system (behavior trees + utility AI)
+    crate::ai::register_ai_bindings(engine);
+
+    // Register persistence system for saving/loading script state
+    crate::persistence::register_persistence_bindings(engine);
+
     // Register common utility functions
     register_utils(engine);
 }
@@ -80,5 +89,23 @@ fn register_utils(engine: &mut Engine) {
 
     engine.register_fn("log_error", |msg: &str| {
         tracing::error!(script = true, "{}", msg);
+    });
+
+    // Error inspection for scripts
+    // Scripts can check for errors after API calls that might fail
+    engine.register_fn("last_error", || -> String {
+        crate::errors::last_error_message()
+    });
+
+    engine.register_fn("has_error", || -> bool {
+        crate::errors::has_errors()
+    });
+
+    engine.register_fn("clear_errors", || {
+        crate::errors::clear_errors();
+    });
+
+    engine.register_fn("error_count", || -> i64 {
+        crate::errors::error_count() as i64
     });
 }

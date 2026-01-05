@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLACKWING</title>
+    
+<script type="module">
+import init, * as bindings from '/play/bw-frontend-a388f4b81eb56ef5.js';
+const wasm = await init({ module_or_path: '/play/bw-frontend-a388f4b81eb56ef5_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <link rel="stylesheet" href="/play/main-a498e957f88c31f4.css" integrity="sha384-29E8cn5lvlRiavmDPWvgDi6KS66SdKGC2R8tjBA6mSgr/9Qm9+FReA2Q80LMHXr7"/>
+<link rel="modulepreload" href="/play/bw-frontend-a388f4b81eb56ef5.js" crossorigin="anonymous" integrity="sha384-hZn1Zi+dOQJb/r0PvTk3KAmewHCVsQzudOezvKvzsVZrT6W5mGMnnuJs6tFxxfKD"><link rel="preload" href="/play/bw-frontend-a388f4b81eb56ef5_bg.wasm" crossorigin="anonymous" integrity="sha384-Ir36HJFS1fg4Rf6T7DNQfBVQ7zFgACUIRqYOQgoIizRxmOiguRN3Dzid+Z/fzYwI" as="fetch" type="application/wasm"></head>
+<body>
+    <div id="app"></div>
+</body>
+</html>

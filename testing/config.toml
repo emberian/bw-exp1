@@ -1,0 +1,17 @@
+# BLACKWING Test Configuration
+
+[server]
+host = "0.0.0.0"
+port = 3001
+# Point to the built frontend dist directory
+play_dir = "crates/bw-frontend/dist"
+# No static landing page for tests
+static_dir = ""
+
+[admin]
+usernames = ["admin"]
+
+[scripting]
+scripts_dir = "scripts"
+hot_reload = false
+max_log_entries = 100

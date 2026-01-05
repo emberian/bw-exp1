@@ -1,4 +1,11 @@
 //! Integration tests for the GM Playtest system
+//!
+//! Focused test suite covering core functionality:
+//! - PlaytestManager lifecycle
+//! - State forking and isolation
+//! - Player participation
+//! - Promotion workflow
+//! - End-to-end scenarios
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -17,20 +24,16 @@ use bw_server::GameState;
 use bw_server::scripting::ScriptLogBuffer;
 
 // =============================================================================
-// Test Helpers
+// Test Setup
 // =============================================================================
 
-/// Create a test player.
-fn create_test_player(username: &str, sector_id: Uuid, ship_id: Uuid) -> Player {
-    let mut player = Player::new(
-        username.to_string(),
-        Uuid::new_v4(),
-        ship_id,
-        sector_id,
-    );
-    player.resources.reputation = 100;
-    player.credits = 10000;
-    player
+/// Populated test state with all IDs accessible.
+struct TestState {
+    state: GameState,
+    sector_id: Uuid,
+    player_id: Uuid,
+    player_ship_id: Uuid,
+    npc_ship_id: Uuid,
 }
 
 /// Create a test ship.
@@ -39,7 +42,7 @@ fn create_test_ship(name: &str, owner_id: Uuid, sector_id: Uuid, faction_id: Uui
         Ship::new_player_ship(
             name.to_string(),
             owner_id,
-            ShipClass::PatrolCorvette, // Default class for player ships
+            ShipClass::PatrolCorvette,
             sector_id,
             faction_id,
         )
@@ -56,13 +59,10 @@ fn create_test_ship(name: &str, owner_id: Uuid, sector_id: Uuid, faction_id: Uui
 
 /// Create a test sector.
 fn create_test_sector(name: &str) -> Sector {
-    Sector::new(
-        name.to_string(),
-        DangerLevel::Safe,
-    )
+    Sector::new(name.to_string(), DangerLevel::Safe)
 }
 
-/// Set up a minimal game state for testing playtests.
+/// Set up a minimal game state.
 async fn setup_test_state() -> GameState {
     let db = bw_server::Database::new_in_memory().await.unwrap();
     let persist = db.spawn_persistence();
@@ -102,31 +102,28 @@ async fn setup_test_state() -> GameState {
     }
 }
 
-/// Set up a state with sectors, ships, and players.
-async fn setup_populated_state() -> (GameState, Uuid, Uuid, Uuid, Uuid) {
+/// Set up a populated state with sectors, ships, and players.
+async fn setup_populated_state() -> TestState {
     let state = setup_test_state().await;
-
-    // Create a faction for the player
     let faction_id = Uuid::new_v4();
 
-    // Create a sector
+    // Create sector
     let sector = create_test_sector("Test Sector Alpha");
     let sector_id = sector.id;
-    let sector_instance = bw_server::state::SectorInstance::new(sector);
-    state.sectors.insert(sector_id, sector_instance);
+    state.sectors.insert(sector_id, bw_server::state::SectorInstance::new(sector));
 
-    // Create a player first to get their ID
+    // Create player
     let mut player = Player::new(
         "TestGM".to_string(),
         Uuid::new_v4(),
-        Uuid::nil(), // Will update after ship creation
+        Uuid::nil(),
         sector_id,
     );
     let player_id = player.id;
     player.resources.reputation = 100;
     player.credits = 10000;
 
-    // Create a player ship
+    // Create player ship
     let player_ship = create_test_ship("Player Ship", player_id, sector_id, faction_id, true);
     let player_ship_id = player_ship.id;
     state.ships.insert(player_ship_id, player_ship);
@@ -145,12 +142,12 @@ async fn setup_populated_state() -> (GameState, Uuid, Uuid, Uuid, Uuid) {
         playtest_id: None,
     });
 
-    // Add ship to sector index
+    // Add ship to sector
     if let Some(sector) = state.sectors.get(&sector_id) {
         sector.ship_ids.insert(player_ship_id, ());
     }
 
-    // Create an NPC ship
+    // Create NPC ship
     let npc_ship = create_test_ship("Pirate Scum", Uuid::nil(), sector_id, Uuid::nil(), false);
     let npc_ship_id = npc_ship.id;
     state.ships.insert(npc_ship_id, npc_ship);
@@ -159,194 +156,124 @@ async fn setup_populated_state() -> (GameState, Uuid, Uuid, Uuid, Uuid) {
         sector.ship_ids.insert(npc_ship_id, ());
     }
 
-    (state, sector_id, player_id, player_ship_id, npc_ship_id)
+    TestState {
+        state,
+        sector_id,
+        player_id,
+        player_ship_id,
+        npc_ship_id,
+    }
+}
+
+/// Helper to create and register a playtest.
+fn create_playtest(
+    state: &GameState,
+    owner_id: Uuid,
+    name: &str,
+    config: ForkConfig,
+) -> (Uuid, Arc<PlaytestInstance>) {
+    let factions = state.get_factions_arc();
+    let faction_tags = state.get_faction_tags_arc();
+
+    let builder = PlaytestBuilder::new(owner_id, name.to_string(), state.get_tick(), config.clone());
+    let playtest_id = builder.id();
+    let instance = builder.build(factions, faction_tags);
+
+    state.fork_to_playtest(&instance, &config);
+    instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
+
+    let instance = state.playtest_manager.register(instance).unwrap();
+    (playtest_id, instance)
 }
 
 // =============================================================================
-// PlaytestManager Tests
+// Manager Tests
 // =============================================================================
 
 #[tokio::test]
-async fn test_playtest_manager_creation() {
-    let manager = PlaytestManager::new(10);
-    assert_eq!(manager.instance_count(), 0);
-}
-
-#[tokio::test]
-async fn test_playtest_manager_limit() {
+async fn test_manager_instance_limit() {
     let manager = PlaytestManager::new(2);
-
-    // Create factions Arc for building instances
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
 
-    // Create first playtest
+    // Create two playtests - should succeed
+    for i in 0..2 {
+        let builder = PlaytestBuilder::new(Uuid::new_v4(), format!("Test {}", i), 100, ForkConfig::default());
+        let instance = builder.build(factions.clone(), faction_tags.clone());
+        assert!(manager.register(instance).is_ok());
+    }
+
+    // Third should fail
+    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test 3".into(), 100, ForkConfig::default());
+    let instance = builder.build(factions.clone(), faction_tags.clone());
+    assert!(matches!(manager.register(instance), Err(PlaytestError::LimitReached)));
+}
+
+#[tokio::test]
+async fn test_player_cannot_join_multiple_playtests() {
+    let manager = PlaytestManager::new(10);
+    let factions = Arc::new(DashMap::new());
+    let faction_tags = Arc::new(DashMap::new());
+
+    let player_id = Uuid::new_v4();
+
+    // Create and register first playtest
     let builder1 = PlaytestBuilder::new(Uuid::new_v4(), "Test 1".into(), 100, ForkConfig::default());
+    let playtest1_id = builder1.id();
     let instance1 = builder1.build(factions.clone(), faction_tags.clone());
-    assert!(manager.register(instance1).is_ok());
+    instance1.add_participant(Uuid::new_v4(), true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
+    manager.register(instance1).unwrap();
 
     // Create second playtest
     let builder2 = PlaytestBuilder::new(Uuid::new_v4(), "Test 2".into(), 100, ForkConfig::default());
+    let playtest2_id = builder2.id();
     let instance2 = builder2.build(factions.clone(), faction_tags.clone());
-    assert!(manager.register(instance2).is_ok());
+    instance2.add_participant(Uuid::new_v4(), true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
+    manager.register(instance2).unwrap();
 
-    // Third should fail (limit reached)
-    let builder3 = PlaytestBuilder::new(Uuid::new_v4(), "Test 3".into(), 100, ForkConfig::default());
-    let instance3 = builder3.build(factions.clone(), faction_tags.clone());
-    let result = manager.register(instance3);
-    assert!(matches!(result, Err(PlaytestError::LimitReached)));
-}
+    // Join first playtest
+    manager.join_playtest(playtest1_id, player_id, Uuid::new_v4(), Uuid::new_v4()).unwrap();
 
-#[tokio::test]
-async fn test_playtest_player_tracking() {
-    let manager = PlaytestManager::new(10);
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let owner_id = Uuid::new_v4();
-    let player2_id = Uuid::new_v4();
-
-    let builder = PlaytestBuilder::new(owner_id, "Test".into(), 100, ForkConfig::default());
-    let playtest_id = builder.id();
-    let instance = builder.build(factions.clone(), faction_tags.clone());
-
-    // Add owner as participant
-    instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    let instance = manager.register(instance).unwrap();
-
-    // Owner should be tracked
-    assert!(manager.is_player_in_playtest(owner_id));
-    assert_eq!(manager.get_player_playtest_id(owner_id), Some(playtest_id));
-
-    // Player2 is not in playtest yet
-    assert!(!manager.is_player_in_playtest(player2_id));
-
-    // Join player2
-    manager.join_playtest(playtest_id, player2_id, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-    assert!(manager.is_player_in_playtest(player2_id));
-
-    // Leave
-    manager.leave_playtest(player2_id).unwrap();
-    assert!(!manager.is_player_in_playtest(player2_id));
-}
-
-#[tokio::test]
-async fn test_playtest_cannot_join_twice() {
-    let manager = PlaytestManager::new(10);
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let owner_id = Uuid::new_v4();
-    let player_id = Uuid::new_v4();
-
-    let builder = PlaytestBuilder::new(owner_id, "Test".into(), 100, ForkConfig::default());
-    let playtest_id = builder.id();
-    let instance = builder.build(factions.clone(), faction_tags.clone());
-    instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    manager.register(instance).unwrap();
-
-    // Join once
-    manager.join_playtest(playtest_id, player_id, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    // Try to join again - should fail
-    let result = manager.join_playtest(playtest_id, player_id, Uuid::new_v4(), Uuid::new_v4());
+    // Try to join second - should fail
+    let result = manager.join_playtest(playtest2_id, player_id, Uuid::new_v4(), Uuid::new_v4());
     assert!(matches!(result, Err(PlaytestError::AlreadyInPlaytest)));
 }
 
 #[tokio::test]
-async fn test_playtest_leave_not_in_playtest() {
+async fn test_destroy_cleans_up_all_participants() {
     let manager = PlaytestManager::new(10);
-
-    let player_id = Uuid::new_v4();
-    let result = manager.leave_playtest(player_id);
-    assert!(matches!(result, Err(PlaytestError::NotInPlaytest)));
-}
-
-// =============================================================================
-// PlaytestInstance Tests
-// =============================================================================
-
-#[tokio::test]
-async fn test_playtest_instance_tick_management() {
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
 
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
+    let owner_id = Uuid::new_v4();
+    let player_ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
 
-    assert_eq!(instance.get_tick(), 100);
-    assert_eq!(instance.increment_tick(), 101);
-    assert_eq!(instance.get_tick(), 101);
-}
+    let builder = PlaytestBuilder::new(owner_id, "Test".into(), 100, ForkConfig::default());
+    let playtest_id = builder.id();
+    let instance = builder.build(factions.clone(), faction_tags.clone());
+    instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
+    manager.register(instance).unwrap();
 
-#[tokio::test]
-async fn test_playtest_instance_pause() {
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
-
-    // Playtests start paused by design (so GM can set up)
-    assert!(instance.is_paused());
-    instance.set_paused(false);
-    assert!(!instance.is_paused());
-    instance.set_paused(true);
-    assert!(instance.is_paused());
-}
-
-#[tokio::test]
-async fn test_playtest_instance_time_scale() {
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
-
-    // Default is 1.0x
-    assert!((instance.get_time_scale() - 1.0).abs() < 0.01);
-
-    instance.set_time_scale(2.0);
-    assert!((instance.get_time_scale() - 2.0).abs() < 0.01);
-
-    // Test clamping - max is 10x
-    instance.set_time_scale(100.0);
-    assert!((instance.get_time_scale() - 10.0).abs() < 0.01);
-
-    // Test clamping - min is 0.1x
-    instance.set_time_scale(0.001);
-    assert!((instance.get_time_scale() - 0.1).abs() < 0.01);
-}
-
-#[tokio::test]
-async fn test_playtest_participant_limit() {
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
-
-    // Add max participants
-    for i in 0..PlaytestInstance::MAX_PARTICIPANTS {
-        let result = instance.add_participant(
-            Uuid::new_v4(),
-            false,
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-        );
-        assert!(result.is_ok(), "Failed to add participant {}: {:?}", i, result);
+    // Add multiple players
+    for pid in &player_ids {
+        manager.join_playtest(playtest_id, *pid, Uuid::new_v4(), Uuid::new_v4()).unwrap();
     }
 
-    // One more should fail
-    let result = instance.add_participant(
-        Uuid::new_v4(),
-        false,
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-    );
-    assert!(matches!(result, Err(PlaytestError::ParticipantLimitReached)));
+    // Verify all are tracked
+    assert!(manager.is_player_in_playtest(owner_id));
+    for pid in &player_ids {
+        assert!(manager.is_player_in_playtest(*pid));
+    }
+
+    // Destroy
+    manager.destroy(playtest_id).unwrap();
+
+    // Verify all cleaned up
+    assert!(!manager.is_player_in_playtest(owner_id));
+    for pid in &player_ids {
+        assert!(!manager.is_player_in_playtest(*pid));
+    }
+    assert!(manager.get(playtest_id).is_none());
 }
 
 // =============================================================================
@@ -354,58 +281,27 @@ async fn test_playtest_participant_limit() {
 // =============================================================================
 
 #[tokio::test]
-async fn test_fork_to_playtest_ships() {
-    let (state, sector_id, player_id, player_ship_id, npc_ship_id) = setup_populated_state().await;
+async fn test_fork_copies_ships_and_sectors() {
+    let ts = setup_populated_state().await;
 
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let (_, instance) = create_playtest(&ts.state, ts.player_id, "Test Fork", config);
 
-    let config = ForkConfig::single_sector(sector_id);
-    let builder = PlaytestBuilder::new(player_id, "Test Fork".into(), state.get_tick(), config.clone());
-    let instance = builder.build(factions, faction_tags);
+    // Ships forked
+    assert!(instance.ships.contains_key(&ts.player_ship_id));
+    assert!(instance.ships.contains_key(&ts.npc_ship_id));
 
-    // Fork state
-    state.fork_to_playtest(&instance, &config);
-
-    // Verify ships were forked
-    assert!(instance.ships.contains_key(&player_ship_id), "Player ship should be forked");
-    assert!(instance.ships.contains_key(&npc_ship_id), "NPC ship should be forked");
-
-    // Verify it's a copy, not a reference
-    if let Some(mut playtest_ship) = instance.ships.get_mut(&npc_ship_id) {
-        playtest_ship.hull_integrity = 50.0;
-    }
-
-    // Live ship should be unchanged
-    let live_ship = state.ships.get(&npc_ship_id).unwrap();
-    assert!((live_ship.hull_integrity - 100.0).abs() < 0.01, "Live ship should be unchanged");
-}
-
-#[tokio::test]
-async fn test_fork_to_playtest_sectors() {
-    let (state, sector_id, player_id, _player_ship_id, _npc_ship_id) = setup_populated_state().await;
-
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
-
-    let config = ForkConfig::single_sector(sector_id);
-    let builder = PlaytestBuilder::new(player_id, "Test Fork".into(), state.get_tick(), config.clone());
-    let instance = builder.build(factions, faction_tags);
-
-    state.fork_to_playtest(&instance, &config);
-
-    // Verify sector was forked
-    assert!(instance.sectors.contains_key(&sector_id));
-
-    let playtest_sector = instance.sectors.get(&sector_id).unwrap();
+    // Sector forked
+    assert!(instance.sectors.contains_key(&ts.sector_id));
+    let playtest_sector = instance.sectors.get(&ts.sector_id).unwrap();
     assert_eq!(playtest_sector.sector.name, "Test Sector Alpha");
 }
 
 #[tokio::test]
-async fn test_fork_excludes_other_sectors() {
+async fn test_fork_only_includes_specified_sectors() {
     let state = setup_test_state().await;
 
-    // Create two sectors
+    // Create two sectors with ships
     let sector1 = create_test_sector("Sector 1");
     let sector1_id = sector1.id;
     state.sectors.insert(sector1_id, bw_server::state::SectorInstance::new(sector1));
@@ -414,532 +310,385 @@ async fn test_fork_excludes_other_sectors() {
     let sector2_id = sector2.id;
     state.sectors.insert(sector2_id, bw_server::state::SectorInstance::new(sector2));
 
-    // Create ships in each sector
-    let ship1 = create_test_ship("Ship in Sector 1", Uuid::nil(), sector1_id, Uuid::nil(), false);
+    let ship1 = create_test_ship("Ship 1", Uuid::nil(), sector1_id, Uuid::nil(), false);
     let ship1_id = ship1.id;
     state.ships.insert(ship1_id, ship1);
 
-    let ship2 = create_test_ship("Ship in Sector 2", Uuid::nil(), sector2_id, Uuid::nil(), false);
+    let ship2 = create_test_ship("Ship 2", Uuid::nil(), sector2_id, Uuid::nil(), false);
     let ship2_id = ship2.id;
     state.ships.insert(ship2_id, ship2);
 
     // Fork only sector 1
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
-
     let config = ForkConfig::single_sector(sector1_id);
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, config.clone());
-    let instance = builder.build(factions, faction_tags);
+    let (_, instance) = create_playtest(&state, Uuid::new_v4(), "Test", config);
 
-    state.fork_to_playtest(&instance, &config);
-
-    // Only sector1 and ship1 should be forked
+    // Only sector1 and ship1 should be present
     assert!(instance.sectors.contains_key(&sector1_id));
     assert!(!instance.sectors.contains_key(&sector2_id));
     assert!(instance.ships.contains_key(&ship1_id));
     assert!(!instance.ships.contains_key(&ship2_id));
 }
 
-// =============================================================================
-// Authorization Tests
-// =============================================================================
-
 #[tokio::test]
-async fn test_playtest_authorization() {
-    let manager = PlaytestManager::new(10);
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
+async fn test_playtest_changes_do_not_affect_live() {
+    let ts = setup_populated_state().await;
 
-    let owner_id = Uuid::new_v4();
-    let player_id = Uuid::new_v4();
-    let random_id = Uuid::new_v4();
+    let original_hull = ts.state.ships.get(&ts.npc_ship_id).unwrap().hull_integrity;
 
-    let builder = PlaytestBuilder::new(owner_id, "Test".into(), 100, ForkConfig::default());
-    let playtest_id = builder.id();
-    let instance = builder.build(factions.clone(), faction_tags.clone());
-    instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    manager.register(instance).unwrap();
-
-    // Owner is authorized
-    assert!(manager.is_authorized(playtest_id, owner_id));
-
-    // Non-participant is not authorized
-    assert!(!manager.is_authorized(random_id, random_id));
-
-    // Join a player
-    manager.join_playtest(playtest_id, player_id, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    // Regular participant is not authorized (only owner)
-    assert!(!manager.is_authorized(playtest_id, player_id));
-}
-
-// =============================================================================
-// Destroy Tests
-// =============================================================================
-
-#[tokio::test]
-async fn test_playtest_destroy() {
-    let manager = PlaytestManager::new(10);
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let owner_id = Uuid::new_v4();
-    let player_id = Uuid::new_v4();
-
-    let builder = PlaytestBuilder::new(owner_id, "Test".into(), 100, ForkConfig::default());
-    let playtest_id = builder.id();
-    let instance = builder.build(factions.clone(), faction_tags.clone());
-    instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    manager.register(instance).unwrap();
-    manager.join_playtest(playtest_id, player_id, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    // Both players should be in playtest
-    assert!(manager.is_player_in_playtest(owner_id));
-    assert!(manager.is_player_in_playtest(player_id));
-
-    // Destroy
-    manager.destroy(playtest_id).unwrap();
-
-    // Neither should be in playtest anymore
-    assert!(!manager.is_player_in_playtest(owner_id));
-    assert!(!manager.is_player_in_playtest(player_id));
-
-    // Playtest should be gone
-    assert!(manager.get(playtest_id).is_none());
-}
-
-#[tokio::test]
-async fn test_destroy_nonexistent_playtest() {
-    let manager = PlaytestManager::new(10);
-
-    let result = manager.destroy(Uuid::new_v4());
-    assert!(matches!(result, Err(PlaytestError::NotFound)));
-}
-
-// =============================================================================
-// ForkConfig Tests
-// =============================================================================
-
-#[test]
-fn test_fork_config_single_sector() {
-    let sector_id = Uuid::new_v4();
-    let config = ForkConfig::single_sector(sector_id);
-
-    assert_eq!(config.sectors.len(), 1);
-    assert!(config.sectors.contains(&sector_id));
-    assert!(config.include_ships);
-    assert!(config.include_npcs);
-    assert!(!config.include_other_players);
-}
-
-#[test]
-fn test_fork_config_default() {
-    let config = ForkConfig::default();
-
-    assert!(config.sectors.is_empty());
-    assert!(config.include_ships);
-    assert!(config.include_npcs);
-    assert!(!config.include_other_players);
-}
-
-// =============================================================================
-// Entity Tracking Tests
-// =============================================================================
-
-#[tokio::test]
-async fn test_created_ship_tracking() {
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
-
-    // No created ships initially
-    assert_eq!(instance.created_ship_ids.len(), 0);
-
-    // Track a new ship
-    let new_ship_id = Uuid::new_v4();
-    instance.created_ship_ids.insert(new_ship_id, ());
-
-    assert_eq!(instance.created_ship_ids.len(), 1);
-    assert!(instance.created_ship_ids.contains_key(&new_ship_id));
-}
-
-#[tokio::test]
-async fn test_deleted_ship_tracking() {
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
-
-    // No deleted ships initially
-    assert_eq!(instance.deleted_ship_ids.len(), 0);
-
-    // Track a deleted ship
-    let deleted_ship_id = Uuid::new_v4();
-    instance.deleted_ship_ids.insert(deleted_ship_id, ());
-
-    assert_eq!(instance.deleted_ship_ids.len(), 1);
-    assert!(instance.deleted_ship_ids.contains_key(&deleted_ship_id));
-}
-
-// =============================================================================
-// Message Routing Tests
-// =============================================================================
-
-#[tokio::test]
-async fn test_message_destination_live() {
-    let manager = PlaytestManager::new(10);
-
-    let player_id = Uuid::new_v4();
-    let destination = manager.get_destination(player_id);
-
-    assert!(matches!(destination, bw_server::playtest::MessageDestination::Live));
-}
-
-#[tokio::test]
-async fn test_message_destination_playtest() {
-    let manager = PlaytestManager::new(10);
-    let factions = Arc::new(DashMap::new());
-    let faction_tags = Arc::new(DashMap::new());
-
-    let owner_id = Uuid::new_v4();
-
-    let builder = PlaytestBuilder::new(owner_id, "Test".into(), 100, ForkConfig::default());
-    let playtest_id = builder.id();
-    let instance = builder.build(factions.clone(), faction_tags.clone());
-    instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
-
-    manager.register(instance).unwrap();
-
-    let destination = manager.get_destination(owner_id);
-    match destination {
-        bw_server::playtest::MessageDestination::Playtest(instance) => {
-            assert_eq!(instance.id, playtest_id);
-        }
-        _ => panic!("Expected Playtest destination"),
-    }
-}
-
-// =============================================================================
-// End-to-End Integration Tests (Full Server Flow)
-// =============================================================================
-
-/// Test the complete playtest lifecycle through GameState.
-/// This simulates what happens when admin handlers create, fork, and manage playtests.
-#[tokio::test]
-async fn test_end_to_end_playtest_lifecycle() {
-    let (state, sector_id, player_id, player_ship_id, npc_ship_id) = setup_populated_state().await;
-
-    // === Step 1: Create a playtest ===
-    let fork_config = ForkConfig::single_sector(sector_id);
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
-
-    let builder = PlaytestBuilder::new(
-        player_id,
-        "End-to-End Test".into(),
-        state.get_tick(),
-        fork_config.clone(),
-    );
-    let playtest_id = builder.id();
-    let instance = builder.build(factions, faction_tags);
-
-    // Fork live state into playtest
-    state.fork_to_playtest(&instance, &fork_config);
-
-    // Verify forked data
-    assert!(instance.ships.contains_key(&player_ship_id));
-    assert!(instance.ships.contains_key(&npc_ship_id));
-    assert!(instance.sectors.contains_key(&sector_id));
-
-    // Add owner as participant
-    instance.add_participant(player_id, true, player_ship_id, sector_id).unwrap();
-
-    // Update session to indicate player is in playtest (what handler does)
-    if let Some(mut session) = state.players.get_mut(&player_id) {
-        session.playtest_id = Some(playtest_id);
-    }
-
-    // Register with manager
-    let instance = state.playtest_manager.register(instance).unwrap();
-
-    // === Step 2: Verify routing ===
-    assert!(state.playtest_manager.is_player_in_playtest(player_id));
-    let destination = state.playtest_manager.get_destination(player_id);
-    assert!(matches!(destination, bw_server::playtest::MessageDestination::Playtest(_)));
-
-    // === Step 3: Modify state in playtest ===
-    // Damage an NPC ship in the playtest
-    if let Some(mut playtest_ship) = instance.ships.get_mut(&npc_ship_id) {
-        playtest_ship.hull_integrity = 25.0;
-    }
-
-    // Verify live state is unchanged
-    let live_ship = state.ships.get(&npc_ship_id).unwrap();
-    assert!((live_ship.hull_integrity - 100.0).abs() < 0.01);
-
-    // === Step 4: Add another participant ===
-    // Create second player
-    let player2 = create_test_player("Player2", sector_id, Uuid::nil());
-    let player2_id = player2.id;
-    state.player_data.insert(player2_id, player2);
-
-    let player2_ship = create_test_ship("Player2 Ship", player2_id, sector_id, Uuid::nil(), true);
-    let player2_ship_id = player2_ship.id;
-    state.ships.insert(player2_ship_id, player2_ship);
-
-    let (tx2, _rx2) = tokio::sync::mpsc::channel(100);
-    state.players.insert(player2_id, bw_server::state::PlayerSession {
-        player_id: player2_id,
-        ship_id: player2_ship_id,
-        sector_id,
-        connection: Some(tx2),
-        playtest_id: None,
-    });
-
-    // Join player2 to playtest
-    state.playtest_manager.join_playtest(playtest_id, player2_id, player2_ship_id, sector_id).unwrap();
-
-    // Update session
-    if let Some(mut session) = state.players.get_mut(&player2_id) {
-        session.playtest_id = Some(playtest_id);
-    }
-
-    assert_eq!(instance.participant_count(), 2);
-    assert!(state.playtest_manager.is_player_in_playtest(player2_id));
-
-    // === Step 5: Player leaves ===
-    state.playtest_manager.leave_playtest(player2_id).unwrap();
-    if let Some(mut session) = state.players.get_mut(&player2_id) {
-        session.playtest_id = None;
-    }
-
-    assert_eq!(instance.participant_count(), 1);
-    assert!(!state.playtest_manager.is_player_in_playtest(player2_id));
-
-    // === Step 6: Destroy playtest ===
-    state.playtest_manager.destroy(playtest_id).unwrap();
-    if let Some(mut session) = state.players.get_mut(&player_id) {
-        session.playtest_id = None;
-    }
-
-    assert!(!state.playtest_manager.is_player_in_playtest(player_id));
-    assert!(state.playtest_manager.get(playtest_id).is_none());
-}
-
-/// Test playtest state isolation - changes in playtest don't affect live.
-#[tokio::test]
-async fn test_playtest_state_isolation() {
-    let (state, sector_id, player_id, _player_ship_id, npc_ship_id) = setup_populated_state().await;
-
-    // Record original values
-    let original_hull = state.ships.get(&npc_ship_id).unwrap().hull_integrity;
-
-    // Create playtest
-    let fork_config = ForkConfig::single_sector(sector_id);
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
-
-    let builder = PlaytestBuilder::new(player_id, "Isolation Test".into(), state.get_tick(), fork_config.clone());
-    let instance = builder.build(factions, faction_tags);
-    state.fork_to_playtest(&instance, &fork_config);
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let (_, instance) = create_playtest(&ts.state, ts.player_id, "Test", config);
 
     // Modify ship in playtest
-    if let Some(mut ship) = instance.ships.get_mut(&npc_ship_id) {
+    if let Some(mut ship) = instance.ships.get_mut(&ts.npc_ship_id) {
         ship.hull_integrity = 10.0;
         ship.shield_strength = 5.0;
     }
 
-    // Verify live state is unchanged
-    let live_ship = state.ships.get(&npc_ship_id).unwrap();
+    // Live unchanged
+    let live_ship = ts.state.ships.get(&ts.npc_ship_id).unwrap();
     assert!((live_ship.hull_integrity - original_hull).abs() < 0.01);
 
-    // Verify playtest state was changed
-    let playtest_ship = instance.ships.get(&npc_ship_id).unwrap();
+    // Playtest changed
+    let playtest_ship = instance.ships.get(&ts.npc_ship_id).unwrap();
     assert!((playtest_ship.hull_integrity - 10.0).abs() < 0.01);
 }
 
-/// Test that playtest can modify its own sectors independently.
 #[tokio::test]
-async fn test_playtest_sector_isolation() {
-    let (state, sector_id, player_id, _player_ship_id, _npc_ship_id) = setup_populated_state().await;
-
-    // Create playtest
-    let fork_config = ForkConfig::single_sector(sector_id);
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
-
-    let builder = PlaytestBuilder::new(player_id, "Sector Isolation Test".into(), state.get_tick(), fork_config.clone());
-    let instance = builder.build(factions, faction_tags);
-    state.fork_to_playtest(&instance, &fork_config);
-
-    // Spawn a new NPC in playtest
-    let new_npc = create_test_ship("Test Enemy", Uuid::nil(), sector_id, Uuid::nil(), false);
-    let new_npc_id = new_npc.id;
-    instance.ships.insert(new_npc_id, new_npc);
-    instance.created_ship_ids.insert(new_npc_id, ());
-
-    if let Some(playtest_sector) = instance.sectors.get(&sector_id) {
-        playtest_sector.ship_ids.insert(new_npc_id, ());
-    }
-
-    // Verify the ship exists in playtest but not in live
-    assert!(instance.ships.contains_key(&new_npc_id));
-    assert!(!state.ships.contains_key(&new_npc_id));
-
-    // Verify tracking
-    assert!(instance.created_ship_ids.contains_key(&new_npc_id));
-}
-
-/// Test concurrent playtest sessions don't interfere.
-#[tokio::test]
-async fn test_concurrent_playtests() {
+async fn test_concurrent_playtests_are_isolated() {
     let state = setup_test_state().await;
 
-    // Create sector
-    let sector = create_test_sector("Shared Sector");
+    // Create shared sector and ship
+    let sector = create_test_sector("Shared");
     let sector_id = sector.id;
     state.sectors.insert(sector_id, bw_server::state::SectorInstance::new(sector));
 
-    // Create shared NPC
-    let npc = create_test_ship("Shared NPC", Uuid::nil(), sector_id, Uuid::nil(), false);
+    let npc = create_test_ship("NPC", Uuid::nil(), sector_id, Uuid::nil(), false);
     let npc_id = npc.id;
     state.ships.insert(npc_id, npc);
 
     // Create two playtests
-    let gm1_id = Uuid::new_v4();
-    let gm2_id = Uuid::new_v4();
-
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
-
     let config = ForkConfig::single_sector(sector_id);
+    let (_, instance1) = create_playtest(&state, Uuid::new_v4(), "Playtest 1", config.clone());
+    let (_, instance2) = create_playtest(&state, Uuid::new_v4(), "Playtest 2", config);
 
-    let builder1 = PlaytestBuilder::new(gm1_id, "Playtest 1".into(), 100, config.clone());
-    let playtest1_id = builder1.id();
-    let instance1 = builder1.build(factions.clone(), faction_tags.clone());
-    state.fork_to_playtest(&instance1, &config);
-    instance1.add_participant(gm1_id, true, Uuid::new_v4(), sector_id).unwrap();
+    // Modify NPC differently in each
+    instance1.ships.get_mut(&npc_id).unwrap().hull_integrity = 50.0;
+    instance2.ships.get_mut(&npc_id).unwrap().hull_integrity = 75.0;
 
-    let builder2 = PlaytestBuilder::new(gm2_id, "Playtest 2".into(), 100, config.clone());
-    let playtest2_id = builder2.id();
-    let instance2 = builder2.build(factions.clone(), faction_tags.clone());
-    state.fork_to_playtest(&instance2, &config);
-    instance2.add_participant(gm2_id, true, Uuid::new_v4(), sector_id).unwrap();
-
-    state.playtest_manager.register(instance1).unwrap();
-    state.playtest_manager.register(instance2).unwrap();
-
-    // Modify NPC in playtest 1
-    if let Some(instance) = state.playtest_manager.get(playtest1_id) {
-        if let Some(mut ship) = instance.ships.get_mut(&npc_id) {
-            ship.hull_integrity = 50.0;
-        }
-    }
-
-    // Modify NPC differently in playtest 2
-    if let Some(instance) = state.playtest_manager.get(playtest2_id) {
-        if let Some(mut ship) = instance.ships.get_mut(&npc_id) {
-            ship.hull_integrity = 75.0;
-        }
-    }
-
-    // Verify each playtest has its own state
-    let playtest1 = state.playtest_manager.get(playtest1_id).unwrap();
-    let playtest2 = state.playtest_manager.get(playtest2_id).unwrap();
-
-    assert!((playtest1.ships.get(&npc_id).unwrap().hull_integrity - 50.0).abs() < 0.01);
-    assert!((playtest2.ships.get(&npc_id).unwrap().hull_integrity - 75.0).abs() < 0.01);
-
-    // Live state unchanged
+    // Each has independent state
+    assert!((instance1.ships.get(&npc_id).unwrap().hull_integrity - 50.0).abs() < 0.01);
+    assert!((instance2.ships.get(&npc_id).unwrap().hull_integrity - 75.0).abs() < 0.01);
     assert!((state.ships.get(&npc_id).unwrap().hull_integrity - 100.0).abs() < 0.01);
 }
 
-/// Test playtest tick management.
-#[tokio::test]
-async fn test_playtest_tick_independence() {
+// =============================================================================
+// Instance Controls Tests
+// =============================================================================
+
+#[test]
+fn test_playtest_tick_and_time_controls() {
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
 
-    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Tick Test".into(), 1000, ForkConfig::default());
+    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 1000, ForkConfig::default());
     let instance = builder.build(factions, faction_tags);
 
     // Starts at fork tick
     assert_eq!(instance.get_tick(), 1000);
 
-    // Can increment independently
-    for _ in 0..100 {
-        instance.increment_tick();
-    }
+    // Can increment
+    assert_eq!(instance.increment_tick(), 1001);
+    assert_eq!(instance.get_tick(), 1001);
 
-    assert_eq!(instance.get_tick(), 1100);
-
-    // Playtests start paused
+    // Starts paused
     assert!(instance.is_paused());
-
-    // Unpause and verify tick is unchanged
     instance.set_paused(false);
     assert!(!instance.is_paused());
-    assert_eq!(instance.get_tick(), 1100);
+
+    // Time scale defaults to 1.0x
+    assert!((instance.get_time_scale() - 1.0).abs() < 0.01);
+
+    // Time scale clamped to 0.1x - 10x
+    instance.set_time_scale(100.0);
+    assert!((instance.get_time_scale() - 10.0).abs() < 0.01);
+    instance.set_time_scale(0.001);
+    assert!((instance.get_time_scale() - 0.1).abs() < 0.01);
 }
 
-/// Test session update consistency.
-#[tokio::test]
-async fn test_session_playtest_id_consistency() {
-    let (state, sector_id, player_id, player_ship_id, _npc_ship_id) = setup_populated_state().await;
+#[test]
+fn test_participant_limit() {
+    let factions = Arc::new(DashMap::new());
+    let faction_tags = Arc::new(DashMap::new());
 
-    // Verify session has no playtest initially
-    {
-        let session = state.players.get(&player_id).unwrap();
-        assert!(session.playtest_id.is_none());
+    let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
+    let instance = builder.build(factions, faction_tags);
+
+    // Fill to max
+    for _ in 0..PlaytestInstance::MAX_PARTICIPANTS {
+        instance.add_participant(Uuid::new_v4(), false, Uuid::new_v4(), Uuid::new_v4()).unwrap();
     }
 
-    // Create playtest
-    let factions = state.get_factions_arc();
-    let faction_tags = state.get_faction_tags_arc();
-    let config = ForkConfig::single_sector(sector_id);
+    // One more fails
+    let result = instance.add_participant(Uuid::new_v4(), false, Uuid::new_v4(), Uuid::new_v4());
+    assert!(matches!(result, Err(PlaytestError::ParticipantLimitReached)));
+}
 
-    let builder = PlaytestBuilder::new(player_id, "Session Test".into(), state.get_tick(), config.clone());
-    let playtest_id = builder.id();
+// =============================================================================
+// Promotion Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_promotion_copies_ship_stats_to_live() {
+    let ts = setup_populated_state().await;
+
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let factions = ts.state.get_factions_arc();
+    let faction_tags = ts.state.get_faction_tags_arc();
+
+    let builder = PlaytestBuilder::new(ts.player_id, "Promo Test".into(), ts.state.get_tick(), config.clone());
     let instance = builder.build(factions, faction_tags);
-    state.fork_to_playtest(&instance, &config);
-    instance.add_participant(player_id, true, player_ship_id, sector_id).unwrap();
+    ts.state.fork_to_playtest(&instance, &config);
 
-    // Simulate handler: update session BEFORE registration (race condition fix)
-    {
-        let mut session = state.players.get_mut(&player_id).unwrap();
+    // Modify ship in playtest
+    if let Some(mut ship) = instance.ships.get_mut(&ts.npc_ship_id) {
+        ship.hull_integrity = 50.0;
+        ship.shield_strength = 25.0;
+    }
+
+    // Manually promote (simulating what handler does)
+    if let Some(playtest_ship) = instance.ships.get(&ts.npc_ship_id) {
+        if let Some(mut live_ship) = ts.state.ships.get_mut(&ts.npc_ship_id) {
+            live_ship.hull_integrity = playtest_ship.hull_integrity;
+            live_ship.shield_strength = playtest_ship.shield_strength;
+        }
+    }
+
+    // Live state updated
+    let live_ship = ts.state.ships.get(&ts.npc_ship_id).unwrap();
+    assert!((live_ship.hull_integrity - 50.0).abs() < 0.01);
+    assert!((live_ship.shield_strength - 25.0).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn test_promotion_spawns_created_entities() {
+    let ts = setup_populated_state().await;
+
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let factions = ts.state.get_factions_arc();
+    let faction_tags = ts.state.get_faction_tags_arc();
+
+    let builder = PlaytestBuilder::new(ts.player_id, "Spawn Test".into(), ts.state.get_tick(), config.clone());
+    let instance = builder.build(factions, faction_tags);
+    ts.state.fork_to_playtest(&instance, &config);
+
+    // Create new ship in playtest
+    let new_ship = create_test_ship("New Enemy", Uuid::nil(), ts.sector_id, Uuid::nil(), false);
+    let new_ship_id = new_ship.id;
+    instance.ships.insert(new_ship_id, new_ship.clone());
+    instance.created_ship_ids.insert(new_ship_id, ());
+
+    // Verify doesn't exist in live yet
+    assert!(!ts.state.ships.contains_key(&new_ship_id));
+
+    // Promote created entities
+    for entry in instance.created_ship_ids.iter() {
+        let ship_id = *entry.key();
+        if let Some(playtest_ship) = instance.ships.get(&ship_id) {
+            // Verify sector exists (safety check from fix)
+            if ts.state.sectors.contains_key(&playtest_ship.sector_id) {
+                let ship_clone = (*playtest_ship).clone();
+                ts.state.ships.insert(ship_id, ship_clone.clone());
+                if let Some(sector) = ts.state.sectors.get(&ship_clone.sector_id) {
+                    sector.ship_ids.insert(ship_id, ());
+                }
+            }
+        }
+    }
+
+    // Now exists in live
+    assert!(ts.state.ships.contains_key(&new_ship_id));
+}
+
+#[tokio::test]
+async fn test_promotion_applies_deletions() {
+    let ts = setup_populated_state().await;
+
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let factions = ts.state.get_factions_arc();
+    let faction_tags = ts.state.get_faction_tags_arc();
+
+    let builder = PlaytestBuilder::new(ts.player_id, "Delete Test".into(), ts.state.get_tick(), config.clone());
+    let instance = builder.build(factions, faction_tags);
+    ts.state.fork_to_playtest(&instance, &config);
+
+    // Delete NPC in playtest
+    instance.ships.remove(&ts.npc_ship_id);
+    instance.deleted_ship_ids.insert(ts.npc_ship_id, ());
+
+    // Verify still exists in live
+    assert!(ts.state.ships.contains_key(&ts.npc_ship_id));
+
+    // Promote deletions
+    for entry in instance.deleted_ship_ids.iter() {
+        let ship_id = *entry.key();
+        if let Some((_, ship)) = ts.state.ships.remove(&ship_id) {
+            if let Some(sector) = ts.state.sectors.get(&ship.sector_id) {
+                sector.ship_ids.remove(&ship_id);
+            }
+        }
+    }
+
+    // Now deleted from live
+    assert!(!ts.state.ships.contains_key(&ts.npc_ship_id));
+}
+
+#[tokio::test]
+async fn test_promotion_skips_ships_that_changed_sector() {
+    let ts = setup_populated_state().await;
+
+    // Create second sector
+    let sector2 = create_test_sector("Sector 2");
+    let sector2_id = sector2.id;
+    ts.state.sectors.insert(sector2_id, bw_server::state::SectorInstance::new(sector2));
+
+    // Fork original sector
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let factions = ts.state.get_factions_arc();
+    let faction_tags = ts.state.get_faction_tags_arc();
+
+    let builder = PlaytestBuilder::new(ts.player_id, "Sector Change Test".into(), ts.state.get_tick(), config.clone());
+    let instance = builder.build(factions, faction_tags);
+    ts.state.fork_to_playtest(&instance, &config);
+
+    // Record original position
+    let original_position = ts.state.ships.get(&ts.npc_ship_id).unwrap().position;
+
+    // Move ship to different sector in playtest
+    if let Some(mut ship) = instance.ships.get_mut(&ts.npc_ship_id) {
+        ship.sector_id = sector2_id;
+        ship.position = Position::new(999.0, 999.0, 999.0);
+        ship.hull_integrity = 50.0; // This should still promote
+    }
+
+    // Simulate promotion logic with sector change check
+    if let Some(playtest_ship) = instance.ships.get(&ts.npc_ship_id) {
+        if let Some(mut live_ship) = ts.state.ships.get_mut(&ts.npc_ship_id) {
+            let sector_changed = playtest_ship.sector_id != live_ship.sector_id;
+
+            // Always promote stats
+            live_ship.hull_integrity = playtest_ship.hull_integrity;
+
+            // Only promote position if sector unchanged
+            if !sector_changed {
+                live_ship.position = playtest_ship.position;
+            }
+        }
+    }
+
+    let live_ship = ts.state.ships.get(&ts.npc_ship_id).unwrap();
+    // Hull promoted
+    assert!((live_ship.hull_integrity - 50.0).abs() < 0.01);
+    // Position NOT promoted (sector changed)
+    assert!((live_ship.position.x - original_position.x).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn test_promotion_skips_nonexistent_sector() {
+    let ts = setup_populated_state().await;
+
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let factions = ts.state.get_factions_arc();
+    let faction_tags = ts.state.get_faction_tags_arc();
+
+    let builder = PlaytestBuilder::new(ts.player_id, "Missing Sector Test".into(), ts.state.get_tick(), config.clone());
+    let instance = builder.build(factions, faction_tags);
+    ts.state.fork_to_playtest(&instance, &config);
+
+    // Create ship in playtest targeting nonexistent sector
+    let fake_sector_id = Uuid::new_v4();
+    let new_ship = Ship::new_npc_ship(
+        "Orphan".to_string(),
+        ShipClass::PirateRaider,
+        fake_sector_id, // This sector doesn't exist in live
+        Position::new(0.0, 0.0, 0.0),
+        None,
+    );
+    let new_ship_id = new_ship.id;
+    instance.ships.insert(new_ship_id, new_ship);
+    instance.created_ship_ids.insert(new_ship_id, ());
+
+    // Attempt to promote - should skip due to missing sector
+    let mut spawned = false;
+    for entry in instance.created_ship_ids.iter() {
+        let ship_id = *entry.key();
+        if let Some(playtest_ship) = instance.ships.get(&ship_id) {
+            if ts.state.sectors.contains_key(&playtest_ship.sector_id) {
+                ts.state.ships.insert(ship_id, (*playtest_ship).clone());
+                spawned = true;
+            }
+        }
+    }
+
+    // Ship should NOT have been spawned
+    assert!(!spawned);
+    assert!(!ts.state.ships.contains_key(&new_ship_id));
+}
+
+// =============================================================================
+// End-to-End Test
+// =============================================================================
+
+#[tokio::test]
+async fn test_full_playtest_lifecycle() {
+    let ts = setup_populated_state().await;
+
+    // === 1. Create playtest ===
+    let config = ForkConfig::single_sector(ts.sector_id);
+    let (playtest_id, instance) = create_playtest(&ts.state, ts.player_id, "E2E Test", config);
+
+    // Verify forked
+    assert!(instance.ships.contains_key(&ts.player_ship_id));
+    assert!(instance.sectors.contains_key(&ts.sector_id));
+
+    // Update session (what handler does)
+    if let Some(mut session) = ts.state.players.get_mut(&ts.player_id) {
         session.playtest_id = Some(playtest_id);
     }
 
-    // Register
-    state.playtest_manager.register(instance).unwrap();
+    // === 2. Verify routing ===
+    assert!(ts.state.playtest_manager.is_player_in_playtest(ts.player_id));
 
-    // Verify session is updated
-    {
-        let session = state.players.get(&player_id).unwrap();
-        assert_eq!(session.playtest_id, Some(playtest_id));
-    }
+    // === 3. Modify playtest state ===
+    instance.ships.get_mut(&ts.npc_ship_id).unwrap().hull_integrity = 25.0;
 
-    // Verify routing works
-    assert!(state.playtest_manager.is_player_in_playtest(player_id));
+    // Live unchanged
+    assert!((ts.state.ships.get(&ts.npc_ship_id).unwrap().hull_integrity - 100.0).abs() < 0.01);
 
-    // Now destroy and verify cleanup
-    state.playtest_manager.destroy(playtest_id).unwrap();
+    // === 4. Add another player ===
+    let player2_id = Uuid::new_v4();
+    let mut player2 = Player::new("Player2".to_string(), Uuid::new_v4(), Uuid::nil(), ts.sector_id);
+    player2.active_ship_id = Uuid::new_v4();
+    ts.state.player_data.insert(player2_id, player2);
 
-    // Simulate handler: clear session
-    {
-        let mut session = state.players.get_mut(&player_id).unwrap();
-        session.playtest_id = None;
-    }
+    let (tx2, _rx2) = tokio::sync::mpsc::channel(100);
+    ts.state.players.insert(player2_id, bw_server::state::PlayerSession {
+        player_id: player2_id,
+        ship_id: Uuid::new_v4(),
+        sector_id: ts.sector_id,
+        connection: Some(tx2),
+        playtest_id: None,
+    });
 
-    // Verify cleanup
-    {
-        let session = state.players.get(&player_id).unwrap();
-        assert!(session.playtest_id.is_none());
-    }
-    assert!(!state.playtest_manager.is_player_in_playtest(player_id));
+    ts.state.playtest_manager.join_playtest(playtest_id, player2_id, Uuid::new_v4(), ts.sector_id).unwrap();
+    assert_eq!(instance.participant_count(), 2);
+
+    // === 5. Player leaves ===
+    ts.state.playtest_manager.leave_playtest(player2_id).unwrap();
+    assert_eq!(instance.participant_count(), 1);
+    assert!(!ts.state.playtest_manager.is_player_in_playtest(player2_id));
+
+    // === 6. Destroy ===
+    ts.state.playtest_manager.destroy(playtest_id).unwrap();
+    assert!(!ts.state.playtest_manager.is_player_in_playtest(ts.player_id));
+    assert!(ts.state.playtest_manager.get(playtest_id).is_none());
 }

@@ -1,6 +1,6 @@
 //! Behavior manager
 //!
-//! Manages the lifecycle of entity behaviors.
+//! Manages the lifecycle of entity behaviors, including behavior tree execution.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,8 +12,9 @@ use bw_core::events::GameEvent;
 use crate::engine::{ScriptEngine, ScriptError};
 use crate::state::{StateAccessor, AccessPermissions};
 use crate::events::EventRegistry;
-use crate::bindings::state_api::{set_current_accessor, clear_current_accessor};
-use crate::bindings::event_api::{set_current_registry, clear_current_registry, set_script_context, clear_script_context, ScriptContext};
+use crate::context::{ScriptExecutionContext, ExecutionGuard};
+use crate::ai::{BehaviorTreeRunner, AiContext, BtNode};
+use crate::persistence::{ScriptStateStore, PersistenceError};
 
 use super::{EntityBehavior, EntityType, BehaviorState, BehaviorContext, BehaviorExecResult};
 
@@ -25,12 +26,18 @@ pub struct BehaviorManager {
     by_entity: RwLock<HashMap<Uuid, Vec<Uuid>>>,
     /// Script engine for execution
     engine: Arc<ScriptEngine>,
+    /// Behavior tree runner
+    bt_runner: BehaviorTreeRunner,
     /// State accessor for scripts
     state_accessor: Option<Arc<StateAccessor>>,
     /// Event registry for subscriptions
     event_registry: Option<Arc<EventRegistry>>,
+    /// Persistent state store for behavior data
+    state_store: Option<Arc<dyn ScriptStateStore>>,
     /// Current game tick
     current_tick: RwLock<u64>,
+    /// Current game time in seconds
+    current_game_time: RwLock<f64>,
 }
 
 impl BehaviorManager {
@@ -40,10 +47,23 @@ impl BehaviorManager {
             behaviors: RwLock::new(HashMap::new()),
             by_entity: RwLock::new(HashMap::new()),
             engine,
+            bt_runner: BehaviorTreeRunner::new(),
             state_accessor: None,
             event_registry: None,
+            state_store: None,
             current_tick: RwLock::new(0),
+            current_game_time: RwLock::new(0.0),
         }
+    }
+
+    /// Set the state store for persistent behavior data.
+    pub fn set_state_store(&mut self, store: Arc<dyn ScriptStateStore>) {
+        self.state_store = Some(store);
+    }
+
+    /// Get a reference to the behavior tree runner.
+    pub fn bt_runner(&self) -> &BehaviorTreeRunner {
+        &self.bt_runner
     }
 
     /// Set the state accessor.
@@ -163,6 +183,12 @@ impl BehaviorManager {
     pub fn update_all(&self, tick: u64, delta_time: f64) -> Vec<BehaviorExecResult> {
         *self.current_tick.write() = tick;
 
+        // Update game time
+        {
+            let mut game_time = self.current_game_time.write();
+            *game_time += delta_time;
+        }
+
         let behavior_ids: Vec<Uuid> = self.behaviors.read()
             .iter()
             .filter(|(_, b)| b.state == BehaviorState::Active)
@@ -186,7 +212,81 @@ impl BehaviorManager {
             results.push(result);
         }
 
+        // Run behavior trees for entities that have them
+        self.tick_behavior_trees(tick, delta_time);
+
         results
+    }
+
+    /// Tick all behavior trees.
+    fn tick_behavior_trees(&self, tick: u64, delta_time: f64) {
+        let game_time = *self.current_game_time.read();
+
+        let behaviors: Vec<(Uuid, EntityBehavior)> = self.behaviors.read()
+            .iter()
+            .filter(|(_, b)| b.state == BehaviorState::Active && b.behavior_tree.is_some())
+            .map(|(id, b)| (*id, b.clone()))
+            .collect();
+
+        let rhai_engine = self.engine.rhai_engine();
+
+        for (behavior_id, behavior) in behaviors {
+            if let Some(ref tree) = behavior.behavior_tree {
+                // Create AI context
+                let mut ctx = AiContext::new(
+                    behavior.entity_id,
+                    tick,
+                    delta_time,
+                    game_time,
+                );
+
+                // Add local_data to context
+                ctx.data = behavior.local_data.clone();
+
+                // Run the behavior tree
+                let result = self.bt_runner.run(rhai_engine, tree, &ctx, &behavior.script_path);
+
+                if let Some(error) = result.error {
+                    tracing::warn!(
+                        behavior_id = %behavior_id,
+                        entity_id = %behavior.entity_id,
+                        error = %error,
+                        "Behavior tree error"
+                    );
+                }
+
+                // Log if debug tracing is enabled
+                if !result.trace.is_empty() {
+                    tracing::debug!(
+                        behavior_id = %behavior_id,
+                        trace = ?result.trace,
+                        status = ?result.status,
+                        "Behavior tree executed"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Set a behavior tree for an entity's behavior.
+    pub fn set_behavior_tree(&self, behavior_id: Uuid, tree: BtNode) -> bool {
+        if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
+            behavior.behavior_tree = Some(tree);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear a behavior tree for an entity's behavior.
+    pub fn clear_behavior_tree(&self, behavior_id: Uuid) -> bool {
+        if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
+            behavior.behavior_tree = None;
+            self.bt_runner.clear_entity_state(behavior.entity_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// Notify behaviors of an event.
@@ -297,6 +397,102 @@ impl BehaviorManager {
         }
     }
 
+    // === Persistence ===
+
+    /// Persist a behavior's local_data to the state store.
+    ///
+    /// This saves the behavior's current local_data so it can be restored
+    /// after a server restart.
+    pub fn persist_behavior(&self, entity_id: Uuid) -> Result<(), PersistenceError> {
+        let Some(store) = &self.state_store else {
+            return Ok(()); // No store configured, silently skip
+        };
+
+        let behaviors = self.behaviors.read();
+        let entity_behaviors: Vec<_> = behaviors.values()
+            .filter(|b| b.entity_id == entity_id && b.state == BehaviorState::Active)
+            .collect();
+
+        for behavior in entity_behaviors {
+            // Serialize local_data as JSON
+            let data = serde_json::to_vec(&behavior.local_data)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+
+            // Use "behavior" namespace with entity_id as key
+            store.save("behavior", &entity_id.to_string(), &data)?;
+
+            tracing::debug!(
+                entity_id = %entity_id,
+                behavior_id = %behavior.id,
+                "Persisted behavior state"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Persist all active behaviors to the state store.
+    pub fn persist_all(&self) -> Result<usize, PersistenceError> {
+        let Some(store) = &self.state_store else {
+            return Ok(0);
+        };
+
+        let behaviors = self.behaviors.read();
+        let mut count = 0;
+
+        for behavior in behaviors.values().filter(|b| b.state == BehaviorState::Active) {
+            let data = serde_json::to_vec(&behavior.local_data)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+
+            store.save("behavior", &behavior.entity_id.to_string(), &data)?;
+            count += 1;
+        }
+
+        tracing::info!(count = count, "Persisted all behavior states");
+        Ok(count)
+    }
+
+    /// Restore a behavior's local_data from the state store.
+    ///
+    /// Call this after attaching a behavior to restore its previous state.
+    pub fn restore_behavior(&self, entity_id: Uuid) -> Result<bool, PersistenceError> {
+        let Some(store) = &self.state_store else {
+            return Ok(false);
+        };
+
+        let Some(data) = store.load("behavior", &entity_id.to_string())? else {
+            return Ok(false); // No saved state
+        };
+
+        // Deserialize local_data
+        let local_data: Map = serde_json::from_slice(&data)
+            .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
+
+        // Apply to the behavior
+        let mut behaviors = self.behaviors.write();
+        for behavior in behaviors.values_mut() {
+            if behavior.entity_id == entity_id && behavior.state == BehaviorState::Active {
+                behavior.local_data = local_data.clone();
+                tracing::debug!(
+                    entity_id = %entity_id,
+                    behavior_id = %behavior.id,
+                    "Restored behavior state"
+                );
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Clear persisted state for an entity.
+    pub fn clear_persisted_state(&self, entity_id: Uuid) -> Result<bool, PersistenceError> {
+        let Some(store) = &self.state_store else {
+            return Ok(false);
+        };
+
+        store.delete("behavior", &entity_id.to_string())
+    }
+
     // === Private helpers ===
 
     fn call_hook(&self, behavior_id: Uuid, hook_name: &str, tick: u64, delta_time: f64) -> BehaviorExecResult {
@@ -315,7 +511,7 @@ impl BehaviorManager {
         tick: u64,
         delta_time: f64,
     ) -> BehaviorExecResult {
-        // Set up context
+        // Set up behavior context for the script
         let ctx = BehaviorContext {
             behavior_id: behavior.id,
             entity_id: behavior.entity_id,
@@ -326,28 +522,45 @@ impl BehaviorManager {
             local_data: behavior.local_data.clone(),
         };
 
-        // Set up state accessor
-        if let Some(ref accessor) = self.state_accessor {
-            let perms = AccessPermissions::npc_behavior(
-                behavior.entity_id,
-                behavior.sector_id.unwrap_or_else(Uuid::nil),
-            );
-            accessor.set_permissions(perms);
-            if let Some(sector_id) = behavior.sector_id {
-                accessor.set_context_sector(sector_id);
-            }
-            set_current_accessor(accessor.clone());
+        // Set up unified execution context
+        let Some(ref accessor) = self.state_accessor else {
+            // No accessor - can't execute scripts safely
+            return BehaviorExecResult::failure(behavior.id, "No state accessor configured".to_string());
+        };
+
+        // Configure accessor permissions
+        let perms = AccessPermissions::npc_behavior(
+            behavior.entity_id,
+            behavior.sector_id.unwrap_or_else(Uuid::nil),
+        );
+        accessor.set_permissions(perms);
+        if let Some(sector_id) = behavior.sector_id {
+            accessor.set_context_sector(sector_id);
         }
 
-        // Set up event registry
-        if let Some(ref registry) = self.event_registry {
-            set_current_registry(registry.clone());
-            set_script_context(ScriptContext {
-                script_path: behavior.script_path.clone(),
-                owner_entity_id: Some(behavior.entity_id),
-                sector_id: behavior.sector_id,
-            });
+        // Build execution context
+        let mut exec_ctx = ScriptExecutionContext::new(accessor.clone())
+            .with_script_path(&behavior.script_path)
+            .with_owner_entity(behavior.entity_id)
+            .with_tick(tick);
+
+        if let Some(sector_id) = behavior.sector_id {
+            exec_ctx = exec_ctx.with_sector(sector_id);
         }
+        if let Some(ref registry) = self.event_registry {
+            exec_ctx = exec_ctx.with_event_registry(registry.clone());
+        }
+        if let Some(ref store) = self.state_store {
+            exec_ctx = exec_ctx.with_persistence_store(store.clone());
+        }
+
+        // Enter execution context (RAII guard handles cleanup and mutation application)
+        let _guard = match ExecutionGuard::enter(exec_ctx) {
+            Ok(g) => g,
+            Err(e) => {
+                return BehaviorExecResult::failure(behavior.id, e.to_string());
+            }
+        };
 
         // Call the hook
         let result = self.engine.call_function_dynamic(
@@ -356,15 +569,7 @@ impl BehaviorManager {
             (ctx.to_dynamic(),),
         );
 
-        // Clear contexts
-        clear_current_accessor();
-        clear_current_registry();
-        clear_script_context();
-
-        // Apply mutations
-        if let Some(ref accessor) = self.state_accessor {
-            let _ = accessor.apply_pending_mutations();
-        }
+        // Guard drop applies mutations automatically
 
         match result {
             Ok(return_val) => {
@@ -402,7 +607,7 @@ impl BehaviorManager {
         event_data: Dynamic,
         tick: u64,
     ) -> BehaviorExecResult {
-        // Set up context
+        // Set up behavior context for the script
         let ctx = BehaviorContext {
             behavior_id: behavior.id,
             entity_id: behavior.entity_id,
@@ -413,28 +618,44 @@ impl BehaviorManager {
             local_data: behavior.local_data.clone(),
         };
 
-        // Set up state accessor
-        if let Some(ref accessor) = self.state_accessor {
-            let perms = AccessPermissions::npc_behavior(
-                behavior.entity_id,
-                behavior.sector_id.unwrap_or_else(Uuid::nil),
-            );
-            accessor.set_permissions(perms);
-            if let Some(sector_id) = behavior.sector_id {
-                accessor.set_context_sector(sector_id);
-            }
-            set_current_accessor(accessor.clone());
+        // Set up unified execution context
+        let Some(ref accessor) = self.state_accessor else {
+            return BehaviorExecResult::failure(behavior.id, "No state accessor configured".to_string());
+        };
+
+        // Configure accessor permissions
+        let perms = AccessPermissions::npc_behavior(
+            behavior.entity_id,
+            behavior.sector_id.unwrap_or_else(Uuid::nil),
+        );
+        accessor.set_permissions(perms);
+        if let Some(sector_id) = behavior.sector_id {
+            accessor.set_context_sector(sector_id);
         }
 
-        // Set up event registry
-        if let Some(ref registry) = self.event_registry {
-            set_current_registry(registry.clone());
-            set_script_context(ScriptContext {
-                script_path: behavior.script_path.clone(),
-                owner_entity_id: Some(behavior.entity_id),
-                sector_id: behavior.sector_id,
-            });
+        // Build execution context
+        let mut exec_ctx = ScriptExecutionContext::new(accessor.clone())
+            .with_script_path(&behavior.script_path)
+            .with_owner_entity(behavior.entity_id)
+            .with_tick(tick);
+
+        if let Some(sector_id) = behavior.sector_id {
+            exec_ctx = exec_ctx.with_sector(sector_id);
         }
+        if let Some(ref registry) = self.event_registry {
+            exec_ctx = exec_ctx.with_event_registry(registry.clone());
+        }
+        if let Some(ref store) = self.state_store {
+            exec_ctx = exec_ctx.with_persistence_store(store.clone());
+        }
+
+        // Enter execution context (RAII guard handles cleanup and mutation application)
+        let _guard = match ExecutionGuard::enter(exec_ctx) {
+            Ok(g) => g,
+            Err(e) => {
+                return BehaviorExecResult::failure(behavior.id, e.to_string());
+            }
+        };
 
         // Call on_event
         let result = self.engine.call_function_dynamic(
@@ -443,15 +664,7 @@ impl BehaviorManager {
             (ctx.to_dynamic(), event_data),
         );
 
-        // Clear contexts
-        clear_current_accessor();
-        clear_current_registry();
-        clear_script_context();
-
-        // Apply mutations
-        if let Some(ref accessor) = self.state_accessor {
-            let _ = accessor.apply_pending_mutations();
-        }
+        // Guard drop applies mutations automatically
 
         match result {
             Ok(return_val) => {

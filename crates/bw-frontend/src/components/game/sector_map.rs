@@ -65,6 +65,7 @@ pub fn SectorMap() -> impl IntoView {
 
     view! {
         <div
+            data-testid="sector-map"
             class="w-full h-full bg-slate-950 relative overflow-hidden"
             on:click=on_click
         >

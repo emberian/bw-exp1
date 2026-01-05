@@ -626,7 +626,8 @@ impl ScriptEngine {
     }
 
     /// Reload a script from disk (for hot-reload).
-    pub fn reload_script(&self, name: &str) -> Result<(), ScriptError> {
+    /// Returns list of warnings on success.
+    pub fn reload_script(&self, name: &str) -> Result<Vec<String>, ScriptError> {
         // First load the new version
         let path = std::path::PathBuf::from(format!("{}/{}", self.scripts_dir, name));
         let ast = self.engine.compile_file(path)
@@ -648,7 +649,60 @@ impl ScriptEngine {
         self.scripts.write().insert(name.to_string(), ast);
         tracing::info!(script = name, "Script reloaded successfully");
 
-        Ok(())
+        Ok(result.warnings)
+    }
+
+    /// Reload archetype definitions (ships, weapons).
+    /// Returns (ships_loaded, weapons_loaded, errors) tuple.
+    pub fn reload_definitions(&self) -> Result<(usize, usize, Vec<String>), ScriptError> {
+        // Reload the archetype definitions
+        // This would reload from scripts/definitions/*.rhai
+        let definitions_dir = format!("{}/definitions", self.scripts_dir);
+        let path = Path::new(&definitions_dir);
+
+        if !path.exists() {
+            return Err(ScriptError::NotFound("definitions directory".to_string()));
+        }
+
+        let mut ships_loaded = 0;
+        let mut weapons_loaded = 0;
+        let mut errors = Vec::new();
+
+        // Load all .rhai files in definitions directory
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let file_path = entry.path();
+
+            if file_path.extension().is_some_and(|ext| ext == "rhai") {
+                let name = format!("definitions/{}", entry.file_name().to_string_lossy());
+
+                match self.load_script(&name) {
+                    Ok(()) => {
+                        let file_name = entry.file_name().to_string_lossy().to_string();
+                        if file_name.contains("ship") {
+                            ships_loaded += 1;
+                        } else if file_name.contains("weapon") {
+                            weapons_loaded += 1;
+                        } else {
+                            ships_loaded += 1; // Default to counting as ship definitions
+                        }
+                        tracing::info!(script = %name, "Reloaded definition script");
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}: {}", name, e));
+                    }
+                }
+            }
+        }
+
+        tracing::info!(
+            ships = ships_loaded,
+            weapons = weapons_loaded,
+            errors = errors.len(),
+            "Reloaded archetype definitions"
+        );
+
+        Ok((ships_loaded, weapons_loaded, errors))
     }
 
     /// Run a script function with arguments.

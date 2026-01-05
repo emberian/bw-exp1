@@ -7,7 +7,7 @@ use rhai::{Engine, Array, Map};
 use uuid::Uuid;
 
 use crate::state::ChoiceOption;
-use super::state_api::with_accessor;
+use crate::context::with_accessor;
 
 /// Register message API functions with the engine.
 pub fn register(engine: &mut Engine) {

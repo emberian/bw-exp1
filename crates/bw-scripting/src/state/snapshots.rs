@@ -3,21 +3,23 @@
 //! Snapshots are immutable views of game state that scripts receive when querying.
 //! They can be converted to Rhai Dynamic maps for script consumption.
 
-use rhai::{Dynamic, Map};
 use uuid::Uuid;
 
 use bw_core::models::{
     DangerLevel, Position, Ship, ShipStatus, Player, Sector, Location,
     LocationType, TrafficDensity, CombatStance, CargoItem, GameMode, InstalledUpgrade,
 };
+use crate::RhaiSerialize;
 
 /// Read-only snapshot of a ship's state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, RhaiSerialize)]
 pub struct ShipSnapshot {
+    #[rhai(as_string)]
     pub id: Uuid,
     pub name: String,
     pub owner_id: Option<Uuid>,
     pub ship_class: String,
+    #[rhai(as_string)]
     pub sector_id: Uuid,
     pub position: PositionSnapshot,
     pub hull: f32,
@@ -48,7 +50,7 @@ pub struct ShipSnapshot {
 }
 
 /// Read-only snapshot of an installed upgrade.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, RhaiSerialize)]
 pub struct UpgradeSnapshot {
     pub upgrade_id: String,
     pub slot: String,
@@ -61,20 +63,15 @@ impl UpgradeSnapshot {
             slot: upgrade.slot.clone(),
         }
     }
-
-    pub fn to_dynamic(&self) -> Dynamic {
-        let mut map = Map::new();
-        map.insert("upgrade_id".into(), self.upgrade_id.clone().into());
-        map.insert("slot".into(), self.slot.clone().into());
-        Dynamic::from(map)
-    }
 }
 
 /// Read-only snapshot of a cargo item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, RhaiSerialize)]
 pub struct CargoSnapshot {
+    #[rhai(rename = "type")]
     pub cargo_type: String,
     pub quantity: u32,
+    #[rhai(rename = "price")]
     pub purchase_price: i64,
 }
 
@@ -85,14 +82,6 @@ impl CargoSnapshot {
             quantity: item.quantity,
             purchase_price: item.purchase_price,
         }
-    }
-
-    pub fn to_dynamic(&self) -> Dynamic {
-        let mut map = Map::new();
-        map.insert("type".into(), self.cargo_type.clone().into());
-        map.insert("quantity".into(), (self.quantity as i64).into());
-        map.insert("price".into(), self.purchase_price.into());
-        Dynamic::from(map)
     }
 }
 
@@ -131,45 +120,10 @@ impl ShipSnapshot {
             upgrades: ship.upgrades.iter().map(UpgradeSnapshot::from_upgrade).collect(),
         }
     }
-
-    /// Convert to Rhai Dynamic map.
-    pub fn to_dynamic(&self) -> Dynamic {
-        let mut map = Map::new();
-        map.insert("id".into(), self.id.to_string().into());
-        map.insert("name".into(), self.name.clone().into());
-        map.insert("owner_id".into(), self.owner_id.map(|id| id.to_string()).unwrap_or_default().into());
-        map.insert("ship_class".into(), self.ship_class.clone().into());
-        map.insert("sector_id".into(), self.sector_id.to_string().into());
-        map.insert("position".into(), self.position.to_dynamic());
-        map.insert("hull".into(), (self.hull as f64).into());
-        map.insert("shields".into(), (self.shields as f64).into());
-        map.insert("ammunition".into(), (self.ammunition as f64).into());
-        map.insert("fuel".into(), (self.fuel as f64).into());
-        map.insert("morale".into(), (self.morale as f64).into());
-        map.insert("experience".into(), (self.experience as i64).into());
-        map.insert("status".into(), self.status.clone().into());
-        map.insert("is_player_ship".into(), self.is_player_ship.into());
-        map.insert("faction_id".into(), self.faction_id.map(|id| id.to_string()).unwrap_or_default().into());
-        map.insert("can_attack".into(), self.can_attack.into());
-        map.insert("can_move".into(), self.can_move.into());
-        map.insert("attack".into(), (self.attack as f64).into());
-        map.insert("defense".into(), (self.defense as f64).into());
-        map.insert("speed".into(), (self.speed as f64).into());
-        map.insert("sensor_range".into(), (self.sensor_range as f64).into());
-        map.insert("combat_stance".into(), self.combat_stance.clone().into());
-        map.insert("locked_target".into(), self.locked_target.map(|id| id.to_string()).unwrap_or_default().into());
-        let cargo_arr: Vec<Dynamic> = self.cargo.iter().map(|c| c.to_dynamic()).collect();
-        map.insert("cargo".into(), Dynamic::from(cargo_arr));
-        map.insert("cargo_capacity".into(), (self.cargo_capacity as i64).into());
-        map.insert("cargo_used".into(), (self.cargo_used as i64).into());
-        let upgrades_arr: Vec<Dynamic> = self.upgrades.iter().map(|u| u.to_dynamic()).collect();
-        map.insert("upgrades".into(), Dynamic::from(upgrades_arr));
-        Dynamic::from(map)
-    }
 }
 
 /// Read-only snapshot of a position.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RhaiSerialize)]
 pub struct PositionSnapshot {
     pub x: f64,
     pub y: f64,
@@ -185,14 +139,6 @@ impl PositionSnapshot {
         }
     }
 
-    pub fn to_dynamic(&self) -> Dynamic {
-        let mut map = Map::new();
-        map.insert("x".into(), self.x.into());
-        map.insert("y".into(), self.y.into());
-        map.insert("z".into(), self.z.into());
-        Dynamic::from(map)
-    }
-
     pub fn distance_to(&self, other: &PositionSnapshot) -> f64 {
         let dx = self.x - other.x;
         let dy = self.y - other.y;
@@ -202,8 +148,9 @@ impl PositionSnapshot {
 }
 
 /// Read-only snapshot of a player's state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, RhaiSerialize)]
 pub struct PlayerSnapshot {
+    #[rhai(as_string)]
     pub id: Uuid,
     pub username: String,
     pub reputation: i32,
@@ -211,8 +158,11 @@ pub struct PlayerSnapshot {
     pub credits: i64,
     pub game_mode: String,
     pub owned_ships: Vec<Uuid>,
+    #[rhai(as_string)]
     pub active_ship_id: Uuid,
+    #[rhai(as_string)]
     pub sector_id: Uuid,
+    #[rhai(as_string)]
     pub faction_id: Uuid,
     pub squadron_id: Option<Uuid>,
     pub is_online: bool,
@@ -242,35 +192,12 @@ impl PlayerSnapshot {
             is_disgraced: player.is_disgraced(),
         }
     }
-
-    /// Convert to Rhai Dynamic map.
-    pub fn to_dynamic(&self) -> Dynamic {
-        let mut map = Map::new();
-        map.insert("id".into(), self.id.to_string().into());
-        map.insert("username".into(), self.username.clone().into());
-        map.insert("reputation".into(), (self.reputation as i64).into());
-        map.insert("fame".into(), (self.fame as i64).into());
-        map.insert("credits".into(), self.credits.into());
-        map.insert("game_mode".into(), self.game_mode.clone().into());
-        let owned_ships_arr: Vec<Dynamic> = self.owned_ships.iter()
-            .map(|id| Dynamic::from(id.to_string()))
-            .collect();
-        map.insert("owned_ships".into(), Dynamic::from(owned_ships_arr));
-        map.insert("active_ship_id".into(), self.active_ship_id.to_string().into());
-        map.insert("sector_id".into(), self.sector_id.to_string().into());
-        map.insert("faction_id".into(), self.faction_id.to_string().into());
-        map.insert("squadron_id".into(), self.squadron_id.map(|id| id.to_string()).unwrap_or_default().into());
-        map.insert("is_online".into(), self.is_online.into());
-        map.insert("missions_completed".into(), (self.missions_completed as i64).into());
-        map.insert("missions_failed".into(), (self.missions_failed as i64).into());
-        map.insert("is_disgraced".into(), self.is_disgraced.into());
-        Dynamic::from(map)
-    }
 }
 
 /// Read-only snapshot of a sector's state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, RhaiSerialize)]
 pub struct SectorSnapshot {
+    #[rhai(as_string)]
     pub id: Uuid,
     pub name: String,
     pub danger_level: String,
@@ -295,32 +222,12 @@ impl SectorSnapshot {
             locations: sector.locations.iter().map(LocationSnapshot::from_location).collect(),
         }
     }
-
-    /// Convert to Rhai Dynamic map.
-    pub fn to_dynamic(&self) -> Dynamic {
-        let mut map = Map::new();
-        map.insert("id".into(), self.id.to_string().into());
-        map.insert("name".into(), self.name.clone().into());
-        map.insert("danger_level".into(), self.danger_level.clone().into());
-        map.insert("traffic_density".into(), self.traffic_density.clone().into());
-        map.insert("is_core_sector".into(), self.is_core_sector.into());
-        map.insert("controlling_faction".into(),
-            self.controlling_faction.map(|id| id.to_string()).unwrap_or_default().into());
-        map.insert("controlling_squadron".into(),
-            self.controlling_squadron.map(|id| id.to_string()).unwrap_or_default().into());
-
-        let locations: Vec<Dynamic> = self.locations.iter()
-            .map(|loc| loc.to_dynamic())
-            .collect();
-        map.insert("locations".into(), Dynamic::from(locations));
-
-        Dynamic::from(map)
-    }
 }
 
 /// Read-only snapshot of a location within a sector.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, RhaiSerialize)]
 pub struct LocationSnapshot {
+    #[rhai(as_string)]
     pub id: Uuid,
     pub name: String,
     pub location_type: String,
@@ -341,19 +248,6 @@ impl LocationSnapshot {
             is_active: loc.is_active,
             is_dockable: loc.location_type.is_dockable(),
         }
-    }
-
-    pub fn to_dynamic(&self) -> Dynamic {
-        let mut map = Map::new();
-        map.insert("id".into(), self.id.to_string().into());
-        map.insert("name".into(), self.name.clone().into());
-        map.insert("location_type".into(), self.location_type.clone().into());
-        map.insert("position".into(), self.position.to_dynamic());
-        map.insert("faction_id".into(),
-            self.faction_id.map(|id| id.to_string()).unwrap_or_default().into());
-        map.insert("is_active".into(), self.is_active.into());
-        map.insert("is_dockable".into(), self.is_dockable.into());
-        Dynamic::from(map)
     }
 }
 

@@ -20,7 +20,7 @@ pub fn NotificationsPanel() -> impl IntoView {
     view! {
         <Show when=has_notifications>
             // Responsive: full-width with margins on mobile, fixed width on desktop
-            <div class="absolute top-16 md:top-20 right-2 left-2 md:left-auto md:right-4 md:w-72 max-h-80 md:max-h-96 overflow-y-auto bg-slate-900/95 border border-amber-500/50 rounded-lg shadow-lg z-40">
+            <div data-testid="notifications-panel" class="absolute top-16 md:top-20 right-2 left-2 md:left-auto md:right-4 md:w-72 max-h-80 md:max-h-96 overflow-y-auto bg-slate-900/95 border border-amber-500/50 rounded-lg shadow-lg z-40">
                 // Header
                 <div class="p-3 border-b border-slate-700 bg-slate-800/50">
                     <h3 class="font-semibold text-amber-400 text-sm">"Pending Requests"</h3>
@@ -39,7 +39,7 @@ pub fn NotificationsPanel() -> impl IntoView {
                             let game_state_decline = game_state;
 
                             view! {
-                                <div class="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                                <div data-testid="notification" class="bg-slate-800 rounded-lg p-3 border border-slate-700">
                                     <div class="text-xs text-purple-400 mb-1">"Squadron Invite"</div>
                                     <div class="text-sm text-slate-200 font-medium">
                                         "["{invite.squadron_tag.clone()}"] "{invite.squadron_name.clone()}
@@ -88,7 +88,7 @@ pub fn NotificationsPanel() -> impl IntoView {
                             let game_state_decline = game_state;
 
                             view! {
-                                <div class="bg-slate-800 rounded-lg p-3 border border-blue-500/30">
+                                <div data-testid="notification" class="bg-slate-800 rounded-lg p-3 border border-blue-500/30">
                                     <div class="text-xs text-blue-400 mb-1">"Alliance Proposal"</div>
                                     <div class="text-sm text-slate-200 font-medium">
                                         "["{proposal.from_squadron_tag.clone()}"] "{proposal.from_squadron_name.clone()}

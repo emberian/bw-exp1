@@ -48,7 +48,7 @@ pub fn CombatLog() -> impl IntoView {
     };
 
     view! {
-        <div class="h-full flex flex-col">
+        <div data-testid="combat-log" class="h-full flex flex-col">
             // Header
             <div class="p-2 border-b border-slate-700 flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-slate-300">"Combat"</h3>
@@ -184,7 +184,7 @@ pub fn CombatLog() -> impl IntoView {
                                 let event_round = event.round;
 
                                 view! {
-                                    <div class="leading-relaxed">
+                                    <div data-testid="combat-log-entry" class="leading-relaxed">
                                         <span class="text-slate-600 mr-1">"[R"{event_round}"]"</span>
                                         <span class=event_color>
                                             {if event.hit { "HIT" } else { "MISS" }}

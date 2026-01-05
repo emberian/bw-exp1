@@ -19,7 +19,7 @@ pub fn MissionPanel() -> impl IntoView {
     let active_mission = move || game_state.active_mission.get();
 
     view! {
-        <div class="p-4">
+        <div data-testid="mission-panel" class="p-4">
             <h2 class="text-lg font-semibold text-amber-500 mb-4">"Available Missions"</h2>
 
             <div class="space-y-3">

@@ -4,9 +4,11 @@ members = [
     "crates/bw-core",
     "crates/bw-shared",
     "crates/bw-scripting",
+    "crates/bw-scripting-macros",
     "crates/bw-server",
     "crates/bw-frontend",
     "crates/bw-gm-editor",
+    "crates/bw-tui",
 ]
 
 [workspace.package]

@@ -1,69 +1,50 @@
 //! State API bindings for Rhai
 //!
 //! Exposes state query and mutation functions to scripts.
-//! Uses thread-local accessor for state access during script execution.
-//!
-//! # Thread Safety
-//!
-//! The thread-local pattern is safe because:
-//! 1. Rhai script execution is synchronous (no await points during execution)
-//! 2. Callers must hold appropriate locks (e.g., BehaviorManager's RwLock)
-//! 3. A guard flag prevents re-entrant script execution on the same thread
-//!
-//! Callers MUST NOT call script execution concurrently from multiple async tasks
-//! that might run on the same thread without synchronization.
+//! Uses the unified `ScriptExecutionContext` for state access during script execution.
 
-use std::cell::RefCell;
 use std::sync::Arc;
-use rhai::{Engine, Dynamic, Map, Array};
+use rhai::{Engine, Dynamic, Map, Array, EvalAltResult, Position as RhaiPos};
 use uuid::Uuid;
 
 use bw_core::models::Position;
 use crate::state::{StateAccessor, ShipChanges, PlayerChanges, ShipSpawnConfig, EntityType};
+use crate::state::{PropertyWatch, WatchCondition, WatchRegistry};
+use crate::errors::{ScriptError, push_error};
+use crate::context::{
+    with_context, with_accessor,
+    current_script_path as ctx_script_path,
+};
 
-thread_local! {
-    /// Thread-local state accessor for the currently executing script.
-    static CURRENT_ACCESSOR: RefCell<Option<Arc<StateAccessor>>> = const { RefCell::new(None) };
-    /// Guard to detect re-entrant script execution
-    static SCRIPT_EXECUTING: RefCell<bool> = const { RefCell::new(false) };
+/// Helper to create a Rhai runtime error.
+fn rhai_error(msg: impl Into<String>) -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(msg.into().into(), RhaiPos::NONE))
 }
 
-/// Set the state accessor for the current thread during script execution.
-///
-/// # Panics
-///
-/// Panics if called while another script is already executing on this thread,
-/// which would indicate incorrect usage (potential data race).
-pub fn set_current_accessor(accessor: Arc<StateAccessor>) {
-    SCRIPT_EXECUTING.with(|guard| {
-        let mut executing = guard.borrow_mut();
-        if *executing {
-            panic!("Re-entrant script execution detected! This indicates a bug - scripts should not be executed concurrently on the same thread.");
+/// Helper to record a UUID parsing error and return None.
+fn parse_uuid_with_error(value: &str, function: &str) -> Option<Uuid> {
+    match Uuid::parse_str(value) {
+        Ok(id) => Some(id),
+        Err(_) => {
+            push_error(ScriptError::new(function, format!("Invalid UUID: {}", value)));
+            None
         }
-        *executing = true;
-    });
-
-    CURRENT_ACCESSOR.with(|cell| {
-        *cell.borrow_mut() = Some(accessor);
-    });
+    }
 }
 
-/// Clear the state accessor after script execution.
-pub fn clear_current_accessor() {
-    CURRENT_ACCESSOR.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
-
-    SCRIPT_EXECUTING.with(|guard| {
-        *guard.borrow_mut() = false;
-    });
+/// Get accessor from the unified execution context.
+fn get_accessor<T>(f: impl FnOnce(&StateAccessor) -> T) -> Option<T> {
+    with_accessor(f)
 }
 
-/// Get the current accessor (panics if not set).
-pub fn with_accessor<T, F: FnOnce(&StateAccessor) -> T>(f: F) -> Option<T> {
-    CURRENT_ACCESSOR.with(|cell| {
-        cell.borrow().as_ref().map(|accessor| f(accessor))
-    })
+/// Get watch registry from the unified execution context.
+fn get_watch_registry() -> Option<Arc<WatchRegistry>> {
+    with_context(|ctx| ctx.watch_registry.clone()).flatten()
+}
+
+/// Get script path from the unified execution context.
+fn get_script_path() -> String {
+    ctx_script_path().unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Register state API functions with the engine.
@@ -71,23 +52,18 @@ pub fn register(engine: &mut Engine) {
     // === Ship queries ===
 
     // query_ship(ship_id: String) -> Map
-    // Returns ship data or empty map if not found
-    engine.register_fn("query_ship", |ship_id: String| -> Dynamic {
-        let id = match Uuid::parse_str(&ship_id) {
-            Ok(id) => id,
-            Err(_) => return Dynamic::UNIT,
-        };
+    // Returns ship data or throws error if not found
+    engine.register_fn("query_ship", |ship_id: String| -> Result<Dynamic, Box<EvalAltResult>> {
+        let id = Uuid::parse_str(&ship_id)
+            .map_err(|_| rhai_error(format!("Invalid UUID: {}", ship_id)))?;
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_ship(id) {
-                Ok(Some(ship)) => ship.to_dynamic(),
-                Ok(None) => Dynamic::UNIT,
-                Err(e) => {
-                    tracing::warn!(script = true, "query_ship error: {}", e);
-                    Dynamic::UNIT
-                }
+                Ok(Some(ship)) => Ok(ship.to_dynamic()),
+                Ok(None) => Err(rhai_error(format!("Ship not found: {}", ship_id))),
+                Err(e) => Err(rhai_error(format!("Access error: {}", e))),
             }
-        }).unwrap_or(Dynamic::UNIT)
+        }).unwrap_or_else(|| Err(rhai_error("No state accessor available")))
     });
 
     // query_ships_in_sector(sector_id: String) -> Array
@@ -98,7 +74,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return Array::new(),
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_ships_in_sector(id) {
                 Ok(ships) => ships.into_iter().map(|s| s.to_dynamic()).collect(),
                 Err(e) => {
@@ -118,7 +94,7 @@ pub fn register(engine: &mut Engine) {
 
         let position = Position::new(x, y, z);
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_ships_in_range(id, position, range) {
                 Ok(ships) => ships.into_iter().map(|s| s.to_dynamic()).collect(),
                 Err(e) => {
@@ -134,7 +110,7 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn("query_ships_near", |x: f64, y: f64, z: f64, range: f64| -> Array {
         let position = Position::new(x, y, z);
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_context_sector() {
                 Ok(Some(sector)) => {
                     let sector_id = sector.id;
@@ -154,22 +130,18 @@ pub fn register(engine: &mut Engine) {
     // === Player queries ===
 
     // query_player(player_id: String) -> Map
-    engine.register_fn("query_player", |player_id: String| -> Dynamic {
-        let id = match Uuid::parse_str(&player_id) {
-            Ok(id) => id,
-            Err(_) => return Dynamic::UNIT,
-        };
+    // Returns player data or throws error if not found
+    engine.register_fn("query_player", |player_id: String| -> Result<Dynamic, Box<EvalAltResult>> {
+        let id = Uuid::parse_str(&player_id)
+            .map_err(|_| rhai_error(format!("Invalid UUID: {}", player_id)))?;
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_player(id) {
-                Ok(Some(player)) => player.to_dynamic(),
-                Ok(None) => Dynamic::UNIT,
-                Err(e) => {
-                    tracing::warn!(script = true, "query_player error: {}", e);
-                    Dynamic::UNIT
-                }
+                Ok(Some(player)) => Ok(player.to_dynamic()),
+                Ok(None) => Err(rhai_error(format!("Player not found: {}", player_id))),
+                Err(e) => Err(rhai_error(format!("Access error: {}", e))),
             }
-        }).unwrap_or(Dynamic::UNIT)
+        }).unwrap_or_else(|| Err(rhai_error("No state accessor available")))
     });
 
     // === Sector queries ===
@@ -181,7 +153,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return Dynamic::UNIT,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_sector(id) {
                 Ok(Some(sector)) => sector.to_dynamic(),
                 Ok(None) => Dynamic::UNIT,
@@ -196,7 +168,7 @@ pub fn register(engine: &mut Engine) {
     // get_context_sector() -> Map
     // Returns the sector the current entity is in
     engine.register_fn("get_context_sector", || -> Dynamic {
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_context_sector() {
                 Ok(Some(sector)) => sector.to_dynamic(),
                 _ => Dynamic::UNIT,
@@ -206,27 +178,20 @@ pub fn register(engine: &mut Engine) {
 
     // === Ship modifications ===
 
-    // modify_ship(ship_id: String, changes: Map) -> bool
-    engine.register_fn("modify_ship", |ship_id: String, changes: Map| -> bool {
-        let id = match Uuid::parse_str(&ship_id) {
-            Ok(id) => id,
-            Err(_) => return false,
-        };
+    // modify_ship(ship_id: String, changes: Map) -> ()
+    // Throws error on failure
+    engine.register_fn("modify_ship", |ship_id: String, changes: Map| -> Result<(), Box<EvalAltResult>> {
+        let id = Uuid::parse_str(&ship_id)
+            .map_err(|_| rhai_error(format!("Invalid UUID: {}", ship_id)))?;
 
-        let ship_changes = match ShipChanges::from_dynamic(Dynamic::from(changes)) {
-            Some(c) => c,
-            None => return false,
-        };
+        let changes_dyn = Dynamic::from(changes);
+        let ship_changes = ShipChanges::from_dynamic(&changes_dyn)
+            .ok_or_else(|| rhai_error("Invalid changes format"))?;
 
-        with_accessor(|accessor| {
-            match accessor.modify_ship(id, ship_changes) {
-                Ok(()) => true,
-                Err(e) => {
-                    tracing::warn!(script = true, "modify_ship error: {}", e);
-                    false
-                }
-            }
-        }).unwrap_or(false)
+        get_accessor(|accessor| {
+            accessor.modify_ship(id, ship_changes)
+                .map_err(|e| rhai_error(format!("Modification error: {}", e)))
+        }).unwrap_or_else(|| Err(rhai_error("No state accessor available")))
     });
 
     // damage_ship(ship_id: String, amount: f64) -> bool
@@ -238,7 +203,7 @@ pub fn register(engine: &mut Engine) {
         };
 
         // Get current hull, then set new hull
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             let current_hull = accessor.get_ship(id)
                 .ok()
                 .flatten()
@@ -271,7 +236,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -285,12 +250,13 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return false,
         };
 
-        let player_changes = match PlayerChanges::from_dynamic(Dynamic::from(changes)) {
+        let changes_dyn = Dynamic::from(changes);
+        let player_changes = match PlayerChanges::from_dynamic(&changes_dyn) {
             Some(c) => c,
             None => return false,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.modify_player(id, player_changes) {
                 Ok(()) => true,
                 Err(e) => {
@@ -306,7 +272,7 @@ pub fn register(engine: &mut Engine) {
     // spawn_npc(config: Map) -> String
     // Returns the spawned entity ID or empty string on failure
     engine.register_fn("spawn_npc", |config: Map| -> String {
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             let sector_id = accessor.get_context_sector()
                 .ok()
                 .flatten()
@@ -337,7 +303,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return false,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.destroy_entity(id, EntityType::Ship).is_ok()
         }).unwrap_or(false)
     });
@@ -346,7 +312,7 @@ pub fn register(engine: &mut Engine) {
 
     // emit_event(event_type: String, data: Map) -> bool
     engine.register_fn("emit_event", |event_type: String, data: Map| -> bool {
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             let actor_id = accessor.permissions().owner_entity_id;
             accessor.emit_event(event_type, data, actor_id, None).is_ok()
         }).unwrap_or(false)
@@ -356,7 +322,7 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn("emit_event_with_target", |event_type: String, target_id: String, data: Map| -> bool {
         let target = Uuid::parse_str(&target_id).ok();
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             let actor_id = accessor.permissions().owner_entity_id;
             accessor.emit_event(event_type, data, actor_id, target).is_ok()
         }).unwrap_or(false)
@@ -386,7 +352,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return f64::MAX,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             match accessor.get_ship(id) {
                 Ok(Some(ship)) => {
                     let dx = ship.position.x - x;
@@ -427,7 +393,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_player(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -440,7 +406,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return false,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             // First check if player has enough credits
             if let Ok(Some(player)) = accessor.get_player(id) {
                 if player.credits >= amount {
@@ -462,7 +428,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return 0,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_player(id)
                 .ok()
                 .flatten()
@@ -489,7 +455,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -510,7 +476,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -522,7 +488,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return Array::new(),
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_ship(id)
                 .ok()
                 .flatten()
@@ -546,7 +512,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return 0,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_ship(id)
                 .ok()
                 .flatten()
@@ -562,7 +528,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return 0,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_ship(id)
                 .ok()
                 .flatten()
@@ -585,7 +551,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -597,7 +563,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return "balanced".to_string(),
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_ship(id)
                 .ok()
                 .flatten()
@@ -624,7 +590,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -641,7 +607,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -653,7 +619,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return String::new(),
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_ship(id)
                 .ok()
                 .flatten()
@@ -680,7 +646,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -697,7 +663,7 @@ pub fn register(engine: &mut Engine) {
             ..Default::default()
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.modify_ship(id, changes).is_ok()
         }).unwrap_or(false)
     });
@@ -710,7 +676,7 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return Array::new(),
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_ship(id)
                 .ok()
                 .flatten()
@@ -733,12 +699,168 @@ pub fn register(engine: &mut Engine) {
             Err(_) => return false,
         };
 
-        with_accessor(|accessor| {
+        get_accessor(|accessor| {
             accessor.get_ship(id)
                 .ok()
                 .flatten()
                 .map(|ship| ship.upgrades.iter().any(|u| u.upgrade_id == upgrade_id))
                 .unwrap_or(false)
         }).unwrap_or(false)
+    });
+
+    // === Property Watch API ===
+
+    // watch_property(entity_id: String, property: String, condition: String, threshold: f64, callback: String) -> String
+    // Returns watch ID or empty string on failure
+    engine.register_fn("watch_property", |entity_id: String, property: String, condition: String, threshold: f64, callback: String| -> String {
+        let Some(id) = parse_uuid_with_error(&entity_id, "watch_property") else {
+            return String::new();
+        };
+
+        let Some(registry) = get_watch_registry() else {
+            push_error(ScriptError::new("watch_property", "Watch registry not available"));
+            tracing::warn!("watch_property called but no registry is set");
+            return String::new();
+        };
+
+        let cond = match WatchCondition::parse(&condition, Some(threshold)) {
+            Some(c) => c,
+            None => {
+                push_error(ScriptError::new("watch_property", format!("Invalid condition: {}", condition)));
+                tracing::warn!("Invalid watch condition: {}", condition);
+                return String::new();
+            }
+        };
+
+        let watch = PropertyWatch::new(id, property, cond, callback, get_script_path());
+        let watch_id = registry.register(watch);
+        watch_id.to_string()
+    });
+
+    // watch_property_changed(entity_id: String, property: String, callback: String) -> String
+    // Convenience function for watching any change
+    engine.register_fn("watch_property_changed", |entity_id: String, property: String, callback: String| -> String {
+        let id = match Uuid::parse_str(&entity_id) {
+            Ok(id) => id,
+            Err(_) => return String::new(),
+        };
+
+        let Some(registry) = get_watch_registry() else {
+            tracing::warn!("watch_property_changed called but no registry is set");
+            return String::new();
+        };
+
+        let watch = PropertyWatch::new(id, property, WatchCondition::Changed, callback, get_script_path());
+        let watch_id = registry.register(watch);
+        watch_id.to_string()
+    });
+
+    // watch_once(entity_id: String, property: String, condition: String, threshold: f64, callback: String) -> String
+    // One-shot watch that auto-removes after triggering
+    engine.register_fn("watch_once", |entity_id: String, property: String, condition: String, threshold: f64, callback: String| -> String {
+        let id = match Uuid::parse_str(&entity_id) {
+            Ok(id) => id,
+            Err(_) => return String::new(),
+        };
+
+        let Some(registry) = get_watch_registry() else {
+            tracing::warn!("watch_once called but no registry is set");
+            return String::new();
+        };
+
+        let cond = match WatchCondition::parse(&condition, Some(threshold)) {
+            Some(c) => c,
+            None => {
+                tracing::warn!("Invalid watch condition: {}", condition);
+                return String::new();
+            }
+        };
+
+        let watch = PropertyWatch::new(id, property, cond, callback, get_script_path()).one_shot();
+        let watch_id = registry.register(watch);
+        watch_id.to_string()
+    });
+
+    // unwatch(watch_id: String) -> bool
+    engine.register_fn("unwatch", |watch_id: String| -> bool {
+        let id = match Uuid::parse_str(&watch_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let Some(registry) = get_watch_registry() else {
+            return false;
+        };
+
+        registry.unregister(id)
+    });
+
+    // unwatch_all_for_entity(entity_id: String)
+    engine.register_fn("unwatch_all_for_entity", |entity_id: String| {
+        let id = match Uuid::parse_str(&entity_id) {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+
+        if let Some(registry) = get_watch_registry() {
+            registry.unregister_for_entity(id);
+        }
+    });
+
+    // pause_watch(watch_id: String) -> bool
+    engine.register_fn("pause_watch", |watch_id: String| -> bool {
+        let id = match Uuid::parse_str(&watch_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        get_watch_registry()
+            .map(|r| r.pause(id))
+            .unwrap_or(false)
+    });
+
+    // resume_watch(watch_id: String) -> bool
+    engine.register_fn("resume_watch", |watch_id: String| -> bool {
+        let id = match Uuid::parse_str(&watch_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        get_watch_registry()
+            .map(|r| r.resume(id))
+            .unwrap_or(false)
+    });
+
+    // list_watches_for_entity(entity_id: String) -> Array
+    engine.register_fn("list_watches_for_entity", |entity_id: String| -> Array {
+        let id = match Uuid::parse_str(&entity_id) {
+            Ok(id) => id,
+            Err(_) => return Array::new(),
+        };
+
+        get_watch_registry()
+            .map(|r| {
+                r.list_for_entity(id)
+                    .into_iter()
+                    .map(|w| {
+                        let mut map = Map::new();
+                        map.insert("id".into(), Dynamic::from(w.id.to_string()));
+                        map.insert("property".into(), Dynamic::from(w.property));
+                        map.insert("callback".into(), Dynamic::from(w.callback));
+                        map.insert("active".into(), Dynamic::from(w.active));
+                        map.insert("trigger_count".into(), Dynamic::from(w.trigger_count as i64));
+                        map.insert("one_shot".into(), Dynamic::from(w.one_shot));
+                        Dynamic::from(map)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+
+    // get_watch_count() -> i64
+    engine.register_fn("get_watch_count", || -> i64 {
+        get_watch_registry()
+            .map(|r| r.count() as i64)
+            .unwrap_or(0)
     });
 }

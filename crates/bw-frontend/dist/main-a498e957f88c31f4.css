@@ -1,0 +1,159 @@
+/* BLACKWING Frontend Styles */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base styles */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #0f172a; /* slate-900 */
+    color: #f1f5f9; /* slate-100 */
+}
+
+/* Stars background pattern with twinkling animation */
+.stars-pattern {
+    position: relative;
+    overflow: hidden;
+}
+
+.stars-pattern::before,
+.stars-pattern::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+}
+
+.stars-pattern::before {
+    background-image: radial-gradient(2px 2px at 20px 30px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(2px 2px at 40px 70px, rgba(255,255,255,0.9), transparent),
+                      radial-gradient(1px 1px at 90px 40px, rgba(255,255,255,0.7), transparent),
+                      radial-gradient(2px 2px at 160px 120px, rgba(255,255,255,0.6), transparent),
+                      radial-gradient(1px 1px at 230px 80px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(1px 1px at 300px 150px, rgba(255,255,255,0.7), transparent),
+                      radial-gradient(2px 2px at 350px 50px, rgba(255,255,255,0.6), transparent),
+                      radial-gradient(1px 1px at 400px 180px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(1px 1px at 450px 100px, rgba(255,255,255,0.5), transparent),
+                      radial-gradient(2px 2px at 500px 200px, rgba(255,255,255,0.7), transparent);
+    background-size: 550px 220px;
+    animation: twinkle 4s ease-in-out infinite;
+}
+
+.stars-pattern::after {
+    background-image: radial-gradient(1px 1px at 100px 60px, rgba(255,255,255,0.7), transparent),
+                      radial-gradient(2px 2px at 200px 140px, rgba(255,255,255,0.8), transparent),
+                      radial-gradient(1px 1px at 280px 30px, rgba(255,255,255,0.6), transparent),
+                      radial-gradient(1px 1px at 380px 90px, rgba(255,255,255,0.9), transparent),
+                      radial-gradient(2px 2px at 480px 160px, rgba(255,255,255,0.5), transparent),
+                      radial-gradient(1px 1px at 520px 40px, rgba(255,255,255,0.7), transparent);
+    background-size: 600px 200px;
+    animation: twinkle 5s ease-in-out infinite reverse;
+    animation-delay: 1s;
+}
+
+@keyframes twinkle {
+    0%, 100% {
+        opacity: 0.6;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1e293b; /* slate-800 */
+}
+
+::-webkit-scrollbar-thumb {
+    background: #475569; /* slate-600 */
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #64748b; /* slate-500 */
+}
+
+/* Animation for pulsing elements */
+@keyframes pulse-slow {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.animate-pulse-slow {
+    animation: pulse-slow 3s ease-in-out infinite;
+}
+
+/* Glow effect for important elements */
+.glow-amber {
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+}
+
+.glow-red {
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+}
+
+.glow-green {
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+}
+
+/* iOS Safe Area support for notched devices */
+.pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+}
+
+.pl-safe {
+    padding-left: env(safe-area-inset-left, 0px);
+}
+
+.pr-safe {
+    padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Mobile bottom spacing utilities that account for nav bar + safe area */
+/* Nav bar is h-16 (64px) + safe area inset */
+.mb-nav {
+    margin-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+}
+
+.pb-nav {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* For elements positioned above the nav bar (like floating panels) */
+.bottom-nav {
+    bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* Landscape-specific adjustments for mobile */
+@media (max-width: 767px) and (orientation: landscape) {
+    /* Reduce nav bar height in landscape */
+    .landscape-compact-nav {
+        height: 3rem; /* 48px instead of 64px */
+    }
+
+    /* Panels should use more horizontal space in landscape */
+    .landscape-wider {
+        max-width: 50vw;
+    }
+}

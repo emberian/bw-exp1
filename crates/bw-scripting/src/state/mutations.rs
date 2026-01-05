@@ -7,6 +7,7 @@ use rhai::{Dynamic, Map};
 use uuid::Uuid;
 
 use bw_core::models::{Position, ShipClass, ShipStatus};
+use crate::RhaiDeserialize;
 
 /// A pending state mutation queued by a script.
 #[derive(Debug, Clone)]
@@ -77,22 +78,123 @@ pub struct ChoiceOption {
 // EntityType is defined in behaviors module
 pub use crate::behaviors::EntityType;
 
+// =============================================================================
+// Helper functions for complex field parsing (used by RhaiDeserialize)
+// =============================================================================
+
+/// Parse Position from Dynamic map.
+fn parse_position(v: Option<&Dynamic>) -> Option<Option<Position>> {
+    let v = v?;
+    let pos_map = v.clone().try_cast::<Map>()?;
+    let x = pos_map.get("x").and_then(|v| v.as_float().ok()).unwrap_or(0.0);
+    let y = pos_map.get("y").and_then(|v| v.as_float().ok()).unwrap_or(0.0);
+    let z = pos_map.get("z").and_then(|v| v.as_float().ok()).unwrap_or(0.0);
+    Some(Some(Position::new(x, y, z)))
+}
+
+/// Parse ShipStatusChange from Dynamic string.
+fn parse_status(v: Option<&Dynamic>) -> Option<Option<ShipStatusChange>> {
+    let v = v?;
+    let status_str = v.clone().into_string().ok()?;
+    Some(ShipStatusChange::from_string(&status_str))
+}
+
+/// Parse locked_target with special handling for clearing.
+/// Returns Some(None) to clear target, Some(Some(uuid)) to set target.
+fn parse_locked_target(v: Option<&Dynamic>) -> Option<Option<Option<Uuid>>> {
+    let v = v?;
+    if v.is_unit() {
+        return Some(Some(None)); // Clear target
+    }
+    if let Ok(target_str) = v.clone().into_string() {
+        if target_str.is_empty() {
+            return Some(Some(None)); // Clear target
+        }
+        if let Ok(uuid) = Uuid::parse_str(&target_str) {
+            return Some(Some(Some(uuid))); // Set target
+        }
+    }
+    None // Invalid input
+}
+
+/// Parse CargoChange from Dynamic map.
+fn parse_cargo_change(v: Option<&Dynamic>) -> Option<Option<CargoChange>> {
+    let v = v?;
+    let cargo_map = v.clone().try_cast::<Map>()?;
+    let cargo_type = cargo_map.get("type")
+        .and_then(|v| v.clone().into_string().ok())
+        .unwrap_or_default();
+    let quantity = cargo_map.get("quantity")
+        .and_then(|v| v.as_int().ok())
+        .unwrap_or(0) as u32;
+    let purchase_price = cargo_map.get("price")
+        .and_then(|v| v.as_int().ok())
+        .unwrap_or(0);
+
+    if cargo_type.is_empty() || quantity == 0 {
+        return Some(None);
+    }
+    Some(Some(CargoChange { cargo_type, quantity, purchase_price }))
+}
+
+/// Parse CargoChange for removal (no price needed).
+fn parse_cargo_removal(v: Option<&Dynamic>) -> Option<Option<CargoChange>> {
+    let v = v?;
+    let cargo_map = v.clone().try_cast::<Map>()?;
+    let cargo_type = cargo_map.get("type")
+        .and_then(|v| v.clone().into_string().ok())
+        .unwrap_or_default();
+    let quantity = cargo_map.get("quantity")
+        .and_then(|v| v.as_int().ok())
+        .unwrap_or(0) as u32;
+
+    if cargo_type.is_empty() || quantity == 0 {
+        return Some(None);
+    }
+    Some(Some(CargoChange { cargo_type, quantity, purchase_price: 0 }))
+}
+
+/// Parse UpgradeInstall from Dynamic map.
+fn parse_upgrade_install(v: Option<&Dynamic>) -> Option<Option<UpgradeInstall>> {
+    let v = v?;
+    let upgrade_map = v.clone().try_cast::<Map>()?;
+    let upgrade_id = upgrade_map.get("upgrade_id")
+        .and_then(|v| v.clone().into_string().ok())?;
+    let slot = upgrade_map.get("slot")
+        .and_then(|v| v.clone().into_string().ok())?;
+    Some(Some(UpgradeInstall { upgrade_id, slot }))
+}
+
 /// Changes to apply to a ship.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, RhaiDeserialize)]
 pub struct ShipChanges {
+    #[rhai(default)]
     pub hull: Option<f32>,
+    #[rhai(default)]
     pub shields: Option<f32>,
+    #[rhai(default)]
     pub ammunition: Option<f32>,
+    #[rhai(default)]
     pub fuel: Option<f32>,
+    #[rhai(default)]
     pub morale: Option<f32>,
+    #[rhai(default)]
     pub experience: Option<i32>,
+    #[rhai(default, with = "parse_position")]
     pub position: Option<Position>,
+    #[rhai(default, with = "parse_status")]
     pub status: Option<ShipStatusChange>,
+    #[rhai(default)]
     pub combat_stance: Option<String>,
-    pub locked_target: Option<Option<Uuid>>, // Some(None) to clear, Some(Some(id)) to set
+    #[rhai(default, with = "parse_locked_target")]
+    pub locked_target: Option<Option<Uuid>>,
+    #[rhai(default, with = "parse_cargo_change")]
     pub add_cargo: Option<CargoChange>,
+    #[rhai(default, with = "parse_cargo_removal")]
     pub remove_cargo: Option<CargoChange>,
+    #[rhai(default, with = "parse_upgrade_install")]
     pub install_upgrade: Option<UpgradeInstall>,
+    #[rhai(default)]
     pub remove_upgrade_slot: Option<String>,
 }
 
@@ -112,97 +214,6 @@ pub struct CargoChange {
 }
 
 impl ShipChanges {
-    /// Parse from Rhai Dynamic map.
-    pub fn from_dynamic(value: Dynamic) -> Option<Self> {
-        let map = value.try_cast::<Map>()?;
-        let mut changes = Self::default();
-
-        if let Some(v) = map.get("hull") {
-            changes.hull = v.as_float().ok().map(|f| f as f32);
-        }
-        if let Some(v) = map.get("shields") {
-            changes.shields = v.as_float().ok().map(|f| f as f32);
-        }
-        if let Some(v) = map.get("ammunition") {
-            changes.ammunition = v.as_float().ok().map(|f| f as f32);
-        }
-        if let Some(v) = map.get("fuel") {
-            changes.fuel = v.as_float().ok().map(|f| f as f32);
-        }
-        if let Some(v) = map.get("morale") {
-            changes.morale = v.as_float().ok().map(|f| f as f32);
-        }
-        if let Some(v) = map.get("experience") {
-            changes.experience = v.as_int().ok().map(|i| i as i32);
-        }
-        if let Some(v) = map.get("position") {
-            if let Some(pos_map) = v.clone().try_cast::<Map>() {
-                let x = pos_map.get("x").and_then(|v| v.as_float().ok()).unwrap_or(0.0);
-                let y = pos_map.get("y").and_then(|v| v.as_float().ok()).unwrap_or(0.0);
-                let z = pos_map.get("z").and_then(|v| v.as_float().ok()).unwrap_or(0.0);
-                changes.position = Some(Position::new(x, y, z));
-            }
-        }
-        if let Some(v) = map.get("status") {
-            if let Ok(status_str) = v.clone().into_string() {
-                changes.status = ShipStatusChange::from_string(&status_str);
-            }
-        }
-        if let Some(v) = map.get("combat_stance") {
-            changes.combat_stance = v.clone().into_string().ok();
-        }
-        if let Some(v) = map.get("locked_target") {
-            if v.is_unit() {
-                changes.locked_target = Some(None); // Clear target
-            } else if let Ok(target_str) = v.clone().into_string() {
-                if target_str.is_empty() {
-                    changes.locked_target = Some(None);
-                } else if let Ok(uuid) = Uuid::parse_str(&target_str) {
-                    changes.locked_target = Some(Some(uuid));
-                }
-            }
-        }
-        if let Some(v) = map.get("add_cargo") {
-            if let Some(cargo_map) = v.clone().try_cast::<Map>() {
-                let cargo_type = cargo_map.get("type")
-                    .and_then(|v| v.clone().into_string().ok())
-                    .unwrap_or_default();
-                let quantity = cargo_map.get("quantity")
-                    .and_then(|v| v.as_int().ok())
-                    .unwrap_or(0) as u32;
-                let purchase_price = cargo_map.get("price")
-                    .and_then(|v| v.as_int().ok())
-                    .unwrap_or(0);
-                if !cargo_type.is_empty() && quantity > 0 {
-                    changes.add_cargo = Some(CargoChange {
-                        cargo_type,
-                        quantity,
-                        purchase_price,
-                    });
-                }
-            }
-        }
-        if let Some(v) = map.get("remove_cargo") {
-            if let Some(cargo_map) = v.clone().try_cast::<Map>() {
-                let cargo_type = cargo_map.get("type")
-                    .and_then(|v| v.clone().into_string().ok())
-                    .unwrap_or_default();
-                let quantity = cargo_map.get("quantity")
-                    .and_then(|v| v.as_int().ok())
-                    .unwrap_or(0) as u32;
-                if !cargo_type.is_empty() && quantity > 0 {
-                    changes.remove_cargo = Some(CargoChange {
-                        cargo_type,
-                        quantity,
-                        purchase_price: 0,
-                    });
-                }
-            }
-        }
-
-        Some(changes)
-    }
-
     /// Check if there are any changes.
     pub fn is_empty(&self) -> bool {
         self.hull.is_none()
@@ -252,44 +263,23 @@ impl ShipStatusChange {
 }
 
 /// Changes to apply to a player.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, RhaiDeserialize)]
 pub struct PlayerChanges {
+    #[rhai(default)]
     pub reputation: Option<i32>,
+    #[rhai(default)]
     pub fame: Option<i32>,
+    #[rhai(default)]
     pub reputation_delta: Option<i32>,
+    #[rhai(default)]
     pub fame_delta: Option<i32>,
+    #[rhai(default)]
     pub credits: Option<i64>,
+    #[rhai(default)]
     pub credits_delta: Option<i64>,
 }
 
 impl PlayerChanges {
-    /// Parse from Rhai Dynamic map.
-    pub fn from_dynamic(value: Dynamic) -> Option<Self> {
-        let map = value.try_cast::<Map>()?;
-        let mut changes = Self::default();
-
-        if let Some(v) = map.get("reputation") {
-            changes.reputation = v.as_int().ok().map(|i| i as i32);
-        }
-        if let Some(v) = map.get("fame") {
-            changes.fame = v.as_int().ok().map(|i| i as i32);
-        }
-        if let Some(v) = map.get("reputation_delta") {
-            changes.reputation_delta = v.as_int().ok().map(|i| i as i32);
-        }
-        if let Some(v) = map.get("fame_delta") {
-            changes.fame_delta = v.as_int().ok().map(|i| i as i32);
-        }
-        if let Some(v) = map.get("credits") {
-            changes.credits = v.as_int().ok();
-        }
-        if let Some(v) = map.get("credits_delta") {
-            changes.credits_delta = v.as_int().ok();
-        }
-
-        Some(changes)
-    }
-
     pub fn is_empty(&self) -> bool {
         self.reputation.is_none()
             && self.fame.is_none()

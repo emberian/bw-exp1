@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use std::path::Path;
 
-use axum::{Router, routing::get};
+use axum::{Router, routing::get, response::Redirect};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -35,9 +35,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting BLACKWING server...");
 
     // Load configuration
+    // BW_CONFIG env var overrides default path
     // File watching for auto-reload is controlled by config, SIGHUP always works
-    let config_manager = init_config("config.toml", true)
-        .context("Failed to load config.toml")?;
+    let config_path = std::env::var("BW_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
+    let config_manager = init_config(&config_path, true)
+        .context(format!("Failed to load config from {}", config_path))?;
     let server_config = config().get();
 
     // Initialize database (env var overrides config)
@@ -113,25 +115,28 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     // Serve WASM app at /play (SPA with fallback to index.html)
-    let play_dir = Path::new("play");
+    let play_dir = Path::new(&server_config.server.play_dir);
     if play_dir.exists() {
-        tracing::info!("Serving WASM app from ./play at /play/*");
+        tracing::info!("Serving WASM app from {} at /play/*", server_config.server.play_dir);
         let play_service = ServeDir::new(play_dir)
             .not_found_service(ServeFile::new(play_dir.join("index.html")));
-        app = app.nest_service("/play", play_service);
+        // Redirect /play to /play/ so ServeDir can serve index.html
+        app = app
+            .route("/play", get(|| async { Redirect::permanent("/play/") }))
+            .nest_service("/play/", play_service);
     } else {
-        tracing::info!("No play directory found, skipping WASM app serving");
+        tracing::info!("No play directory found at {}, skipping WASM app serving", server_config.server.play_dir);
     }
 
     // Serve static landing page at root
-    let static_dir = Path::new("static");
+    let static_dir = Path::new(&server_config.server.static_dir);
     if static_dir.exists() {
-        tracing::info!("Serving landing page from ./static");
+        tracing::info!("Serving landing page from {}", server_config.server.static_dir);
         let static_service = ServeDir::new(static_dir)
             .not_found_service(ServeFile::new(static_dir.join("index.html")));
         app = app.fallback_service(static_service);
     } else {
-        tracing::info!("No static directory found, skipping landing page serving");
+        tracing::info!("No static directory found at {}, skipping landing page serving", server_config.server.static_dir);
     }
 
     // Build CORS layer based on configuration
@@ -161,9 +166,14 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http());
 
     // Start server with graceful shutdown
+    // BW_PORT env var overrides config
+    let port = std::env::var("BW_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(server_config.server.port);
     let addr = SocketAddr::from((
         server_config.server.host.parse::<std::net::IpAddr>().unwrap_or([0, 0, 0, 0].into()),
-        server_config.server.port,
+        port,
     ));
     tracing::info!("Server listening on {}", addr);
 

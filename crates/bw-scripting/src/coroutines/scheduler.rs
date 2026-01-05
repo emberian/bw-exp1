@@ -11,7 +11,8 @@ use rhai::{Dynamic, Map, Scope};
 
 use crate::engine::{ScriptEngine, ScriptError};
 use crate::state::{StateAccessor, AccessPermissions};
-use crate::bindings::state_api::{set_current_accessor, clear_current_accessor};
+use crate::context::{ScriptExecutionContext, ExecutionGuard};
+use crate::persistence::ScriptStateStore;
 
 use super::{
     Coroutine, CoroutineState, CoroutineExecResult, CoroutineTickResult,
@@ -32,6 +33,9 @@ pub struct CoroutineScheduler {
     engine: Arc<ScriptEngine>,
     /// State accessor for scripts
     state_accessor: Option<Arc<StateAccessor>>,
+    /// State store for persistence (future use)
+    #[allow(dead_code)]
+    state_store: Option<Arc<dyn ScriptStateStore>>,
     /// Maximum coroutines to process per tick (to avoid starvation)
     max_per_tick: usize,
 }
@@ -46,6 +50,7 @@ impl CoroutineScheduler {
             ready_queue: Mutex::new(VecDeque::new()),
             engine,
             state_accessor: None,
+            state_store: None,
             max_per_tick: 100,
         }
     }
@@ -53,6 +58,12 @@ impl CoroutineScheduler {
     /// Set the state accessor for script execution.
     pub fn set_state_accessor(&mut self, accessor: Arc<StateAccessor>) {
         self.state_accessor = Some(accessor);
+    }
+
+    /// Set the state store for persistence (future use).
+    #[allow(dead_code)]
+    pub fn set_state_store(&mut self, store: Arc<dyn ScriptStateStore>) {
+        self.state_store = Some(store);
     }
 
     /// Spawn a new coroutine.
@@ -279,7 +290,7 @@ impl CoroutineScheduler {
         }
     }
 
-    fn execute_coroutine(&self, id: Uuid, _current_tick: u64) -> Result<CoroutineExecResult, ScriptError> {
+    fn execute_coroutine(&self, id: Uuid, current_tick: u64) -> Result<CoroutineExecResult, ScriptError> {
         // Get coroutine info (but don't hold lock during execution)
         let (script_path, function_name, local_vars, resume_value, owner_id, sector_id) = {
             let mut coroutines = self.coroutines.write();
@@ -298,8 +309,8 @@ impl CoroutineScheduler {
             )
         };
 
-        // Set up state accessor if available
-        if let Some(ref accessor) = self.state_accessor {
+        // Set up execution context if state accessor is available
+        let _guard = if let Some(ref accessor) = self.state_accessor {
             let perms = if let Some(entity_id) = owner_id {
                 if let Some(sector_id) = sector_id {
                     AccessPermissions::npc_behavior(entity_id, sector_id)
@@ -314,8 +325,30 @@ impl CoroutineScheduler {
             if let Some(sector_id) = sector_id {
                 accessor.set_context_sector(sector_id);
             }
-            set_current_accessor(accessor.clone());
-        }
+
+            // Build unified execution context
+            let mut exec_ctx = ScriptExecutionContext::new(accessor.clone())
+                .with_script_path(&script_path)
+                .with_tick(current_tick);
+
+            if let Some(entity_id) = owner_id {
+                exec_ctx = exec_ctx.with_owner_entity(entity_id);
+            }
+            if let Some(sector_id) = sector_id {
+                exec_ctx = exec_ctx.with_sector(sector_id);
+            }
+
+            // Enter execution context (RAII guard handles cleanup)
+            match ExecutionGuard::enter(exec_ctx) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    tracing::warn!("Failed to enter execution context for coroutine: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Clear any stale yield request
         clear_yield_request();
@@ -336,8 +369,7 @@ impl CoroutineScheduler {
             (), // No additional args for coroutine resume
         );
 
-        // Clear state accessor
-        clear_current_accessor();
+        // Guard drops here automatically, applying mutations
 
         // Check for yield request
         if let Some(yield_req) = take_yield_request() {

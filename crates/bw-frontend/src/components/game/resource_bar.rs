@@ -13,7 +13,7 @@ pub fn ResourceBar() -> impl IntoView {
     let game_state = expect_context::<GameState>();
 
     view! {
-        <div class="flex gap-6 items-center">
+        <div data-testid="resource-bar" class="flex gap-6 items-center">
             // Reputation
             <ResourceItem
                 label="Rep"

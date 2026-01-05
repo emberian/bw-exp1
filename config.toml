@@ -14,6 +14,10 @@ host = "0.0.0.0"
 port = 3000
 # Database URL (can be overridden by DATABASE_URL env var)
 # database_url = "sqlite:./blackwing.db"
+# Directory containing WASM frontend (served at /play)
+play_dir = "play"
+# Directory containing static landing page (served at /)
+static_dir = "static"
 
 [admin]
 # Usernames with admin/GM privileges (case-insensitive)

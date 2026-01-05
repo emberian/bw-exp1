@@ -13,7 +13,7 @@ pub fn SquadronPanel() -> impl IntoView {
     let game_state = expect_context::<GameState>();
 
     view! {
-        <div class="p-4">
+        <div data-testid="squadron-panel" class="p-4">
             <h2 class="text-lg font-semibold text-amber-500 mb-4">"Squadron"</h2>
 
             {move || {
@@ -205,6 +205,7 @@ fn NoSquadron() -> impl IntoView {
 
                             <div class="flex gap-2">
                                 <button
+                                    data-testid="squadron-create-button"
                                     class="flex-1 px-3 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-sm transition-colors"
                                     disabled=move || {
                                         create_name.get().len() < 3 || create_tag.get().len() < 2 || !can_afford()
@@ -226,6 +227,7 @@ fn NoSquadron() -> impl IntoView {
                     view! {
                         <div class="space-y-2">
                             <button
+                                data-testid="squadron-show-create-button"
                                 class="w-full px-3 py-2 bg-amber-600 hover:bg-amber-500 rounded text-sm transition-colors"
                                 on:click=move |_| show_create.set(true)
                             >

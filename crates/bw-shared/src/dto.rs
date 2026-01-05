@@ -224,3 +224,106 @@ pub struct TickMetricsHistoryDto {
     /// Number of ticks over budget in window
     pub over_budget_count: u32,
 }
+
+// =============================================================================
+// Playtest DTOs
+// =============================================================================
+
+/// Configuration for forking state into a playtest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkConfigDto {
+    /// Sectors to include (empty = all sectors)
+    #[serde(default)]
+    pub sectors: Vec<Uuid>,
+    /// Whether to include all ships in selected sectors
+    #[serde(default = "default_true")]
+    pub include_ships: bool,
+    /// Specific ships to include (overrides include_ships if non-empty)
+    #[serde(default)]
+    pub specific_ships: Vec<Uuid>,
+    /// Whether to include missions
+    #[serde(default = "default_true")]
+    pub include_missions: bool,
+    /// Whether to include NPC ships
+    #[serde(default = "default_true")]
+    pub include_npcs: bool,
+    /// Whether to include other players' ships (except invited players)
+    #[serde(default)]
+    pub include_other_players: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ForkConfigDto {
+    fn default() -> Self {
+        Self {
+            sectors: vec![],
+            include_ships: true,
+            specific_ships: vec![],
+            include_missions: true,
+            include_npcs: true,
+            include_other_players: false,
+        }
+    }
+}
+
+/// Configuration for promoting changes from playtest to live.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PromoteConfigDto {
+    /// Ship modifications to promote (by ship_id)
+    #[serde(default)]
+    pub ships: Vec<Uuid>,
+    /// Player modifications to promote (by player_id)
+    #[serde(default)]
+    pub players: Vec<Uuid>,
+    /// Whether to spawn new entities created in playtest
+    #[serde(default)]
+    pub spawn_new_entities: bool,
+    /// Whether to apply entity deletions
+    #[serde(default)]
+    pub apply_deletions: bool,
+}
+
+/// Summary of a playtest for listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaytestSummaryDto {
+    pub id: Uuid,
+    pub name: String,
+    pub owner_id: Uuid,
+    pub owner_name: String,
+    pub participant_count: usize,
+    pub created_at_tick: u64,
+    pub current_tick: u64,
+    pub paused: bool,
+    pub time_scale: f32,
+}
+
+/// Full details of a playtest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaytestDetailDto {
+    pub id: Uuid,
+    pub name: String,
+    pub owner_id: Uuid,
+    pub owner_name: String,
+    pub participants: Vec<PlaytestParticipantDto>,
+    pub created_at_tick: u64,
+    pub current_tick: u64,
+    pub paused: bool,
+    pub time_scale: f32,
+    pub sector_count: usize,
+    pub ship_count: usize,
+    pub player_count: usize,
+}
+
+/// A participant in a playtest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaytestParticipantDto {
+    pub player_id: Uuid,
+    pub player_name: String,
+    pub is_gm: bool,
+    pub ship_id: Uuid,
+    pub sector_id: Uuid,
+    pub is_connected: bool,
+}

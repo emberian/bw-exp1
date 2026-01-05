@@ -39,7 +39,7 @@ pub fn ShipStatus() -> impl IntoView {
     let comms_status = move || "online";
 
     view! {
-        <div class="p-4">
+        <div data-testid="ship-status" class="p-4">
             <h2 class="text-lg font-semibold text-amber-500 mb-4">"Ship Status"</h2>
 
             // Ship diagram - visual representation with damage overlay
@@ -92,7 +92,7 @@ pub fn ShipStatus() -> impl IntoView {
 
             // Position display
             <h3 class="text-sm font-semibold text-slate-300 mt-6 mb-2">"Position"</h3>
-            <div class="text-xs text-slate-400 bg-slate-700/50 rounded px-2 py-1">
+            <div data-testid="ship-position" class="text-xs text-slate-400 bg-slate-700/50 rounded px-2 py-1">
                 <span>"X: "</span>
                 <span class="text-slate-300">{move || format!("{:.0}", game_state.position_x.get())}</span>
                 <span class="mx-2">"|"</span>

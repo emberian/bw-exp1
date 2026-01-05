@@ -7,7 +7,11 @@
 mod snapshots;
 mod mutations;
 mod accessor;
+mod watchers;
+mod overlay;
 
 pub use snapshots::*;
 pub use mutations::*;
 pub use accessor::*;
+pub use watchers::*;
+pub use overlay::*;

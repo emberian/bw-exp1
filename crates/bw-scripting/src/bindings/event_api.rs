@@ -1,29 +1,17 @@
 //! Event API bindings for Rhai
 //!
 //! Exposes event subscription and emission functions to scripts.
-//! Uses thread-local context for the current script's information.
-//!
-//! # Thread Safety
-//!
-//! Similar to state_api, these thread-locals are safe because:
-//! 1. Rhai script execution is synchronous
-//! 2. The state_api guard prevents re-entrant execution
-//! 3. Callers must hold appropriate locks before executing scripts
+//! Uses the unified `ScriptExecutionContext` for accessing event registry.
 
-use std::cell::RefCell;
-use std::sync::Arc;
 use rhai::Engine;
 use uuid::Uuid;
 
 use bw_core::events::GameEventType;
 use crate::events::{EventRegistry, EventSubscription, EventFilter, parse_event_type};
-
-thread_local! {
-    /// Current event registry for subscriptions
-    static CURRENT_REGISTRY: RefCell<Option<Arc<EventRegistry>>> = const { RefCell::new(None) };
-    /// Current script context (script path, owner entity, sector)
-    static CURRENT_CONTEXT: RefCell<ScriptContext> = const { RefCell::new(ScriptContext::empty()) };
-}
+use crate::context::{
+    with_event_registry,
+    current_script_path, current_owner_entity, current_sector,
+};
 
 /// Context for the currently executing script.
 #[derive(Clone, Default)]
@@ -44,44 +32,18 @@ impl ScriptContext {
     }
 }
 
-/// Set the event registry for the current thread.
-pub fn set_current_registry(registry: Arc<EventRegistry>) {
-    CURRENT_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Some(registry);
-    });
-}
-
-/// Clear the event registry.
-pub fn clear_current_registry() {
-    CURRENT_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
-}
-
-/// Set the script context for the current thread.
-pub fn set_script_context(ctx: ScriptContext) {
-    CURRENT_CONTEXT.with(|cell| {
-        *cell.borrow_mut() = ctx;
-    });
-}
-
-/// Clear the script context.
-pub fn clear_script_context() {
-    CURRENT_CONTEXT.with(|cell| {
-        *cell.borrow_mut() = ScriptContext::default();
-    });
-}
-
-/// Get current script context.
+/// Get current script context from the unified execution context.
 fn get_context() -> ScriptContext {
-    CURRENT_CONTEXT.with(|cell| cell.borrow().clone())
+    ScriptContext {
+        script_path: current_script_path().unwrap_or_default(),
+        owner_entity_id: current_owner_entity(),
+        sector_id: current_sector(),
+    }
 }
 
-/// Access registry.
+/// Access registry from the unified execution context.
 fn with_registry<T, F: FnOnce(&EventRegistry) -> T>(f: F) -> Option<T> {
-    CURRENT_REGISTRY.with(|cell| {
-        cell.borrow().as_ref().map(|reg| f(reg))
-    })
+    with_event_registry(f)
 }
 
 /// Register event API functions with the engine.
@@ -287,20 +249,55 @@ pub fn register(engine: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use crate::context::{ScriptExecutionContext, ExecutionGuard};
+    use crate::state::{StateAccessor, StateProvider, ShipSnapshot, PlayerSnapshot, SectorSnapshot, StateMutation, MutationResult};
+    use bw_core::models::Position;
+
+    // Mock provider for tests
+    struct MockProvider;
+    impl StateProvider for MockProvider {
+        fn get_ship(&self, _: Uuid) -> Option<ShipSnapshot> { None }
+        fn get_ships_in_sector(&self, _: Uuid) -> Vec<ShipSnapshot> { vec![] }
+        fn get_ships_in_range(&self, _: Uuid, _: Position, _: f64) -> Vec<ShipSnapshot> { vec![] }
+        fn get_player(&self, _: Uuid) -> Option<PlayerSnapshot> { None }
+        fn get_sector(&self, _: Uuid) -> Option<SectorSnapshot> { None }
+        fn apply_mutations(&self, m: Vec<StateMutation>) -> Vec<MutationResult> {
+            m.into_iter().map(MutationResult::success).collect()
+        }
+    }
 
     #[test]
-    fn test_script_context() {
-        let ctx = ScriptContext {
-            script_path: "test.rhai".to_string(),
-            owner_entity_id: Some(Uuid::new_v4()),
-            sector_id: None,
-        };
+    fn test_script_context_via_execution_guard() {
+        let accessor = Arc::new(StateAccessor::new(Arc::new(MockProvider)));
+        let entity_id = Uuid::new_v4();
 
-        set_script_context(ctx.clone());
+        let ctx = ScriptExecutionContext::new(accessor)
+            .with_script_path("test.rhai")
+            .with_owner_entity(entity_id);
+
+        let _guard = ExecutionGuard::enter(ctx).expect("Failed to enter execution context");
+
+        // get_context() should retrieve from unified context
         let retrieved = get_context();
         assert_eq!(retrieved.script_path, "test.rhai");
+        assert_eq!(retrieved.owner_entity_id, Some(entity_id));
 
-        clear_script_context();
+        // Guard drops here and context is cleared
+    }
+
+    #[test]
+    fn test_context_cleared_after_guard_drop() {
+        let accessor = Arc::new(StateAccessor::new(Arc::new(MockProvider)));
+
+        {
+            let ctx = ScriptExecutionContext::new(accessor)
+                .with_script_path("test.rhai");
+            let _guard = ExecutionGuard::enter(ctx).expect("Failed to enter execution context");
+            assert_eq!(get_context().script_path, "test.rhai");
+        }
+
+        // After guard drops, context should be empty
         let cleared = get_context();
         assert!(cleared.script_path.is_empty());
     }

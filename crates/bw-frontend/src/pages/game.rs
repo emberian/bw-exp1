@@ -163,6 +163,7 @@ pub fn GamePage() -> impl IntoView {
                 <MobileResourceBar />
                 // Logout button - icon-only on mobile
                 <button
+                    data-testid="logout-button"
                     class="ml-2 md:ml-4 p-2 md:px-3 md:py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors min-h-[44px] md:min-h-0 flex items-center justify-center"
                     on:click=move |_| {
                         // Confirm before logging out
@@ -366,6 +367,7 @@ pub fn GamePage() -> impl IntoView {
             <footer class="hidden md:flex h-14 bg-slate-800 border-t border-slate-700 items-center px-4 gap-4">
                 // Action buttons
                 <button
+                    data-testid="dock-button"
                     class="px-4 py-2 bg-blue-900 hover:bg-blue-800 disabled:bg-slate-700 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
                     on:click=handle_dock
                     disabled=move || is_docked(&ship_status()) || is_in_combat(&ship_status())
@@ -373,6 +375,7 @@ pub fn GamePage() -> impl IntoView {
                     {move || if is_docked(&ship_status()) { "Docked" } else { "Dock" }}
                 </button>
                 <button
+                    data-testid="stop-button"
                     class="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
                     on:click=handle_stop
                     disabled=move || !is_moving(&ship_status())
@@ -380,6 +383,7 @@ pub fn GamePage() -> impl IntoView {
                     "Stop"
                 </button>
                 <button
+                    data-testid="alert-button"
                     class="px-4 py-2 bg-red-900 hover:bg-red-800 disabled:bg-slate-700 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
                     on:click=handle_alert
                     disabled=move || !is_in_combat(&ship_status())

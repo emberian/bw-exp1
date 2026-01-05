@@ -93,6 +93,7 @@ pub fn LoginPage() -> impl IntoView {
                     </label>
                     <input
                         type="text"
+                        data-testid="username-input"
                         prop:value=move || username.get()
                         on:input=move |ev| username.set(event_target_value(&ev))
                         class="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg
@@ -108,6 +109,7 @@ pub fn LoginPage() -> impl IntoView {
                     </label>
                     <input
                         type="password"
+                        data-testid="password-input"
                         prop:value=move || password.get()
                         on:input=move |ev| password.set(event_target_value(&ev))
                         class="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg
@@ -118,7 +120,7 @@ pub fn LoginPage() -> impl IntoView {
 
                 // Error display
                 {move || error.get().map(|e| view! {
-                    <div class="mb-4 p-3 bg-red-900/50 border border-red-700 rounded text-red-200 text-sm">
+                    <div data-testid="error-message" class="mb-4 p-3 bg-red-900/50 border border-red-700 rounded text-red-200 text-sm">
                         {e}
                     </div>
                 })}
@@ -126,6 +128,7 @@ pub fn LoginPage() -> impl IntoView {
                 // Submit button
                 <button
                     type="submit"
+                    data-testid="submit-button"
                     disabled=move || loading.get()
                     class="w-full py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-600
                            text-white font-semibold rounded-lg transition-colors"

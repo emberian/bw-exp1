@@ -9,6 +9,31 @@ use uuid::Uuid;
 
 use bw_shared::{ScriptFileInfo, EntitySummary, SectorSummaryAdmin};
 
+/// A script error entry for display
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Fields read by UI components (not yet implemented)
+pub struct ScriptErrorEntry {
+    pub script: String,
+    pub function: String,
+    pub message: String,
+    pub line: usize,
+    pub column: usize,
+    pub tick: u64,
+    pub timestamp_ms: u64,
+}
+
+/// A notification entry for display
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Fields read by UI components (not yet implemented)
+pub struct NotificationEntry {
+    pub message: String,
+    pub notification_type: String, // "success", "warning", "error"
+    pub timestamp_ms: u64,
+}
+
+const MAX_SCRIPT_ERRORS: usize = 100;
+const MAX_NOTIFICATIONS: usize = 20;
+
 /// Main GM Editor state
 #[derive(Clone, Copy)]
 pub struct GMEditorState {
@@ -41,6 +66,11 @@ pub struct GMEditorState {
 
     /// Error message
     pub error: RwSignal<Option<String>>,
+
+    /// Script errors (newest first)
+    pub script_errors: RwSignal<Vec<ScriptErrorEntry>>,
+    /// Notifications (newest first)
+    pub notifications: RwSignal<Vec<NotificationEntry>>,
 }
 
 impl GMEditorState {
@@ -64,6 +94,9 @@ impl GMEditorState {
             loading_entities: RwSignal::new(false),
 
             error: RwSignal::new(None),
+
+            script_errors: RwSignal::new(vec![]),
+            notifications: RwSignal::new(vec![]),
         }
     }
 
@@ -79,6 +112,73 @@ impl GMEditorState {
             error.set(None);
         })
         .forget();
+    }
+
+    /// Add a script error to the list
+    pub fn add_script_error(
+        &self,
+        script: String,
+        function: String,
+        message: String,
+        line: usize,
+        column: usize,
+        tick: u64,
+    ) {
+        let timestamp_ms = js_sys::Date::now() as u64;
+        let entry = ScriptErrorEntry {
+            script,
+            function,
+            message,
+            line,
+            column,
+            tick,
+            timestamp_ms,
+        };
+
+        self.script_errors.update(|errors| {
+            errors.insert(0, entry);
+            if errors.len() > MAX_SCRIPT_ERRORS {
+                errors.truncate(MAX_SCRIPT_ERRORS);
+            }
+        });
+    }
+
+    /// Add a notification
+    pub fn add_notification(&self, message: String, notification_type: String) {
+        let timestamp_ms = js_sys::Date::now() as u64;
+        let entry = NotificationEntry {
+            message,
+            notification_type,
+            timestamp_ms,
+        };
+
+        self.notifications.update(|notifications| {
+            notifications.insert(0, entry);
+            if notifications.len() > MAX_NOTIFICATIONS {
+                notifications.truncate(MAX_NOTIFICATIONS);
+            }
+        });
+
+        // Auto-clear notifications after delay
+        let notifications_signal = self.notifications;
+        gloo_timers::callback::Timeout::new(10000, move || {
+            notifications_signal.update(|n| {
+                // Remove entries older than 10 seconds
+                let cutoff = js_sys::Date::now() as u64 - 10000;
+                n.retain(|e| e.timestamp_ms > cutoff);
+            });
+        })
+        .forget();
+    }
+
+    /// Clear all script errors
+    pub fn clear_script_errors(&self) {
+        self.script_errors.set(vec![]);
+    }
+
+    /// Clear all notifications
+    pub fn clear_notifications(&self) {
+        self.notifications.set(vec![]);
     }
 }
 

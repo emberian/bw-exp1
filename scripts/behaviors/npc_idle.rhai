@@ -22,8 +22,8 @@ fn on_update(ctx) {
     let local = ctx["local_data"];
     let delta = ctx["delta_time"];
 
-    // Get our ship info
-    let ship = get_ship(entity_id);
+    // Get our ship info (using snapshot API)
+    let ship = query_ship(entity_id);
     if ship == () {
         return #{ local_data: local };
     }
@@ -45,9 +45,10 @@ fn on_update(ctx) {
             local["max_idle_ticks"] = rand_int(50, 150);
         }
     } else if state == "moving" {
-        // Move towards target
-        let current_x = ship["position_x"];
-        let current_y = ship["position_y"];
+        // Move towards target (using nested position from snapshot)
+        let pos = ship["position"];
+        let current_x = pos["x"];
+        let current_y = pos["y"];
         let target_x = local["target_x"];
         let target_y = local["target_y"];
 
@@ -73,7 +74,7 @@ fn on_update(ctx) {
                 position: #{
                     x: current_x + move_x,
                     y: current_y + move_y,
-                    z: ship["position_z"]
+                    z: pos["z"]
                 }
             });
         }

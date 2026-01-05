@@ -65,7 +65,7 @@ pub fn CommsPanel() -> impl IntoView {
     };
 
     view! {
-        <div class="h-full flex flex-col">
+        <div data-testid="comms-panel" class="h-full flex flex-col">
             // Header with channel selector
             <div class="p-2 border-b border-slate-700 flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-slate-300">"Comms"</h3>
@@ -123,7 +123,7 @@ pub fn CommsPanel() -> impl IntoView {
                             // Use if/else to avoid Show closure issues
                             if is_system {
                                 view! {
-                                    <div class="flex gap-1 leading-relaxed">
+                                    <div data-testid="chat-message" class="flex gap-1 leading-relaxed">
                                         <span class="text-slate-600 text-[10px] flex-shrink-0">{time_str}</span>
                                         <span class=prefix_class.clone()>{channel_prefix}</span>
                                         <span class="text-amber-400 italic">{message}</span>
@@ -131,7 +131,7 @@ pub fn CommsPanel() -> impl IntoView {
                                 }.into_any()
                             } else {
                                 view! {
-                                    <div class="flex gap-1 leading-relaxed">
+                                    <div data-testid="chat-message" class="flex gap-1 leading-relaxed">
                                         <span class="text-slate-600 text-[10px] flex-shrink-0">{time_str}</span>
                                         <span class=prefix_class>{channel_prefix}</span>
                                         <span class="text-slate-400">{sender_name}":"</span>
@@ -170,6 +170,7 @@ pub fn CommsPanel() -> impl IntoView {
                 <div class="flex gap-2">
                     <input
                         type="text"
+                        data-testid="chat-input"
                         prop:value=move || input.get()
                         on:input=move |ev| input.set(event_target_value(&ev))
                         on:keypress=move |ev: web_sys::KeyboardEvent| {
@@ -189,6 +190,7 @@ pub fn CommsPanel() -> impl IntoView {
                         }
                     />
                     <button
+                        data-testid="chat-send-button"
                         on:click=move |_| send_message(())
                         class="px-4 py-2 md:py-1 min-h-[44px] md:min-h-0 bg-amber-600 hover:bg-amber-500 rounded text-sm
                                disabled:opacity-50 disabled:cursor-not-allowed"
