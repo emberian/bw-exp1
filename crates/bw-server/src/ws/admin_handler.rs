@@ -12,9 +12,18 @@ use bw_shared::{
     ScriptFileInfo, SectorSummaryAdmin, ServerMessage, StagedChange, ChangePreview,
     ValidationError, SimConfigSection, ScriptErrorDto,
     ForkConfigDto, PromoteConfigDto, PlaytestSummaryDto, PlaytestDetailDto, PlaytestParticipantDto,
-    dto::{BreakpointDto, FunctionBreakpointDto, StackFrameDto, VariableDto, PauseReasonDto, DebugTargetDto},
+    dto::{
+        BreakpointDto, FunctionBreakpointDto, StackFrameDto, VariableDto, PauseReasonDto, DebugTargetDto,
+        ArchetypeSchemaDto, FieldSchemaDto, ActionSchemaDto, ParamSchemaDto,
+        ValidationIssueDto, ValidationSeverity, WatchDto,
+    },
 };
 use bw_scripting::debug::{Breakpoint, DebugTarget, DebugCommand, PauseReason};
+use bw_scripting::schema::{
+    DefinitionSchemaRegistry, DefFieldType,
+    SHIP_SCHEMA, WEAPON_SCHEMA, EFFECT_SCHEMA, CARGO_SCHEMA, ABILITY_SCHEMA, FACTION_SCHEMA,
+    ActionSchemaRegistry,
+};
 use crate::{config::config, GameState};
 
 /// Handle an admin message from a connected client.
@@ -212,6 +221,100 @@ pub async fn handle_admin_message(
         AdminClientMessage::GetCallStack => {
             handle_get_call_stack(state, tx, _player_id).await;
         }
+
+        // === Schema Introspection ===
+
+        AdminClientMessage::GetArchetypeSchemas => {
+            handle_get_archetype_schemas(tx).await;
+        }
+
+        AdminClientMessage::GetArchetypeSchema { archetype_type } => {
+            handle_get_archetype_schema(tx, &archetype_type).await;
+        }
+
+        AdminClientMessage::GetActionSchemas => {
+            handle_get_action_schemas(tx).await;
+        }
+
+        // === Script Validation ===
+
+        AdminClientMessage::ValidateScript { path, content } => {
+            handle_validate_script(tx, &path, &content).await;
+        }
+
+        AdminClientMessage::ValidateDefinition { definition_type, content } => {
+            handle_validate_definition(tx, &definition_type, &content).await;
+        }
+
+        // === State Introspection (stub for Phase 2) ===
+
+        AdminClientMessage::SubscribeStateUpdates { entity_types, .. } => {
+            // TODO: Implement state subscription
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::StateSubscribed {
+                entity_types,
+            })).await;
+        }
+
+        AdminClientMessage::UnsubscribeStateUpdates => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::StateUnsubscribed)).await;
+        }
+
+        AdminClientMessage::GetStateSnapshot { entity_type, limit, offset, .. } => {
+            handle_get_state_snapshot(state, tx, entity_type, limit, offset).await;
+        }
+
+        AdminClientMessage::CreateWatch { expression, name } => {
+            handle_create_watch(tx, expression, name).await;
+        }
+
+        AdminClientMessage::RemoveWatch { watch_id } => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::WatchRemoved { watch_id })).await;
+        }
+
+        AdminClientMessage::ListWatches => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::WatchList {
+                watches: vec![],
+            })).await;
+        }
+
+        // === Export (stub for Phase 3) ===
+
+        AdminClientMessage::CreateExport { name, .. } => {
+            let export_id = Uuid::new_v4();
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ExportCreated {
+                export_id,
+                name,
+            })).await;
+            // TODO: Implement actual export creation
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ExportFailed {
+                export_id,
+                error: "Export not yet implemented".to_string(),
+            })).await;
+        }
+
+        AdminClientMessage::GetExportStatus { export_id } => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "NOT_IMPLEMENTED".to_string(),
+                message: format!("Export {} status not yet implemented", export_id),
+            })).await;
+        }
+
+        AdminClientMessage::ListExports => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ExportList {
+                exports: vec![],
+            })).await;
+        }
+
+        AdminClientMessage::DeleteExport { export_id } => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ExportDeleted { export_id })).await;
+        }
+
+        AdminClientMessage::DownloadExport { export_id } => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "NOT_IMPLEMENTED".to_string(),
+                message: format!("Export {} download not yet implemented", export_id),
+            })).await;
+        }
     }
 
     true
@@ -390,6 +493,10 @@ async fn handle_reload_script(state: &Arc<GameState>, tx: &mpsc::Sender<ServerMe
     match state.scripts.reload_script(path) {
         Ok(warnings) => {
             tracing::info!("Reloaded script: {}", path);
+
+            // Reinitialize if this is an action script (calls init() to re-register handlers)
+            state.reinitialize_action_script(path);
+
             let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ScriptReloaded {
                 path: path.to_string(),
                 success: true,
@@ -2283,4 +2390,442 @@ fn pause_reason_to_dto(reason: &PauseReason) -> PauseReasonDto {
         },
         PauseReason::Pause => PauseReasonDto::Pause,
     }
+}
+
+// =============================================================================
+// Schema Introspection Handlers
+// =============================================================================
+
+/// Get all archetype schemas (summary)
+async fn handle_get_archetype_schemas(tx: &mpsc::Sender<ServerMessage>) {
+    let schemas = vec![
+        ArchetypeSchemaDto {
+            archetype_type: "ship".to_string(),
+            name: SHIP_SCHEMA.name.to_string(),
+            field_count: SHIP_SCHEMA.fields.len(),
+            required_count: SHIP_SCHEMA.required_fields().count(),
+        },
+        ArchetypeSchemaDto {
+            archetype_type: "weapon".to_string(),
+            name: WEAPON_SCHEMA.name.to_string(),
+            field_count: WEAPON_SCHEMA.fields.len(),
+            required_count: WEAPON_SCHEMA.required_fields().count(),
+        },
+        ArchetypeSchemaDto {
+            archetype_type: "effect".to_string(),
+            name: EFFECT_SCHEMA.name.to_string(),
+            field_count: EFFECT_SCHEMA.fields.len(),
+            required_count: EFFECT_SCHEMA.required_fields().count(),
+        },
+        ArchetypeSchemaDto {
+            archetype_type: "cargo".to_string(),
+            name: CARGO_SCHEMA.name.to_string(),
+            field_count: CARGO_SCHEMA.fields.len(),
+            required_count: CARGO_SCHEMA.required_fields().count(),
+        },
+        ArchetypeSchemaDto {
+            archetype_type: "ability".to_string(),
+            name: ABILITY_SCHEMA.name.to_string(),
+            field_count: ABILITY_SCHEMA.fields.len(),
+            required_count: ABILITY_SCHEMA.required_fields().count(),
+        },
+        ArchetypeSchemaDto {
+            archetype_type: "faction".to_string(),
+            name: FACTION_SCHEMA.name.to_string(),
+            field_count: FACTION_SCHEMA.fields.len(),
+            required_count: FACTION_SCHEMA.required_fields().count(),
+        },
+    ];
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ArchetypeSchemas { schemas })).await;
+}
+
+/// Get detailed schema for a specific archetype type
+async fn handle_get_archetype_schema(tx: &mpsc::Sender<ServerMessage>, archetype_type: &str) {
+    let registry = DefinitionSchemaRegistry::with_builtins();
+
+    let schema = match registry.get(archetype_type) {
+        Some(s) => s,
+        None => {
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::AdminError {
+                code: "UNKNOWN_ARCHETYPE".to_string(),
+                message: format!("Unknown archetype type: {}", archetype_type),
+            })).await;
+            return;
+        }
+    };
+
+    let fields: Vec<FieldSchemaDto> = schema.fields.iter().map(|f| {
+        FieldSchemaDto {
+            name: f.name.to_string(),
+            field_type: f.field_type.name().to_string(),
+            rust_type: match f.field_type {
+                DefFieldType::String => "String".to_string(),
+                DefFieldType::Number => "f64".to_string(),
+                DefFieldType::Bool => "bool".to_string(),
+                DefFieldType::Array => "Vec<Dynamic>".to_string(),
+                DefFieldType::Map => "Map".to_string(),
+                DefFieldType::Any => "Dynamic".to_string(),
+            },
+            required: f.required,
+            description: None,
+        }
+    }).collect();
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ArchetypeSchemaDetail {
+        archetype_type: archetype_type.to_string(),
+        name: schema.name.to_string(),
+        fields,
+    })).await;
+}
+
+/// Get all action parameter schemas
+async fn handle_get_action_schemas(tx: &mpsc::Sender<ServerMessage>) {
+    let scripts_dir = config().get().scripting.scripts_dir.clone();
+    let schema_path = Path::new(&scripts_dir).parent()
+        .unwrap_or(Path::new("."))
+        .join("scripts")
+        .join("schemas")
+        .join("actions.toml");
+
+    let actions = match ActionSchemaRegistry::load_from_file(&schema_path) {
+        Ok(registry) => {
+            registry.actions.into_iter().map(|(name, schema)| {
+                let params = schema.params.into_iter().map(|(param_name, param)| {
+                    (param_name, ParamSchemaDto {
+                        param_type: param.param_type,
+                        required: param.required,
+                    })
+                }).collect();
+
+                (name, ActionSchemaDto {
+                    description: schema.description,
+                    params,
+                })
+            }).collect()
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load action schemas: {}", e);
+            std::collections::HashMap::new()
+        }
+    };
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ActionSchemas { actions })).await;
+}
+
+// =============================================================================
+// Validation Handlers
+// =============================================================================
+
+/// Validate a script without saving
+async fn handle_validate_script(tx: &mpsc::Sender<ServerMessage>, path: &str, content: &str) {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    // Compile the script with Rhai to catch syntax errors
+    let engine = rhai::Engine::new();
+    if let Err(e) = engine.compile(content) {
+        let (line, col) = match e.position() {
+            rhai::Position::NONE => (1, 1),
+            pos => (pos.line().unwrap_or(1), pos.position().unwrap_or(1)),
+        };
+
+        errors.push(ValidationIssueDto {
+            severity: ValidationSeverity::Error,
+            message: e.to_string(),
+            line,
+            column: col,
+            end_line: None,
+            end_column: None,
+            code: Some("SYNTAX_ERROR".to_string()),
+            suggestion: None,
+        });
+    }
+
+    // Basic static analysis
+    for (line_num, line) in content.lines().enumerate() {
+        let line_num = line_num + 1;
+
+        if line.contains("print(") || line.contains("debug(") {
+            warnings.push(ValidationIssueDto {
+                severity: ValidationSeverity::Warning,
+                message: "Debug print statement found".to_string(),
+                line: line_num,
+                column: line.find("print(").or_else(|| line.find("debug(")).unwrap_or(0) + 1,
+                end_line: None,
+                end_column: None,
+                code: Some("DEBUG_PRINT".to_string()),
+                suggestion: Some("Remove debug statements before production".to_string()),
+            });
+        }
+
+        if line.contains("TODO") || line.contains("FIXME") {
+            warnings.push(ValidationIssueDto {
+                severity: ValidationSeverity::Info,
+                message: "TODO/FIXME comment found".to_string(),
+                line: line_num,
+                column: line.find("TODO").or_else(|| line.find("FIXME")).unwrap_or(0) + 1,
+                end_line: None,
+                end_column: None,
+                code: Some("TODO_COMMENT".to_string()),
+                suggestion: None,
+            });
+        }
+    }
+
+    let is_valid = errors.is_empty();
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::ValidationResult {
+        path: path.to_string(),
+        errors,
+        warnings,
+        is_valid,
+    })).await;
+}
+
+/// Validate an archetype definition
+async fn handle_validate_definition(tx: &mpsc::Sender<ServerMessage>, definition_type: &str, content: &str) {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    let registry = DefinitionSchemaRegistry::with_builtins();
+    let schema = match registry.get(definition_type) {
+        Some(s) => s,
+        None => {
+            errors.push(ValidationIssueDto {
+                severity: ValidationSeverity::Error,
+                message: format!("Unknown definition type: {}", definition_type),
+                line: 1,
+                column: 1,
+                end_line: None,
+                end_column: None,
+                code: Some("UNKNOWN_TYPE".to_string()),
+                suggestion: Some("Valid types: ship, weapon, effect, cargo, ability, faction".to_string()),
+            });
+
+            let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DefinitionValidationResult {
+                definition_type: definition_type.to_string(),
+                errors,
+                warnings,
+                is_valid: false,
+            })).await;
+            return;
+        }
+    };
+
+    let engine = rhai::Engine::new();
+    match engine.compile(content) {
+        Ok(ast) => {
+            let mut scope = rhai::Scope::new();
+            match engine.eval_ast_with_scope::<rhai::Dynamic>(&mut scope, &ast) {
+                Ok(result) => {
+                    if let Some(map) = result.try_cast::<rhai::Map>() {
+                        for field_name in schema.required_fields() {
+                            if !map.contains_key(field_name) {
+                                errors.push(ValidationIssueDto {
+                                    severity: ValidationSeverity::Error,
+                                    message: format!("Missing required field: {}", field_name),
+                                    line: 1,
+                                    column: 1,
+                                    end_line: None,
+                                    end_column: None,
+                                    code: Some("MISSING_FIELD".to_string()),
+                                    suggestion: Some(format!("Add '{}' to the definition", field_name)),
+                                });
+                            }
+                        }
+
+                        for key in map.keys() {
+                            let key_str = key.to_string();
+                            if !schema.has_field(&key_str) {
+                                warnings.push(ValidationIssueDto {
+                                    severity: ValidationSeverity::Warning,
+                                    message: format!("Unknown field: {}", key_str),
+                                    line: 1,
+                                    column: 1,
+                                    end_line: None,
+                                    end_column: None,
+                                    code: Some("UNKNOWN_FIELD".to_string()),
+                                    suggestion: None,
+                                });
+                            }
+                        }
+                    } else {
+                        errors.push(ValidationIssueDto {
+                            severity: ValidationSeverity::Error,
+                            message: "Definition must return an object/map".to_string(),
+                            line: 1,
+                            column: 1,
+                            end_line: None,
+                            end_column: None,
+                            code: Some("INVALID_TYPE".to_string()),
+                            suggestion: Some("Wrap your definition in #{ ... }".to_string()),
+                        });
+                    }
+                }
+                Err(e) => {
+                    errors.push(ValidationIssueDto {
+                        severity: ValidationSeverity::Error,
+                        message: format!("Evaluation error: {}", e),
+                        line: 1,
+                        column: 1,
+                        end_line: None,
+                        end_column: None,
+                        code: Some("EVAL_ERROR".to_string()),
+                        suggestion: None,
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            let (line, col) = match e.position() {
+                rhai::Position::NONE => (1, 1),
+                pos => (pos.line().unwrap_or(1), pos.position().unwrap_or(1)),
+            };
+
+            errors.push(ValidationIssueDto {
+                severity: ValidationSeverity::Error,
+                message: e.to_string(),
+                line,
+                column: col,
+                end_line: None,
+                end_column: None,
+                code: Some("SYNTAX_ERROR".to_string()),
+                suggestion: None,
+            });
+        }
+    }
+
+    let is_valid = errors.is_empty();
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DefinitionValidationResult {
+        definition_type: definition_type.to_string(),
+        errors,
+        warnings,
+        is_valid,
+    })).await;
+}
+
+// =============================================================================
+// State Introspection Handlers (Phase 2)
+// =============================================================================
+
+/// Get a snapshot of state for entity type
+async fn handle_get_state_snapshot(
+    state: &Arc<GameState>,
+    tx: &mpsc::Sender<ServerMessage>,
+    entity_type: EntityType,
+    limit: usize,
+    offset: usize,
+) {
+    let tick = state.get_tick();
+    let mut entities = Vec::new();
+    let mut total_count = 0usize;
+
+    match entity_type {
+        EntityType::Ship => {
+            let all_ships: Vec<_> = state.ships.iter().collect();
+            total_count = all_ships.len();
+            for ship in all_ships.into_iter().skip(offset).take(limit) {
+                entities.push(serde_json::json!({
+                    "id": ship.id,
+                    "name": &ship.name,
+                    "sector_id": ship.sector_id,
+                    "status": format!("{:?}", ship.status),
+                    "ship_class": format!("{:?}", ship.ship_class),
+                    "hull_integrity": ship.hull_integrity,
+                    "is_player_ship": ship.is_player_ship,
+                    "position": ship.position,
+                }));
+            }
+        }
+        EntityType::Player => {
+            let all_players: Vec<_> = state.player_data.iter().collect();
+            total_count = all_players.len();
+            for player in all_players.into_iter().skip(offset).take(limit) {
+                entities.push(serde_json::json!({
+                    "id": player.id,
+                    "username": &player.username,
+                    "is_online": player.is_online,
+                    "reputation": player.resources.reputation,
+                    "fame": player.resources.fame,
+                    "active_ship_id": player.active_ship_id,
+                }));
+            }
+        }
+        EntityType::Sector => {
+            let all_sectors: Vec<_> = state.sectors.iter().collect();
+            total_count = all_sectors.len();
+            for sector in all_sectors.into_iter().skip(offset).take(limit) {
+                entities.push(serde_json::json!({
+                    "id": sector.sector.id,
+                    "name": &sector.sector.name,
+                    "danger_level": format!("{:?}", sector.sector.danger_level),
+                    "ship_count": sector.ship_ids.len(),
+                    "location_count": sector.sector.locations.len(),
+                }));
+            }
+        }
+        EntityType::Mission => {
+            let mut all_missions = Vec::new();
+            for sector in state.sectors.iter() {
+                for mission in sector.missions.iter() {
+                    all_missions.push((sector.sector.id, mission.clone()));
+                }
+            }
+            total_count = all_missions.len();
+            for (sector_id, mission) in all_missions.into_iter().skip(offset).take(limit) {
+                entities.push(serde_json::json!({
+                    "id": mission.id,
+                    "title": &mission.title,
+                    "sector_id": sector_id,
+                    "status": format!("{:?}", mission.status),
+                    "mission_type": format!("{:?}", mission.mission_type),
+                }));
+            }
+        }
+        EntityType::Station => {
+            let mut all_stations = Vec::new();
+            for sector in state.sectors.iter() {
+                for loc in &sector.sector.locations {
+                    if loc.location_type.is_station() {
+                        all_stations.push((sector.sector.id, loc.clone()));
+                    }
+                }
+            }
+            total_count = all_stations.len();
+            for (sector_id, station) in all_stations.into_iter().skip(offset).take(limit) {
+                entities.push(serde_json::json!({
+                    "id": station.id,
+                    "name": &station.name,
+                    "sector_id": sector_id,
+                    "services": station.services.iter().map(|s| format!("{:?}", s)).collect::<Vec<_>>(),
+                }));
+            }
+        }
+    }
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::StateSnapshot {
+        tick,
+        entity_type,
+        entities,
+        total_count,
+    })).await;
+}
+
+/// Create a watch expression
+async fn handle_create_watch(
+    tx: &mpsc::Sender<ServerMessage>,
+    expression: String,
+    name: Option<String>,
+) {
+    let watch = WatchDto {
+        id: Uuid::new_v4(),
+        expression,
+        name,
+        last_value: None,
+        history_length: 0,
+    };
+
+    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::WatchCreated { watch })).await;
 }

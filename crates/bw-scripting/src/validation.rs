@@ -205,6 +205,72 @@ pub static CTX_KEYS: &[&str] = &[
     "params",
 ];
 
+/// Known event types (from bw_core::events::GameEventType).
+pub static KNOWN_EVENT_TYPES: &[&str] = &[
+    // Player events
+    "PlayerJoined",
+    "PlayerLeft",
+    "PlayerDocked",
+    "PlayerUndocked",
+    // Ship events
+    "ShipSpawned",
+    "ShipDestroyed",
+    "ShipDamaged",
+    "ShipRepaired",
+    "ShipRefueled",
+    "ShipRearmed",
+    // Combat events
+    "CombatStarted",
+    "CombatEnded",
+    "AttackHit",
+    "AttackMissed",
+    // Mission events
+    "MissionSpawned",
+    "MissionAccepted",
+    "MissionCompleted",
+    "MissionFailed",
+    "MissionExpired",
+    "MissionChoiceMade",
+    // Reputation events
+    "ReputationGained",
+    "ReputationLost",
+    "FameGained",
+    "FameLost",
+    "PlayerDisgraced",
+    // Squadron events
+    "SquadronCreated",
+    "SquadronDissolved",
+    "SquadronMemberJoined",
+    "SquadronMemberLeft",
+    "SquadronWarDeclared",
+    "SquadronPeaceDeclared",
+    // Sector events
+    "SectorControlChanged",
+    "StationBuilt",
+    "StationDestroyed",
+    // Special events
+    "SeraIncursion",
+    "DroneSwarmDetected",
+    "AsteroidAlert",
+    "DistressSignalReceived",
+];
+
+/// Check if an event type is known.
+pub fn is_known_event_type(event_type: &str) -> bool {
+    KNOWN_EVENT_TYPES.contains(&event_type)
+}
+
+/// Information about an event subscription in a script.
+#[derive(Debug, Clone)]
+pub struct EventSubscriptionInfo {
+    /// The event type being subscribed to
+    pub event_type: String,
+    /// The handler function name
+    pub handler_fn: String,
+    /// Position in source
+    pub position: Option<Position>,
+}
+
 // ============================================================================
 // Dataflow Analysis Types
 // ============================================================================
@@ -262,6 +328,8 @@ pub struct AstAnalysis {
     pub fn_calls: Vec<(String, usize, Option<Position>)>,
     /// Index accesses: (target_var, key, position) for x["key"]
     pub index_accesses: Vec<(String, String, Option<Position>)>,
+    /// Dynamic key accesses: (target_var, position) for x[variable]
+    pub dynamic_key_accesses: Vec<(String, Option<Position>)>,
     /// Variable definitions: (name, position, is_nullable)
     pub var_defs: Vec<(String, Option<Position>, bool)>,
     /// Variable uses: (name, position)
@@ -270,6 +338,8 @@ pub struct AstAnalysis {
     pub returns: Vec<(Option<Position>, bool)>,
     /// Map literal keys: (keys, position)
     pub map_keys: Vec<(Vec<String>, Option<Position>)>,
+    /// Event subscriptions found in the script
+    pub event_subscriptions: Vec<EventSubscriptionInfo>,
 }
 
 /// Analyze an AST and collect information for validation using proper AST walking.
@@ -367,14 +437,32 @@ fn collect_from_expr(expr: &Expr, analysis: &mut AstAnalysis) {
             collect_fn_call(call_expr, Some(*pos), analysis);
         }
 
-        // Index access: x["key"]
+        // Index access: x["key"] or x[variable]
         Expr::Index(boxed, _flags, pos) => {
-            // Check if it's variable["string_literal"] pattern
-            if let (Expr::Variable(var_box, _, _), Expr::StringConstant(key, _)) =
-                (&boxed.lhs, &boxed.rhs)
-            {
+            // Check if it's variable[...] pattern
+            if let Expr::Variable(var_box, _, _) = &boxed.lhs {
                 let var_name = var_box.1.to_string();
-                analysis.index_accesses.push((var_name, key.to_string(), Some(*pos)));
+
+                // Check if index is a string literal
+                match &boxed.rhs {
+                    Expr::StringConstant(key, _) => {
+                        // Static key: x["key"]
+                        analysis.index_accesses.push((var_name, key.to_string(), Some(*pos)));
+                    }
+                    Expr::DynamicConstant(dyn_val, _) => {
+                        // Check if it's a constant string
+                        if let Some(s) = dyn_val.clone().try_cast::<rhai::ImmutableString>() {
+                            analysis.index_accesses.push((var_name, s.to_string(), Some(*pos)));
+                        } else {
+                            // Non-string constant (e.g., integer index)
+                            analysis.dynamic_key_accesses.push((var_name, Some(*pos)));
+                        }
+                    }
+                    _ => {
+                        // Dynamic key: x[variable] or x[expr]
+                        analysis.dynamic_key_accesses.push((var_name, Some(*pos)));
+                    }
+                }
             }
         }
 
@@ -394,7 +482,102 @@ fn collect_from_expr(expr: &Expr, analysis: &mut AstAnalysis) {
 fn collect_fn_call(call_expr: &FnCallExpr, pos: Option<Position>, analysis: &mut AstAnalysis) {
     let fn_name = call_expr.name.to_string();
     let arg_count = call_expr.args.len();
-    analysis.fn_calls.push((fn_name, arg_count, pos));
+    analysis.fn_calls.push((fn_name.clone(), arg_count, pos));
+
+    // Check for event subscription calls
+    match fn_name.as_str() {
+        "subscribe_event" | "subscribe_event_filtered" => {
+            // subscribe_event(event_type, handler_fn)
+            // subscribe_event_filtered(event_type, handler_fn, filter_type, filter_value)
+            if call_expr.args.len() >= 2 {
+                if let (Some(event_type), Some(handler_fn)) = (
+                    extract_string_literal(&call_expr.args[0]),
+                    extract_string_literal(&call_expr.args[1]),
+                ) {
+                    analysis.event_subscriptions.push(EventSubscriptionInfo {
+                        event_type,
+                        handler_fn,
+                        position: pos,
+                    });
+                }
+            }
+        }
+        "subscribe_events" => {
+            // subscribe_events(event_types_array, handler_fn)
+            // We can't easily extract array literals here, but we can get the handler
+            if call_expr.args.len() >= 2 {
+                if let Some(handler_fn) = extract_string_literal(&call_expr.args[1]) {
+                    // For array subscriptions, we mark event_type as "*" (multiple)
+                    // We'll extract individual types if the array is a literal
+                    if let Some(event_types) = extract_string_array(&call_expr.args[0]) {
+                        for event_type in event_types {
+                            analysis.event_subscriptions.push(EventSubscriptionInfo {
+                                event_type,
+                                handler_fn: handler_fn.clone(),
+                                position: pos,
+                            });
+                        }
+                    } else {
+                        // Dynamic array - can't validate event types, but can validate handler
+                        analysis.event_subscriptions.push(EventSubscriptionInfo {
+                            event_type: "*".to_string(),
+                            handler_fn,
+                            position: pos,
+                        });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract a string literal from an expression.
+fn extract_string_literal(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::StringConstant(s, _) => Some(s.to_string()),
+        Expr::DynamicConstant(boxed, _) => {
+            if let Some(s) = boxed.clone().try_cast::<rhai::ImmutableString>() {
+                Some(s.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract an array of strings from an array expression.
+fn extract_string_array(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Array(boxed, _) => {
+            let mut strings = Vec::new();
+            for item in boxed.iter() {
+                if let Some(s) = extract_string_literal(item) {
+                    strings.push(s);
+                } else {
+                    return None; // Has non-string elements
+                }
+            }
+            Some(strings)
+        }
+        Expr::DynamicConstant(boxed, _) => {
+            if let Some(arr) = boxed.read_lock::<rhai::Array>() {
+                let mut strings = Vec::new();
+                for item in arr.iter() {
+                    if let Some(s) = item.clone().try_cast::<rhai::ImmutableString>() {
+                        strings.push(s.to_string());
+                    } else {
+                        return None;
+                    }
+                }
+                Some(strings)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Check if an expression is a call to a nullable-returning function.
@@ -459,6 +642,27 @@ impl InferredType {
     }
 }
 
+/// Infer type from a Rhai Dynamic value (for optimized constants).
+fn infer_dynamic_type(value: &Dynamic) -> InferredType {
+    if value.is_unit() {
+        InferredType::Unit
+    } else if value.is_bool() {
+        InferredType::Bool
+    } else if value.is_int() {
+        InferredType::Int
+    } else if value.is_float() {
+        InferredType::Float
+    } else if value.is_string() {
+        InferredType::String
+    } else if value.is_array() {
+        InferredType::Array
+    } else if value.is_map() {
+        InferredType::Map
+    } else {
+        InferredType::Dynamic
+    }
+}
+
 /// State of a variable in a scope.
 #[derive(Debug, Clone)]
 pub struct VarState {
@@ -483,6 +687,17 @@ pub struct Scope {
     pub parent: Option<usize>,
 }
 
+/// A field in a return map literal with its inferred type.
+#[derive(Debug, Clone)]
+pub struct ReturnMapField {
+    /// Field name
+    pub name: String,
+    /// Inferred type of the value
+    pub value_type: InferredType,
+    /// Position in source
+    pub position: Option<Position>,
+}
+
 /// Result of analyzing a function.
 #[derive(Debug, Default)]
 pub struct FunctionAnalysis {
@@ -504,6 +719,8 @@ pub struct FunctionAnalysis {
     pub returns: Vec<Option<Position>>,
     /// Map keys found in return statements
     pub return_map_keys: Vec<Vec<String>>,
+    /// Map fields with types found in return statements (for W302 validation)
+    pub return_map_fields: Vec<Vec<ReturnMapField>>,
 }
 
 /// Analyzer for a single function with scope and type tracking.
@@ -796,6 +1013,10 @@ impl<'a> FunctionAnalyzer<'a> {
                     if let Some(keys) = self.extract_map_keys(expr) {
                         self.result.return_map_keys.push(keys);
                     }
+                    // Extract map fields with types for W302 validation
+                    if let Some(fields) = self.extract_map_fields(expr) {
+                        self.result.return_map_fields.push(fields);
+                    }
                 }
                 self.result.returns.push(Some(*pos));
                 true // Return always returns!
@@ -818,6 +1039,10 @@ impl<'a> FunctionAnalyzer<'a> {
                 // Check if this is an implicit return (last expression)
                 if let Some(keys) = self.extract_map_keys(expr.as_ref()) {
                     self.result.return_map_keys.push(keys);
+                }
+                // Extract map fields with types for W302 validation
+                if let Some(fields) = self.extract_map_fields(expr.as_ref()) {
+                    self.result.return_map_fields.push(fields);
                 }
                 false
             }
@@ -977,6 +1202,48 @@ impl<'a> FunctionAnalyzer<'a> {
             if !keys.is_empty() {
                 return Some(keys);
             }
+        }
+        None
+    }
+
+    /// Extract map fields with their inferred types from a map literal expression.
+    ///
+    /// Handles both `Expr::Map` (raw AST) and `Expr::DynamicConstant` (optimized form).
+    fn extract_map_fields(&self, expr: &Expr) -> Option<Vec<ReturnMapField>> {
+        match expr {
+            // Raw map literal (before optimization)
+            Expr::Map(boxed, pos) => {
+                let fields: Vec<ReturnMapField> = boxed.0.iter()
+                    .map(|(ident, value_expr)| {
+                        ReturnMapField {
+                            name: ident.name.to_string(),
+                            value_type: self.infer_expr_type(value_expr),
+                            position: Some(*pos),
+                        }
+                    })
+                    .collect();
+                if !fields.is_empty() {
+                    return Some(fields);
+                }
+            }
+            // Optimized constant - map has been evaluated into a Dynamic
+            Expr::DynamicConstant(boxed_dyn, pos) => {
+                if let Some(map) = boxed_dyn.read_lock::<rhai::Map>() {
+                    let fields: Vec<ReturnMapField> = map.iter()
+                        .map(|(key, value)| {
+                            ReturnMapField {
+                                name: key.to_string(),
+                                value_type: infer_dynamic_type(value),
+                                position: Some(*pos),
+                            }
+                        })
+                        .collect();
+                    if !fields.is_empty() {
+                        return Some(fields);
+                    }
+                }
+            }
+            _ => {}
         }
         None
     }
@@ -1783,6 +2050,13 @@ impl ActionScriptValidator {
                 self.check_handler_with_ast(&ast, "init", &mut errors, &mut warnings);
                 self.check_variable_flow(&content, "init", &mut errors, &mut warnings);
             }
+
+            // === Event Subscription Validation ===
+            let ast_analysis = analyze_ast(&ast, &content);
+            self.check_event_subscriptions(&ast_analysis, &functions, &mut errors, &mut warnings);
+
+            // === Dynamic Key Warnings ===
+            self.check_dynamic_keys(&ast_analysis, &mut warnings);
         }
 
         ActionScriptValidation {
@@ -1843,6 +2117,66 @@ impl ActionScriptValidator {
                     message: format!(
                         "Unknown context key '{}'. Valid keys: {:?}",
                         key, CTX_KEYS
+                    ),
+                    line: pos.and_then(|p| p.line()),
+                });
+            }
+        }
+    }
+
+    /// Validate event subscriptions have valid handlers and event types.
+    fn check_event_subscriptions(
+        &self,
+        analysis: &AstAnalysis,
+        functions: &[String],
+        errors: &mut Vec<ActionValidationError>,
+        warnings: &mut Vec<ActionValidationWarning>,
+    ) {
+        for sub in &analysis.event_subscriptions {
+            // E800: Handler function doesn't exist
+            if !functions.contains(&sub.handler_fn) {
+                errors.push(ActionValidationError {
+                    code: "E800",
+                    message: format!(
+                        "Event subscription references handler '{}()' which doesn't exist",
+                        sub.handler_fn
+                    ),
+                    line: sub.position.and_then(|p| p.line()),
+                });
+            }
+
+            // W800: Unknown event type
+            // Skip if event_type is "*" (dynamic array)
+            if sub.event_type != "*" && !is_known_event_type(&sub.event_type) {
+                warnings.push(ActionValidationWarning {
+                    code: "W800",
+                    message: format!(
+                        "Unknown event type '{}'. Check spelling or verify it's a custom event",
+                        sub.event_type
+                    ),
+                    line: sub.position.and_then(|p| p.line()),
+                });
+            }
+        }
+    }
+
+    /// Warn about dynamic key accesses that cannot be validated at compile time.
+    fn check_dynamic_keys(
+        &self,
+        analysis: &AstAnalysis,
+        warnings: &mut Vec<ActionValidationWarning>,
+    ) {
+        // Only warn for ctx and params - dynamic keys on other maps might be intentional
+        let important_maps = ["ctx", "params"];
+
+        for (var_name, pos) in &analysis.dynamic_key_accesses {
+            if important_maps.contains(&var_name.as_str()) {
+                warnings.push(ActionValidationWarning {
+                    code: "W960",
+                    message: format!(
+                        "Dynamic key access on '{}' cannot be validated at compile time. \
+                         Consider using a literal string key if possible",
+                        var_name
                     ),
                     line: pos.and_then(|p| p.line()),
                 });
@@ -1958,6 +2292,32 @@ impl ActionScriptValidator {
                     ),
                     line: None,
                 });
+            }
+        }
+
+        // W302: Check return field types
+        for fields in &analysis.return_map_fields {
+            for field in fields {
+                if field.name == "success" && field.value_type != InferredType::Bool {
+                    warnings.push(ActionValidationWarning {
+                        code: "W302",
+                        message: format!(
+                            "In '{}()': Return field 'success' should be Bool, got {:?}",
+                            handler_name, field.value_type
+                        ),
+                        line: field.position.and_then(|p| p.line()),
+                    });
+                }
+                if field.name == "error" && field.value_type != InferredType::String && field.value_type != InferredType::Dynamic {
+                    warnings.push(ActionValidationWarning {
+                        code: "W302",
+                        message: format!(
+                            "In '{}()': Return field 'error' should be String, got {:?}",
+                            handler_name, field.value_type
+                        ),
+                        line: field.position.and_then(|p| p.line()),
+                    });
+                }
             }
         }
 
@@ -4053,6 +4413,65 @@ fn handle_test(ctx, params) {
         );
     }
 
+    #[test]
+    fn test_return_value_type_checking_w302() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_w302.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test_action", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    // Wrong type for success - should be Bool, not String
+    #{ success: "yes", error: "oops" }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have W302 warning for wrong type on success field
+        assert!(
+            result.warnings.iter().any(|w| w.code == "W302" && w.message.contains("success")),
+            "Should warn about wrong type for 'success' field. Warnings: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_return_value_type_correct_no_w302() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_w302_correct.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test_action", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    // Correct types
+    #{ success: true, error: "none" }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have W302 warning
+        let w302_warnings: Vec<_> = result.warnings.iter()
+            .filter(|w| w.code == "W302")
+            .collect();
+        assert!(
+            w302_warnings.is_empty(),
+            "Should not have W302 warnings for correct types: {:?}",
+            w302_warnings
+        );
+    }
+
     // ========================================================================
     // Definition Script Validator Tests
     // ========================================================================
@@ -4317,5 +4736,261 @@ fn all_ships() {
         if report.total_errors > 0 {
             eprintln!("Note: {} errors found - review for accuracy", report.total_errors);
         }
+    }
+
+    // ========================================================================
+    // Event Subscription Validation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_event_subscription_missing_handler() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_event_handler.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    subscribe_event("ShipDestroyed", "on_ship_destroyed");  // Handler doesn't exist!
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have E800 error for missing handler
+        assert!(
+            result.errors.iter().any(|e| e.code == "E800" && e.message.contains("on_ship_destroyed")),
+            "Should error about missing handler 'on_ship_destroyed'. Errors: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_event_subscription_unknown_event_type() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_event_type.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    subscribe_event("InvalidEventType", "on_event");
+}
+
+fn on_event(ctx, event) {
+    // Handler exists
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have W800 warning for unknown event type
+        assert!(
+            result.warnings.iter().any(|w| w.code == "W800" && w.message.contains("InvalidEventType")),
+            "Should warn about unknown event type 'InvalidEventType'. Warnings: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_event_subscription_valid() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_event_valid.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    subscribe_event("ShipDestroyed", "on_ship_destroyed");
+    subscribe_event("CombatStarted", "on_combat");
+}
+
+fn on_ship_destroyed(ctx, event) {
+    log_info("Ship destroyed");
+}
+
+fn on_combat(ctx, event) {
+    log_info("Combat started");
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have E800 errors (handlers exist)
+        let e800_errors: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == "E800")
+            .collect();
+        assert!(
+            e800_errors.is_empty(),
+            "Should not have E800 errors for valid handlers. Errors: {:?}",
+            e800_errors
+        );
+
+        // Should NOT have W800 warnings (event types are known)
+        let w800_warnings: Vec<_> = result.warnings.iter()
+            .filter(|w| w.code == "W800")
+            .collect();
+        assert!(
+            w800_warnings.is_empty(),
+            "Should not have W800 warnings for valid event types. Warnings: {:?}",
+            w800_warnings
+        );
+    }
+
+    #[test]
+    fn test_event_subscription_filtered() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_event_filtered.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    subscribe_event_filtered("ShipDamaged", "on_ship_hit", "actor", "player_ship");
+}
+
+fn on_ship_hit(ctx, event) {
+    log_info("Ship was hit");
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have E800 errors
+        let e800_errors: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == "E800")
+            .collect();
+        assert!(
+            e800_errors.is_empty(),
+            "Should not have E800 errors for valid filtered subscription. Errors: {:?}",
+            e800_errors
+        );
+    }
+
+    // ========================================================================
+    // Dynamic Key Warning Tests
+    // ========================================================================
+
+    #[test]
+    fn test_dynamic_key_warning_ctx() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_dynamic_ctx.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let key = "player_id";
+    let value = ctx[key];  // Dynamic key - can't validate!
+    #{ success: true, data: value }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have W960 warning for dynamic ctx key
+        assert!(
+            result.warnings.iter().any(|w| w.code == "W960" && w.message.contains("ctx")),
+            "Should warn about dynamic key access on 'ctx'. Warnings: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_dynamic_key_warning_params() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_dynamic_params.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let key_name = "target";
+    let target = params[key_name];  // Dynamic key!
+    #{ success: true, data: target }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have W960 warning for dynamic params key
+        assert!(
+            result.warnings.iter().any(|w| w.code == "W960" && w.message.contains("params")),
+            "Should warn about dynamic key access on 'params'. Warnings: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_static_key_no_warning() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_static_keys.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let player = ctx["player_id"];  // Static key - fine!
+    let ship = ctx["ship_id"];      // Static key - fine!
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have W960 warnings
+        let w960_warnings: Vec<_> = result.warnings.iter()
+            .filter(|w| w.code == "W960")
+            .collect();
+        assert!(
+            w960_warnings.is_empty(),
+            "Should not have W960 warnings for static keys. Warnings: {:?}",
+            w960_warnings
+        );
+    }
+
+    #[test]
+    fn test_dynamic_key_other_map_ok() {
+        let validator = ActionScriptValidator::new();
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_dynamic_other.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let data = #{ foo: 1, bar: 2 };
+    let key = "foo";
+    let value = data[key];  // Dynamic key on custom map - intentional, no warning
+    #{ success: true, data: value }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have W960 warnings for custom maps
+        let w960_warnings: Vec<_> = result.warnings.iter()
+            .filter(|w| w.code == "W960")
+            .collect();
+        assert!(
+            w960_warnings.is_empty(),
+            "Should not warn about dynamic keys on custom maps. Warnings: {:?}",
+            w960_warnings
+        );
     }
 }

@@ -4,7 +4,11 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use bw_core::models::{Player, SquadronRank};
-use bw_scripting::{BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher};
+use bw_scripting::{
+    BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher,
+    ActionRegistry, ActionDispatcher,
+    debug::DebugController,
+};
 use bw_server::simulation::{
     create_squadron, invite_to_squadron, accept_squadron_invite, leave_squadron, process_squadron_action,
     can_engage_pvp, get_pvp_engagement_type, PvpEngagementType,
@@ -41,35 +45,52 @@ fn add_member_to_squadron(state: &GameState, inviter_id: Uuid, invitee_id: Uuid)
 async fn setup_test_state() -> GameState {
     // Create in-memory database for tests
     let db = bw_server::Database::new_in_memory().await.unwrap();
+    let persist = db.spawn_persistence();
     let db = std::sync::Arc::new(db);
     let scripts = std::sync::Arc::new(bw_scripting::ScriptEngine::new("../../scripts"));
     let (broadcaster, _) = tokio::sync::broadcast::channel(1000);
 
     // Create scripting systems
     let event_registry = Arc::new(EventRegistry::new());
+    let action_registry = Arc::new(ActionRegistry::new());
+    let debug_controller = Arc::new(DebugController::new());
+    let mut behavior_manager = BehaviorManager::new(scripts.clone());
+    behavior_manager.set_debug_controller(debug_controller.clone());
+    let coroutine_scheduler = CoroutineScheduler::new(scripts.clone());
     let event_dispatcher = EventDispatcher::new(event_registry.clone(), scripts.clone());
+    let action_dispatcher = ActionDispatcher::new(action_registry.clone(), scripts.clone());
+
+    let mut playtest_manager = bw_server::playtest::PlaytestManager::new(10);
+    playtest_manager.set_debug_controller(debug_controller.clone());
 
     GameState {
         db,
+        persist,
         scripts: scripts.clone(),
         sectors: dashmap::DashMap::new(),
-        player_data: dashmap::DashMap::new(),
+        player_data: bw_server::persistence::TrackedDashMap::new(),
         players: dashmap::DashMap::new(),
-        ships: dashmap::DashMap::new(),
+        ships: bw_server::persistence::TrackedDashMap::new(),
         factions: dashmap::DashMap::new(),
-        squadrons: dashmap::DashMap::new(),
+        faction_tags: dashmap::DashMap::new(),
+        squadrons: bw_server::persistence::TrackedDashMap::new(),
         pending_squadron_invites: dashmap::DashMap::new(),
         pending_alliances: dashmap::DashMap::new(),
         contested_sectors: dashmap::DashMap::new(),
         broadcaster,
         tick: std::sync::atomic::AtomicU64::new(0),
         // Scripting systems
-        behavior_manager: parking_lot::RwLock::new(BehaviorManager::new(scripts.clone())),
-        coroutine_scheduler: parking_lot::RwLock::new(CoroutineScheduler::new(scripts.clone())),
+        behavior_manager: parking_lot::RwLock::new(behavior_manager),
+        coroutine_scheduler: parking_lot::RwLock::new(coroutine_scheduler),
         event_registry,
         event_dispatcher: parking_lot::RwLock::new(event_dispatcher),
+        action_registry,
+        action_dispatcher: parking_lot::RwLock::new(action_dispatcher),
         state_accessor: parking_lot::RwLock::new(None),
         script_logs: parking_lot::RwLock::new(ScriptLogBuffer::new(100)),
+        metrics: bw_server::simulation::metrics::MetricsStore::new(),
+        playtest_manager,
+        debug_controller,
     }
 }
 

@@ -582,7 +582,7 @@ async fn test_promotion_skips_ships_that_changed_sector() {
     let faction_tags = ts.state.get_faction_tags_arc();
 
     let builder = PlaytestBuilder::new(ts.player_id, "Sector Change Test".into(), ts.state.get_tick(), config.clone());
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, ts.state.scripts.clone(), ts.state.debug_controller.clone());
     ts.state.fork_to_playtest(&instance, &config);
 
     // Record original position
@@ -626,7 +626,7 @@ async fn test_promotion_skips_nonexistent_sector() {
     let faction_tags = ts.state.get_faction_tags_arc();
 
     let builder = PlaytestBuilder::new(ts.player_id, "Missing Sector Test".into(), ts.state.get_tick(), config.clone());
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, ts.state.scripts.clone(), ts.state.debug_controller.clone());
     ts.state.fork_to_playtest(&instance, &config);
 
     // Create ship in playtest targeting nonexistent sector

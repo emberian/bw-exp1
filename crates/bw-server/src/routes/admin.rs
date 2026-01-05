@@ -72,6 +72,10 @@ async fn reload_all(
         Ok(()) => {
             let count = state.scripts.loaded_scripts().len();
             state.log_script_info(format!("All resources reloaded by {} (HTTP)", admin.username));
+
+            // Reinitialize all action scripts (clears old handlers and re-runs init())
+            state.reinitialize_all_action_scripts();
+
             Json(ActionResponse {
                 success: true,
                 message: Some(format!("Reloaded config and {} scripts", count)),
@@ -190,6 +194,10 @@ async fn reload_all_scripts(
         Ok(()) => {
             let count = state.scripts.loaded_scripts().len();
             state.log_script_info(format!("All scripts reloaded by {}", admin.username));
+
+            // Reinitialize all action scripts (clears old handlers and re-runs init())
+            state.reinitialize_all_action_scripts();
+
             Json(ReloadResponse {
                 success: true,
                 message: format!("Reloaded {} scripts", count),
@@ -214,6 +222,10 @@ async fn reload_script(
     match state.scripts.load_script(&path) {
         Ok(()) => {
             state.log_script_info(format!("Script {} reloaded by {}", path, admin.username));
+
+            // Reinitialize if this is an action script (calls init() to re-register handlers)
+            state.reinitialize_action_script(&path);
+
             Json(ReloadResponse {
                 success: true,
                 message: format!("Reloaded: {}", path),
@@ -716,6 +728,9 @@ pub struct ScriptingStats {
     event_subscriptions: usize,
     log_entries: usize,
     log_errors: usize,
+    log_warnings: usize,
+    log_capacity: usize,
+    log_dropped: u64,
 }
 
 async fn get_stats(
@@ -726,16 +741,18 @@ async fn get_stats(
     let active_behaviors = state.behavior_manager.read().active_count();
     let active_coroutines = state.coroutine_scheduler.read().active_count();
     let event_subscriptions = state.event_registry.count();
-    let log_entries = state.script_logs.read().len();
-    let log_errors = state.script_logs.read().error_count();
+    let log_stats = state.script_logs.read().stats();
 
     Json(ScriptingStats {
         loaded_scripts,
         active_behaviors,
         active_coroutines,
         event_subscriptions,
-        log_entries,
-        log_errors,
+        log_entries: log_stats.len,
+        log_errors: log_stats.errors,
+        log_warnings: log_stats.warnings,
+        log_capacity: log_stats.capacity,
+        log_dropped: log_stats.dropped,
     })
 }
 

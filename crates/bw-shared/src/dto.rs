@@ -417,3 +417,249 @@ pub struct DebugSessionDto {
     pub is_paused: bool,
     pub breakpoint_count: usize,
 }
+
+// =============================================================================
+// Schema Introspection DTOs
+// =============================================================================
+
+/// Summary of an archetype schema for listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchetypeSchemaDto {
+    /// Type identifier (e.g., "ship", "weapon", "effect")
+    pub archetype_type: String,
+    /// Rust struct name (e.g., "ShipArchetype")
+    pub name: String,
+    /// Total number of fields
+    pub field_count: usize,
+    /// Number of required fields
+    pub required_count: usize,
+}
+
+/// Detailed field information from an archetype schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldSchemaDto {
+    /// Field name
+    pub name: String,
+    /// Rhai/script type (e.g., "String", "Number", "Bool", "Array", "Map")
+    pub field_type: String,
+    /// Rust type (e.g., "f32", "Vec<String>", "Option<Uuid>")
+    pub rust_type: String,
+    /// Whether this field is required
+    pub required: bool,
+    /// Optional description/documentation
+    pub description: Option<String>,
+}
+
+/// Action script parameter schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionSchemaDto {
+    /// Description of the action
+    pub description: String,
+    /// Parameter definitions
+    pub params: std::collections::HashMap<String, ParamSchemaDto>,
+}
+
+/// Parameter schema for action scripts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamSchemaDto {
+    /// Parameter type (e.g., "uuid", "string", "int", "float", "bool", "array")
+    pub param_type: String,
+    /// Whether this parameter is required
+    pub required: bool,
+}
+
+// =============================================================================
+// Validation DTOs
+// =============================================================================
+
+/// A single validation issue (error, warning, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationIssueDto {
+    /// Severity level
+    pub severity: ValidationSeverity,
+    /// Human-readable message
+    pub message: String,
+    /// Line number (1-indexed)
+    pub line: usize,
+    /// Column number (1-indexed)
+    pub column: usize,
+    /// End line (for multi-line issues)
+    pub end_line: Option<usize>,
+    /// End column
+    pub end_column: Option<usize>,
+    /// Error code for documentation lookup
+    pub code: Option<String>,
+    /// Suggested fix
+    pub suggestion: Option<String>,
+}
+
+/// Validation severity levels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ValidationSeverity {
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+// =============================================================================
+// State Introspection DTOs
+// =============================================================================
+
+/// A single state change event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateChangeDto {
+    /// Entity that changed
+    pub entity_id: Uuid,
+    /// Type of change
+    pub change_type: StateChangeType,
+    /// Field path that changed (e.g., "hull_integrity", "cargo.items[0]")
+    pub field_path: Option<String>,
+    /// Previous value (if applicable)
+    pub old_value: Option<serde_json::Value>,
+    /// New value (if applicable)
+    pub new_value: Option<serde_json::Value>,
+}
+
+/// Types of state changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StateChangeType {
+    Created,
+    Updated,
+    Deleted,
+}
+
+/// A watch expression definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchDto {
+    /// Unique watch ID
+    pub id: Uuid,
+    /// Expression to evaluate (e.g., "ships[uuid].hull")
+    pub expression: String,
+    /// User-friendly name
+    pub name: Option<String>,
+    /// Last evaluated value
+    pub last_value: Option<serde_json::Value>,
+    /// Number of history entries stored
+    pub history_length: usize,
+}
+
+/// A single watch value update.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchValueDto {
+    /// Watch ID
+    pub watch_id: Uuid,
+    /// Tick when evaluated
+    pub tick: u64,
+    /// Evaluated value
+    pub value: serde_json::Value,
+    /// Error message if evaluation failed
+    pub error: Option<String>,
+}
+
+// =============================================================================
+// Export DTOs
+// =============================================================================
+
+/// Configuration for creating an export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportConfigDto {
+    /// Sectors to include (empty = all)
+    #[serde(default)]
+    pub sectors: Vec<Uuid>,
+    /// Include player entities
+    #[serde(default = "default_true")]
+    pub include_players: bool,
+    /// Include NPC ships
+    #[serde(default = "default_true")]
+    pub include_npcs: bool,
+    /// Include missions
+    #[serde(default = "default_true")]
+    pub include_missions: bool,
+    /// Include script files
+    #[serde(default = "default_true")]
+    pub include_scripts: bool,
+    /// Include archetype definitions
+    #[serde(default = "default_true")]
+    pub include_definitions: bool,
+    /// Include SQLite state snapshot
+    #[serde(default)]
+    pub include_sqlite: bool,
+    /// Export format
+    #[serde(default)]
+    pub format: ExportFormat,
+}
+
+impl Default for ExportConfigDto {
+    fn default() -> Self {
+        Self {
+            sectors: vec![],
+            include_players: true,
+            include_npcs: true,
+            include_missions: true,
+            include_scripts: true,
+            include_definitions: true,
+            include_sqlite: false,
+            format: ExportFormat::Cbor,
+        }
+    }
+}
+
+/// Export file format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ExportFormat {
+    /// CBOR serialized entities
+    #[default]
+    Cbor,
+    /// SQLite database snapshot
+    Sqlite,
+    /// Both CBOR and SQLite
+    Both,
+}
+
+/// Summary of an export for listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportSummaryDto {
+    /// Export ID
+    pub id: Uuid,
+    /// User-provided name
+    pub name: String,
+    /// Creation timestamp (Unix epoch ms)
+    pub created_at: u64,
+    /// File size in bytes
+    pub size_bytes: u64,
+    /// Export format used
+    pub format: ExportFormat,
+    /// Current status
+    pub status: ExportStatus,
+    /// Source (Live or Playtest ID)
+    pub source: ExportSourceDto,
+}
+
+/// Export status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+/// Source of the export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExportSourceDto {
+    /// Exported from live server
+    Live,
+    /// Exported from a playtest
+    Playtest(Uuid),
+}
+
+/// Export progress update.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportProgressDto {
+    /// Export ID
+    pub export_id: Uuid,
+    /// Current phase description
+    pub phase: String,
+    /// Progress percentage (0-100)
+    pub percent: u8,
+}

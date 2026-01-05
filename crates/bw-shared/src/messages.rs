@@ -538,6 +538,76 @@ pub enum AdminClientMessage {
 
     /// Get the current call stack
     GetCallStack,
+
+    // === Schema Introspection ===
+
+    /// Get all archetype schemas (summary)
+    GetArchetypeSchemas,
+
+    /// Get detailed schema for a specific archetype type
+    GetArchetypeSchema { archetype_type: String },
+
+    /// Get all action parameter schemas
+    GetActionSchemas,
+
+    // === Script Validation ===
+
+    /// Validate a script without saving
+    ValidateScript { path: String, content: String },
+
+    /// Validate an archetype definition
+    ValidateDefinition {
+        definition_type: String,
+        content: String,
+    },
+
+    // === State Introspection ===
+
+    /// Subscribe to state updates for specific entity types
+    SubscribeStateUpdates {
+        entity_types: Vec<EntityType>,
+        include_details: bool,
+    },
+
+    /// Unsubscribe from state updates
+    UnsubscribeStateUpdates,
+
+    /// Get a snapshot of state for entity type
+    GetStateSnapshot {
+        target: crate::dto::DebugTargetDto,
+        entity_type: EntityType,
+        limit: usize,
+        offset: usize,
+    },
+
+    /// Create a watch expression
+    CreateWatch { expression: String, name: Option<String> },
+
+    /// Remove a watch expression
+    RemoveWatch { watch_id: Uuid },
+
+    /// List all active watches
+    ListWatches,
+
+    // === Export ===
+
+    /// Create a new export
+    CreateExport {
+        name: String,
+        config: crate::dto::ExportConfigDto,
+    },
+
+    /// Get export status
+    GetExportStatus { export_id: Uuid },
+
+    /// List all exports
+    ListExports,
+
+    /// Delete an export
+    DeleteExport { export_id: Uuid },
+
+    /// Request export download URL
+    DownloadExport { export_id: Uuid },
 }
 
 /// Admin messages sent from server to client.
@@ -760,6 +830,141 @@ pub enum AdminServerMessage {
 
     /// Debug error
     DebugError { message: String },
+
+    // === Schema Introspection Responses ===
+
+    /// List of archetype schemas
+    ArchetypeSchemas {
+        schemas: Vec<crate::dto::ArchetypeSchemaDto>,
+    },
+
+    /// Detailed archetype schema
+    ArchetypeSchemaDetail {
+        archetype_type: String,
+        name: String,
+        fields: Vec<crate::dto::FieldSchemaDto>,
+    },
+
+    /// Action parameter schemas
+    ActionSchemas {
+        actions: std::collections::HashMap<String, crate::dto::ActionSchemaDto>,
+    },
+
+    // === Validation Responses ===
+
+    /// Script validation result
+    ValidationResult {
+        path: String,
+        errors: Vec<crate::dto::ValidationIssueDto>,
+        warnings: Vec<crate::dto::ValidationIssueDto>,
+        is_valid: bool,
+    },
+
+    /// Definition validation result
+    DefinitionValidationResult {
+        definition_type: String,
+        errors: Vec<crate::dto::ValidationIssueDto>,
+        warnings: Vec<crate::dto::ValidationIssueDto>,
+        is_valid: bool,
+    },
+
+    // === State Introspection Responses ===
+
+    /// Subscribed to state updates
+    StateSubscribed {
+        entity_types: Vec<EntityType>,
+    },
+
+    /// Unsubscribed from state updates
+    StateUnsubscribed,
+
+    /// Real-time state update
+    StateUpdate {
+        tick: u64,
+        entity_type: EntityType,
+        changes: Vec<crate::dto::StateChangeDto>,
+    },
+
+    /// State snapshot response
+    StateSnapshot {
+        tick: u64,
+        entity_type: EntityType,
+        entities: Vec<serde_json::Value>,
+        total_count: usize,
+    },
+
+    /// Watch created
+    WatchCreated {
+        watch: crate::dto::WatchDto,
+    },
+
+    /// Watch removed
+    WatchRemoved {
+        watch_id: Uuid,
+    },
+
+    /// List of watches
+    WatchList {
+        watches: Vec<crate::dto::WatchDto>,
+    },
+
+    /// Watch value update
+    WatchValue {
+        watch_id: Uuid,
+        tick: u64,
+        value: serde_json::Value,
+        error: Option<String>,
+    },
+
+    // === Export Responses ===
+
+    /// Export created and started
+    ExportCreated {
+        export_id: Uuid,
+        name: String,
+    },
+
+    /// Export progress update
+    ExportProgress {
+        export_id: Uuid,
+        phase: String,
+        percent: u8,
+    },
+
+    /// Export completed
+    ExportCompleted {
+        export_id: Uuid,
+        size_bytes: u64,
+        download_url: String,
+    },
+
+    /// Export failed
+    ExportFailed {
+        export_id: Uuid,
+        error: String,
+    },
+
+    /// Export status response
+    ExportStatus {
+        export: crate::dto::ExportSummaryDto,
+    },
+
+    /// List of exports
+    ExportList {
+        exports: Vec<crate::dto::ExportSummaryDto>,
+    },
+
+    /// Export deleted
+    ExportDeleted {
+        export_id: Uuid,
+    },
+
+    /// Export download URL
+    ExportDownloadUrl {
+        export_id: Uuid,
+        url: String,
+        expires_at: u64,
+    },
 }
 
 /// Entity types for admin queries.

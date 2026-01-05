@@ -186,6 +186,15 @@ impl ActionRegistry {
             .filter_map(|a| handlers.get(a).cloned())
             .collect()
     }
+
+    /// Clear all registered handlers.
+    ///
+    /// Used before reinitializing all action scripts.
+    pub fn clear(&self) {
+        self.handlers.write().clear();
+        self.by_script.write().clear();
+        tracing::debug!("Action registry cleared");
+    }
 }
 
 impl Default for ActionRegistry {

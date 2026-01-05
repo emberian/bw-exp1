@@ -32,6 +32,9 @@ pub fn reload_scripts(state: &Arc<GameState>) {
             let count = state.scripts.loaded_scripts().len();
             tracing::info!("Reloaded {} scripts", count);
             state.log_script_info(format!("Reloaded {} scripts", count));
+
+            // Reinitialize all action scripts (clears old handlers and re-runs init())
+            state.reinitialize_all_action_scripts();
         }
         Err(e) => {
             tracing::error!("Failed to reload scripts: {}", e);

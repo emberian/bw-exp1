@@ -7,6 +7,10 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+/// Default capacity for the script log buffer.
+/// Increase if you need to retain more history for debugging.
+pub const DEFAULT_SCRIPT_LOG_CAPACITY: usize = 1000;
+
 use bw_core::models::*;
 use bw_scripting::{
     ScriptEngine, BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher,
@@ -193,7 +197,7 @@ impl GameState {
             action_registry,
             action_dispatcher: RwLock::new(action_dispatcher),
             state_accessor: RwLock::new(None),
-            script_logs: RwLock::new(ScriptLogBuffer::new(1000)),
+            script_logs: RwLock::new(ScriptLogBuffer::new(DEFAULT_SCRIPT_LOG_CAPACITY)),
             metrics: MetricsStore::new(),
             playtest_manager,
             debug_controller,
@@ -343,6 +347,77 @@ impl GameState {
             actions = registered,
             "Action scripts initialized"
         );
+    }
+
+    /// Reinitialize a single action script after reload.
+    ///
+    /// This unregisters old handlers from the script and calls init() again.
+    /// Should be called after a script file is reloaded.
+    pub fn reinitialize_action_script(self: &Arc<Self>, script_path: &str) {
+        // Only process action scripts
+        if !script_path.starts_with("actions/") {
+            return;
+        }
+
+        use bw_scripting::{ScriptExecutionContext, ExecutionGuard};
+
+        let accessor = match self.state_accessor.read().clone() {
+            Some(a) => a,
+            None => {
+                tracing::warn!("Cannot reinitialize action script: state accessor not set");
+                return;
+            }
+        };
+
+        // Unregister old handlers from this script
+        self.action_registry.unregister_for_script(script_path);
+
+        // Set up execution context
+        let ctx = ScriptExecutionContext::new(accessor)
+            .with_script_path(script_path)
+            .with_action_registry(self.action_registry.clone());
+
+        let _guard = match ExecutionGuard::enter(ctx) {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::warn!(
+                    script = %script_path,
+                    error = %e,
+                    "Failed to enter execution context for action script reinit"
+                );
+                return;
+            }
+        };
+
+        // Call init() if it exists
+        match self.scripts.call_function::<()>(script_path, "init", ()) {
+            Ok(()) => {
+                tracing::debug!(script = %script_path, "Action script reinitialized");
+            }
+            Err(e) => {
+                let err_str = format!("{}", e);
+                if !err_str.contains("not found") && !err_str.contains("Function not found") {
+                    tracing::warn!(
+                        script = %script_path,
+                        error = %e,
+                        "Failed to reinitialize action script"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Reinitialize all action scripts after a full reload.
+    ///
+    /// This clears all action registrations and re-runs init() on all action scripts.
+    pub fn reinitialize_all_action_scripts(self: &Arc<Self>) {
+        // Clear all existing action handlers
+        let old_count = self.action_registry.count();
+        self.action_registry.clear();
+        tracing::debug!(count = old_count, "Cleared action handlers for full reload");
+
+        // Re-initialize all action scripts
+        self.initialize_action_scripts();
     }
 
     /// Load all factions from database into memory.

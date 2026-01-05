@@ -15,6 +15,7 @@ bw-scripting = { path = "../bw-scripting" }
 
 # Async
 tokio.workspace = true
+tokio-util.workspace = true
 futures.workspace = true
 
 # Web

@@ -4,7 +4,8 @@ use leptos::prelude::*;
 
 use crate::api::{init_admin_ws, shutdown_admin_ws};
 use crate::components::{
-    ConfigEditor, DebugPanel, EntityBrowser, ScriptEditor, StagedPreview, TabBar, Tab,
+    ConfigEditor, DebugPanel, EntityBrowser, ExportPanel, SchemaBrowser,
+    ScriptEditor, StagedPreview, StateInspector, Tab, TabBar,
 };
 use crate::state::{DebugPanelState, GMEditorState, StagedChangesState};
 
@@ -79,9 +80,12 @@ pub fn GMEditorApp(
                 <div class="flex-1 overflow-auto">
                     {move || match active_tab.get() {
                         Tab::Scripts => view! { <ScriptEditor /> }.into_any(),
+                        Tab::Definitions => view! { <SchemaBrowser /> }.into_any(),
                         Tab::Config => view! { <ConfigEditor /> }.into_any(),
                         Tab::Entities => view! { <EntityBrowser /> }.into_any(),
+                        Tab::State => view! { <StateInspector /> }.into_any(),
                         Tab::Debug => view! { <DebugPanel /> }.into_any(),
+                        Tab::Export => view! { <ExportPanel /> }.into_any(),
                         Tab::Staged => view! { <StagedPreview /> }.into_any(),
                     }}
                 </div>

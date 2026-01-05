@@ -37,6 +37,21 @@ pub enum LogLevel {
     Error,
 }
 
+/// Statistics about the log buffer state.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct LogBufferStats {
+    /// Current number of entries in the buffer
+    pub len: usize,
+    /// Maximum capacity of the buffer
+    pub capacity: usize,
+    /// Number of entries that have been dropped due to overflow
+    pub dropped: u64,
+    /// Number of error-level entries currently in buffer
+    pub errors: usize,
+    /// Number of warning-level entries currently in buffer
+    pub warnings: usize,
+}
+
 /// Ring buffer for script logs.
 ///
 /// Keeps the most recent `max_entries` log entries, automatically
@@ -44,6 +59,8 @@ pub enum LogLevel {
 pub struct ScriptLogBuffer {
     entries: VecDeque<ScriptLogEntry>,
     max_entries: usize,
+    /// Count of entries dropped due to buffer overflow
+    dropped_count: u64,
 }
 
 impl ScriptLogBuffer {
@@ -52,6 +69,7 @@ impl ScriptLogBuffer {
         Self {
             entries: VecDeque::with_capacity(max_entries),
             max_entries,
+            dropped_count: 0,
         }
     }
 
@@ -91,6 +109,7 @@ impl ScriptLogBuffer {
     fn push(&mut self, entry: ScriptLogEntry) {
         if self.entries.len() >= self.max_entries {
             self.entries.pop_front();
+            self.dropped_count += 1;
         }
         self.entries.push_back(entry);
     }
@@ -139,6 +158,27 @@ impl ScriptLogBuffer {
     pub fn warning_count(&self) -> usize {
         self.entries.iter().filter(|e| e.level == LogLevel::Warning).count()
     }
+
+    /// Get count of entries dropped due to overflow.
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped_count
+    }
+
+    /// Get the maximum capacity of the buffer.
+    pub fn capacity(&self) -> usize {
+        self.max_entries
+    }
+
+    /// Get all statistics in a single call (avoids multiple lock acquisitions).
+    pub fn stats(&self) -> LogBufferStats {
+        LogBufferStats {
+            len: self.entries.len(),
+            capacity: self.max_entries,
+            dropped: self.dropped_count,
+            errors: self.entries.iter().filter(|e| e.level == LogLevel::Error).count(),
+            warnings: self.entries.iter().filter(|e| e.level == LogLevel::Warning).count(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -153,13 +193,36 @@ mod tests {
         buffer.log(LogLevel::Info, "msg2".into());
         buffer.log(LogLevel::Info, "msg3".into());
         assert_eq!(buffer.len(), 3);
+        assert_eq!(buffer.dropped_count(), 0);
 
         // Adding 4th should evict first
         buffer.log(LogLevel::Info, "msg4".into());
         assert_eq!(buffer.len(), 3);
+        assert_eq!(buffer.dropped_count(), 1);
+
+        // Adding 5th should evict second
+        buffer.log(LogLevel::Info, "msg5".into());
+        assert_eq!(buffer.dropped_count(), 2);
 
         let entries: Vec<_> = buffer.entries().map(|e| e.message.as_str()).collect();
-        assert_eq!(entries, vec!["msg2", "msg3", "msg4"]);
+        assert_eq!(entries, vec!["msg3", "msg4", "msg5"]);
+    }
+
+    #[test]
+    fn test_stats() {
+        let mut buffer = ScriptLogBuffer::new(5);
+
+        buffer.log(LogLevel::Info, "info".into());
+        buffer.log(LogLevel::Warning, "warn1".into());
+        buffer.log(LogLevel::Warning, "warn2".into());
+        buffer.log(LogLevel::Error, "err".into());
+
+        let stats = buffer.stats();
+        assert_eq!(stats.len, 4);
+        assert_eq!(stats.capacity, 5);
+        assert_eq!(stats.dropped, 0);
+        assert_eq!(stats.errors, 1);
+        assert_eq!(stats.warnings, 2);
     }
 
     #[test]

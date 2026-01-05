@@ -47,6 +47,8 @@ pub struct WsService {
     auto_reconnect: RwSignal<bool>,
     /// Whether effects have been initialized (to avoid duplicates on reconnect)
     effects_initialized: RwSignal<bool>,
+    /// Generation counter to prevent stale reconnection timeouts from firing
+    reconnect_generation: RwSignal<u32>,
 }
 
 impl Default for WsService {
@@ -64,6 +66,7 @@ impl WsService {
             reconnect_attempts: RwSignal::new(0),
             auto_reconnect: RwSignal::new(true),
             effects_initialized: RwSignal::new(false),
+            reconnect_generation: RwSignal::new(0),
         }
     }
 
@@ -389,6 +392,7 @@ impl WsService {
         let auth_token_signal = self.auth_token;
         let reconnect_attempts_signal = self.reconnect_attempts;
         let auto_reconnect_signal = self.auto_reconnect;
+        let reconnect_generation_signal = self.reconnect_generation;
         let ws_service = *self;
         let onclose = Closure::wrap(Box::new(move |_: web_sys::CloseEvent| {
             game_state_close.connected.set(false);
@@ -404,6 +408,11 @@ impl WsService {
                 state_signal.set(ConnectionState::Reconnecting);
                 reconnect_attempts_signal.set(attempts + 1);
 
+                // Increment generation to invalidate any previously scheduled reconnects
+                let generation = reconnect_generation_signal.get();
+                reconnect_generation_signal.set(generation + 1);
+                let expected_generation = generation + 1;
+
                 // Calculate delay with exponential backoff
                 let delay = BASE_RECONNECT_DELAY_MS * 2u32.pow(attempts.min(10));
                 let delay = delay.min(MAX_RECONNECT_DELAY_MS);
@@ -413,8 +422,11 @@ impl WsService {
                 let ws_service_reconnect = ws_service;
                 let token = auth_token_signal.get().unwrap();
                 let reconnect_closure = Closure::once(Box::new(move || {
-                    // Only reconnect if still in reconnecting state
-                    if ws_service_reconnect.state.get() == ConnectionState::Reconnecting {
+                    // Only reconnect if this is still the active reconnection attempt
+                    // (generation matches) and we're still in reconnecting state
+                    if ws_service_reconnect.reconnect_generation.get() == expected_generation
+                        && ws_service_reconnect.state.get() == ConnectionState::Reconnecting
+                    {
                         ws_service_reconnect.connect_internal(game_state_reconnect, token);
                     }
                 }) as Box<dyn FnOnce()>);

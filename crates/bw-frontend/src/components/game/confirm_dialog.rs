@@ -55,7 +55,7 @@ impl Default for ConfirmDialogState {
 /// Confirmation dialog component.
 ///
 /// Usage:
-/// ```rust
+/// ```ignore
 /// let confirm_state = ConfirmDialogState::new();
 ///
 /// // In your view:

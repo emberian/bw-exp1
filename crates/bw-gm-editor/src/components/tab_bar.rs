@@ -5,10 +5,21 @@ use leptos::prelude::*;
 /// Available tabs in the GM Editor
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
+    /// Script editor with validation
     Scripts,
+    /// Schema browser + definition editor
+    Definitions,
+    /// Configuration editor
     Config,
+    /// Entity browser
     Entities,
+    /// State inspector + watchers
+    State,
+    /// Script debugger
     Debug,
+    /// Export management
+    Export,
+    /// Staged changes preview
     Staged,
 }
 
@@ -16,15 +27,27 @@ impl Tab {
     pub fn label(&self) -> &'static str {
         match self {
             Tab::Scripts => "Scripts",
+            Tab::Definitions => "Definitions",
             Tab::Config => "Config",
             Tab::Entities => "Entities",
+            Tab::State => "State",
             Tab::Debug => "Debug",
+            Tab::Export => "Export",
             Tab::Staged => "Staged",
         }
     }
 
     pub fn all() -> &'static [Tab] {
-        &[Tab::Scripts, Tab::Config, Tab::Entities, Tab::Debug, Tab::Staged]
+        &[
+            Tab::Scripts,
+            Tab::Definitions,
+            Tab::Config,
+            Tab::Entities,
+            Tab::State,
+            Tab::Debug,
+            Tab::Export,
+            Tab::Staged,
+        ]
     }
 }
 

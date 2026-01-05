@@ -30,6 +30,7 @@ anyhow = "1.0"
 
 # Async runtime
 tokio = { version = "1.42", features = ["full"] }
+tokio-util = "0.7"
 futures = "0.3"
 
 # Scripting
