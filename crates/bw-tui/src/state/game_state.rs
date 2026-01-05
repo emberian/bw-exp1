@@ -19,7 +19,7 @@ pub struct ShipInfo {
     pub id: Uuid,
     pub name: String,
     pub ship_class: String,
-    pub position: (f64, f64),
+    pub position: (f64, f64, f64),
     pub hull_percent: f32,
     pub shield_percent: f32,
     pub is_player: bool,
@@ -34,7 +34,7 @@ impl From<ShipDto> for ShipInfo {
             id: dto.id,
             name: dto.name,
             ship_class: dto.ship_class,
-            position: (dto.position.x, dto.position.y),
+            position: (dto.position.x, dto.position.y, dto.position.z),
             hull_percent: dto.hull,
             shield_percent: dto.shields,
             is_player: dto.is_player,
@@ -51,7 +51,7 @@ pub struct LocationInfo {
     pub id: Uuid,
     pub name: String,
     pub location_type: String,
-    pub position: (f64, f64),
+    pub position: (f64, f64, f64),
     pub faction_tag: Option<String>,
     pub services: Vec<String>,
 }
@@ -62,7 +62,7 @@ impl From<LocationDto> for LocationInfo {
             id: dto.id,
             name: dto.name,
             location_type: dto.location_type,
-            position: (dto.position.x, dto.position.y),
+            position: (dto.position.x, dto.position.y, dto.position.z),
             faction_tag: dto.faction_tag,
             services: dto.services,
         }
@@ -227,6 +227,33 @@ pub struct Choice {
     pub requirement_text: Option<String>,
 }
 
+/// Generic choice required (non-mission)
+#[derive(Debug, Clone)]
+pub struct GenericChoice {
+    pub choice_id: String,
+    pub description: String,
+    pub choices: Vec<Choice>,
+}
+
+/// Squadron invite received
+#[derive(Debug, Clone)]
+pub struct SquadronInvite {
+    pub invite_id: Uuid,
+    pub squadron_id: Uuid,
+    pub squadron_name: String,
+    pub squadron_tag: String,
+    pub inviter_name: String,
+}
+
+/// Alliance proposal received
+#[derive(Debug, Clone)]
+pub struct AllianceProposal {
+    pub proposal_id: Uuid,
+    pub from_squadron_id: Uuid,
+    pub from_squadron_name: String,
+    pub from_squadron_tag: String,
+}
+
 impl From<ChoiceDto> for Choice {
     fn from(dto: ChoiceDto) -> Self {
         Self {
@@ -264,7 +291,7 @@ pub struct GameState {
     pub ship_max_hull: f32,
     pub ship_max_shields: f32,
     pub ship_status: String,
-    pub position: (f64, f64),
+    pub position: (f64, f64, f64),
 
     // Sector
     pub sector: Option<SectorInfo>,
@@ -286,6 +313,11 @@ pub struct GameState {
 
     // Squadron
     pub squadron: Option<SquadronInfo>,
+    pub squadron_invites: Vec<SquadronInvite>,
+    pub alliance_proposals: Vec<AllianceProposal>,
+
+    // Generic choices (non-mission)
+    pub generic_choice: Option<GenericChoice>,
 
     // Admin state
     pub is_admin: bool,
@@ -332,7 +364,7 @@ impl GameState {
                 self.ship_hull = ship.hull;
                 self.ship_shields = ship.shields;
                 self.ship_status = ship.status;
-                self.position = (ship.position.x, ship.position.y);
+                self.position = (ship.position.x, ship.position.y, ship.position.z);
 
                 // Sector info
                 self.sector = Some(SectorInfo::from(&sector));
@@ -373,7 +405,7 @@ impl GameState {
 
                     if let Some(ship) = self.ships.iter_mut().find(|s| s.id == update.id) {
                         if let Some(pos) = update.position {
-                            ship.position = (pos.x, pos.y);
+                            ship.position = (pos.x, pos.y, pos.z);
                         }
                         if let Some(hull) = update.hull_percent {
                             ship.hull_percent = hull;
@@ -389,7 +421,7 @@ impl GameState {
                     // Also update our own ship if it matches
                     if Some(update.id) == self.ship_id {
                         if let Some(pos) = update.position {
-                            self.position = (pos.x, pos.y);
+                            self.position = (pos.x, pos.y, pos.z);
                         }
                         if let Some(hull) = update.hull_percent {
                             self.ship_hull = hull;
@@ -548,12 +580,34 @@ impl GameState {
                 self.squadron = squadron.map(SquadronInfo::from);
             }
 
-            ServerMessage::SquadronInvite { .. } => {
-                // TODO: Handle squadron invites
+            ServerMessage::SquadronInvite {
+                invite_id,
+                squadron_id,
+                squadron_name,
+                squadron_tag,
+                inviter_name,
+            } => {
+                self.squadron_invites.push(SquadronInvite {
+                    invite_id,
+                    squadron_id,
+                    squadron_name,
+                    squadron_tag,
+                    inviter_name,
+                });
             }
 
-            ServerMessage::AllianceProposal { .. } => {
-                // TODO: Handle alliance proposals
+            ServerMessage::AllianceProposal {
+                proposal_id,
+                from_squadron_id,
+                from_squadron_name,
+                from_squadron_tag,
+            } => {
+                self.alliance_proposals.push(AllianceProposal {
+                    proposal_id,
+                    from_squadron_id,
+                    from_squadron_name,
+                    from_squadron_tag,
+                });
             }
 
             ServerMessage::HailReceived { from_id: _, from_name } => {
@@ -594,11 +648,15 @@ impl GameState {
             }
 
             ServerMessage::ChoiceRequired {
-                choice_id: _,
-                description: _,
-                choices: _,
+                choice_id,
+                description,
+                choices,
             } => {
-                // TODO: Handle non-mission choices
+                self.generic_choice = Some(GenericChoice {
+                    choice_id,
+                    description,
+                    choices: choices.into_iter().map(Choice::from).collect(),
+                });
             }
 
             ServerMessage::ScriptActionResult {

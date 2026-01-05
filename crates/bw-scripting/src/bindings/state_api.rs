@@ -408,15 +408,14 @@ pub fn register(engine: &mut Engine) {
 
         get_accessor(|accessor| {
             // First check if player has enough credits
-            if let Ok(Some(player)) = accessor.get_player(id) {
-                if player.credits >= amount {
+            if let Ok(Some(player)) = accessor.get_player(id)
+                && player.credits >= amount {
                     let changes = PlayerChanges {
                         credits_delta: Some(-amount),
                         ..Default::default()
                     };
                     return accessor.modify_player(id, changes).is_ok();
                 }
-            }
             false
         }).unwrap_or(false)
     });

@@ -192,15 +192,13 @@ pub fn apply_effect(
     let result = dispatcher.dispatch(effect_id, ctx, params);
 
     // If the handler returned modified damage in data, apply it
-    if let Some(ref data) = result.data {
-        if let Some(map) = data.clone().try_cast::<Map>() {
-            if let Some(new_damage) = map.get("modified_damage")
+    if let Some(ref data) = result.data
+        && let Some(map) = data.clone().try_cast::<Map>()
+            && let Some(new_damage) = map.get("modified_damage")
                 .and_then(|v| v.clone().try_cast::<f32>())
             {
                 ctx.modified_damage = new_damage;
             }
-        }
-    }
 
     result
 }

@@ -213,12 +213,12 @@ impl StateAccessor {
         let snapshot = self.provider.get_ship(ship_id);
 
         // Check sector access
-        if let Some(ref ship) = snapshot {
-            if !perms.can_access_sector(ship.sector_id) {
-                return Err(AccessError::PermissionDenied(
-                    "Cannot access ships in this sector".into()
-                ));
-            }
+        if let Some(ref ship) = snapshot
+            && !perms.can_access_sector(ship.sector_id)
+        {
+            return Err(AccessError::PermissionDenied(
+                "Cannot access ships in this sector".into()
+            ));
         }
 
         // Apply overlay for read-your-own-writes
@@ -569,7 +569,7 @@ mod tests {
 
         fn apply_mutations(&self, mutations: Vec<StateMutation>) -> Vec<MutationResult> {
             mutations.into_iter()
-                .map(|m| MutationResult::success(m))
+                .map(MutationResult::success)
                 .collect()
         }
     }

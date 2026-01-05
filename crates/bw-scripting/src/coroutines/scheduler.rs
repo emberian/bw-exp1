@@ -163,18 +163,16 @@ impl CoroutineScheduler {
         let mut coroutines = self.coroutines.write();
         if let Some(coroutine) = coroutines.remove(&coroutine_id) {
             // Remove from tick waiters
-            if let Some(resume_at) = coroutine.resume_at {
-                if let Some(waiters) = self.tick_waiters.write().get_mut(&resume_at) {
+            if let Some(resume_at) = coroutine.resume_at
+                && let Some(waiters) = self.tick_waiters.write().get_mut(&resume_at) {
                     waiters.retain(|id| *id != coroutine_id);
                 }
-            }
 
             // Remove from event waiters
-            if let CoroutineState::WaitingForEvent(event_type) = &coroutine.state {
-                if let Some(waiters) = self.event_waiters.write().get_mut(event_type) {
+            if let CoroutineState::WaitingForEvent(event_type) = &coroutine.state
+                && let Some(waiters) = self.event_waiters.write().get_mut(event_type) {
                     waiters.retain(|id| *id != coroutine_id);
                 }
-            }
 
             tracing::debug!(coroutine_id = %coroutine_id, "Cancelled coroutine");
             true

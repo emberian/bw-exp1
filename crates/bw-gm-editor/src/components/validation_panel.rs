@@ -1,11 +1,28 @@
 //! Validation panel component for displaying script validation issues
+#![allow(dead_code)] // Leptos component props appear unused to clippy
+
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use leptos::prelude::*;
 use bw_shared::dto::{ValidationIssueDto, ValidationSeverity};
+use gloo_timers::callback::Timeout;
 
 use crate::state::ValidationState;
 
+/// Debounce delay for validation requests (ms)
+const VALIDATION_DEBOUNCE_MS: u32 = 500;
+
+/// Global generation counter for debounce - incremented for each new validation request
+static VALIDATION_GEN: AtomicU32 = AtomicU32::new(0);
+
+thread_local! {
+    /// Store pending timeout in thread-local to avoid Send+Sync requirement
+    static PENDING_TIMEOUT: RefCell<Option<Timeout>> = const { RefCell::new(None) };
+}
+
 /// Validation panel component for showing script issues
+#[allow(unused)] // Clippy false positive - props used via macro expansion
 #[component]
 pub fn ValidationPanel(
     /// Current script path being validated
@@ -32,14 +49,37 @@ pub fn ValidationPanel(
             return;
         }
 
-        // Update last validated and trigger validation
-        last_validated_content.set(content.clone());
-        validation_state.validating.set(true);
+        // Increment generation to invalidate any pending timeout callbacks
+        let current_gen = VALIDATION_GEN.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
 
-        if let Some(p) = path {
-            use crate::api::admin_ws;
-            admin_ws::with_admin_ws(|ws| ws.validate_script(&p, &content));
-        }
+        // Cancel any pending validation by dropping the old timeout
+        PENDING_TIMEOUT.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+
+        // Schedule new validation after debounce delay
+        let path_clone = path.clone();
+        let content_clone = content.clone();
+        let timeout = Timeout::new(VALIDATION_DEBOUNCE_MS, move || {
+            // Check if this callback is still valid (generation hasn't changed)
+            let latest_gen = VALIDATION_GEN.load(Ordering::Relaxed);
+            if latest_gen != current_gen {
+                return; // Newer validation was requested, skip this one
+            }
+
+            // Update last validated and trigger validation
+            last_validated_content.set(content_clone.clone());
+            validation_state.validating.set(true);
+
+            if let Some(p) = path_clone {
+                use crate::api::admin_ws;
+                admin_ws::with_admin_ws(|ws| ws.validate_script(&p, &content_clone));
+            }
+        });
+
+        PENDING_TIMEOUT.with(|cell| {
+            *cell.borrow_mut() = Some(timeout);
+        });
     });
 
     // Count issues by severity
@@ -120,6 +160,7 @@ pub fn ValidationPanel(
 }
 
 /// Single validation issue row
+#[allow(unused)] // Clippy false positive - props used via macro expansion
 #[component]
 fn IssueRow<F>(
     issue: ValidationIssueDto,

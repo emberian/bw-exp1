@@ -31,9 +31,9 @@ fn parse_requirement(value: Dynamic) -> Option<ActionRequirement> {
     }
 
     // Map requirement: #{ ship_status: ["idle", "docked"] }
-    if let Some(map) = value.clone().try_cast::<Map>() {
-        if let Some(statuses) = map.get("ship_status") {
-            if let Some(arr) = statuses.clone().try_cast::<Array>() {
+    if let Some(map) = value.clone().try_cast::<Map>()
+        && let Some(statuses) = map.get("ship_status")
+            && let Some(arr) = statuses.clone().try_cast::<Array>() {
                 let status_list: Vec<String> = arr
                     .into_iter()
                     .filter_map(|v| v.try_cast::<String>())
@@ -42,8 +42,6 @@ fn parse_requirement(value: Dynamic) -> Option<ActionRequirement> {
                     return Some(ActionRequirement::ShipStatus(status_list));
                 }
             }
-        }
-    }
 
     None
 }

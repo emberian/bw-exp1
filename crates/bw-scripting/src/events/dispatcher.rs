@@ -82,18 +82,16 @@ impl EventDispatcher {
             }
 
             // Check sector filter
-            if let Some(sector_filter) = handler.sector_id {
-                if event.sector_id != sector_filter {
+            if let Some(sector_filter) = handler.sector_id
+                && event.sector_id != sector_filter {
                     continue;
                 }
-            }
 
             // Check custom filter
-            if let Some(ref filter) = handler.filter {
-                if !filter.matches(event.sector_id, event.actor_id, event.target_id) {
+            if let Some(ref filter) = handler.filter
+                && !filter.matches(event.sector_id, event.actor_id, event.target_id) {
                     continue;
                 }
-            }
 
             result.handlers_called += 1;
 

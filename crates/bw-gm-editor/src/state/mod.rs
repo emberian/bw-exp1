@@ -1,4 +1,5 @@
 //! GM Editor state management
+#![allow(dead_code)] // GM Editor state - some methods not yet used by UI
 
 mod debug_state;
 mod export_state;

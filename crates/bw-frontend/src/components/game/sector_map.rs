@@ -84,7 +84,7 @@ pub fn SectorMap() -> impl IntoView {
                 key=|l| l.id
                 children=move |location| {
                     let ws = ws;
-                    let is_jumpgate = location.location_type == "jumpgate";
+                    let is_jumpgate = location.location_type.contains("Jumpgate") || location.location_type.contains("gate");
                     let loc_x = location.x;
                     let loc_y = location.y;
                     let loc_name = location.name.clone();

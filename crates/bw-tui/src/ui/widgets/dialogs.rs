@@ -60,13 +60,13 @@ pub fn draw_mission_choice(frame: &mut Frame, area: Rect, state: &AppState) {
                     Span::styled(&c.text, style),
                 ];
 
-                if !c.is_available {
-                    if let Some(ref req) = c.requirement_text {
-                        spans.push(Span::styled(
-                            format!(" ({})", req),
-                            Style::default().fg(Color::Red),
-                        ));
-                    }
+                if !c.is_available
+                    && let Some(ref req) = c.requirement_text
+                {
+                    spans.push(Span::styled(
+                        format!(" ({})", req),
+                        Style::default().fg(Color::Red),
+                    ));
                 }
 
                 ListItem::new(Line::from(spans))

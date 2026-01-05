@@ -205,8 +205,8 @@ impl ActionSchemaRegistry {
     ///
     /// Returns an error message if the param is unknown, or None if valid.
     pub fn validate_param_access(&self, action: &str, param_key: &str) -> Option<String> {
-        if let Some(schema) = self.get(action) {
-            if !schema.has_param(param_key) {
+        if let Some(schema) = self.get(action)
+            && !schema.has_param(param_key) {
                 return Some(format!(
                     "Unknown param '{}' for action '{}'. Valid params: {:?}",
                     param_key,
@@ -214,7 +214,6 @@ impl ActionSchemaRegistry {
                     schema.params.keys().collect::<Vec<_>>()
                 ));
             }
-        }
         // If action is unknown, we don't validate (it might be a custom action)
         None
     }

@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlElement;
@@ -25,25 +26,45 @@ extern "C" {
     fn js_get_content(element: &HtmlElement) -> Option<String>;
 }
 
-// Track closures by element pointer so we can clean them up on destroy.
-// Using raw pointer as key since HtmlElement doesn't implement Hash/Eq.
+/// Monotonically increasing ID for CodeMirror instances.
+/// Using atomic for thread-safety even though WASM is single-threaded.
+static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
+
+// Track closures by instance ID so we can clean them up on destroy.
+// Using stable IDs instead of pointer addresses to avoid issues with DOM element recycling.
 thread_local! {
-    static CLOSURES: RefCell<HashMap<usize, Closure<dyn Fn(String)>>> = RefCell::new(HashMap::new());
+    static CLOSURES: RefCell<HashMap<u64, Closure<dyn Fn(String)>>> = RefCell::new(HashMap::new());
 }
 
-/// Get a unique key for an element (its pointer address).
-fn element_key(element: &HtmlElement) -> usize {
-    element as *const HtmlElement as usize
+/// Handle to a CodeMirror instance for cleanup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CodeMirrorHandle {
+    instance_id: u64,
+}
+
+impl CodeMirrorHandle {
+    /// Destroy this CodeMirror instance and clean up resources.
+    pub fn destroy(&self, element: &HtmlElement) {
+        js_destroy_codemirror(element);
+
+        // Clean up the stored closure to prevent memory leak
+        CLOSURES.with(|closures| {
+            closures.borrow_mut().remove(&self.instance_id);
+        });
+
+        tracing::debug!("[codemirror] Destroyed instance {}", self.instance_id);
+    }
 }
 
 /// Initialize CodeMirror on a DOM element.
 ///
 /// The `on_change` callback is called whenever the content changes.
-pub fn init_codemirror<F>(element: &HtmlElement, initial_content: &str, on_change: F)
+/// Returns a handle that must be used to properly destroy the instance.
+pub fn init_codemirror<F>(element: &HtmlElement, initial_content: &str, on_change: F) -> CodeMirrorHandle
 where
     F: Fn(String) + 'static,
 {
-    let key = element_key(element);
+    let instance_id = NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
 
     // Create a closure that can be called from JS
     let closure = Closure::new(move |content: String| {
@@ -54,8 +75,12 @@ where
 
     // Store the closure so it stays alive and can be cleaned up later
     CLOSURES.with(|closures| {
-        closures.borrow_mut().insert(key, closure);
+        closures.borrow_mut().insert(instance_id, closure);
     });
+
+    tracing::debug!("[codemirror] Initialized instance {}", instance_id);
+
+    CodeMirrorHandle { instance_id }
 }
 
 /// Update the content of an existing CodeMirror instance.
@@ -63,18 +88,6 @@ where
 /// This is called when content changes externally (e.g., file opened).
 pub fn update_codemirror_content(element: &HtmlElement, content: &str) {
     js_update_content(element, content);
-}
-
-/// Destroy a CodeMirror instance and clean up.
-#[allow(dead_code)]
-pub fn destroy_codemirror(element: &HtmlElement) {
-    js_destroy_codemirror(element);
-
-    // Clean up the stored closure to prevent memory leak
-    let key = element_key(element);
-    CLOSURES.with(|closures| {
-        closures.borrow_mut().remove(&key);
-    });
 }
 
 /// Get the current content from a CodeMirror instance.

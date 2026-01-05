@@ -158,7 +158,7 @@ impl ShipArchetype {
 
         // Parse unlock requirements
         let unlock = map.get("unlock")
-            .and_then(|u| UnlockRequirements::from_dynamic(u));
+            .and_then(UnlockRequirements::from_dynamic);
 
         Some(Self {
             id,

@@ -63,9 +63,9 @@ pub fn GamePage() -> impl IntoView {
         let player_x = game_state.position_x.get();
         let player_y = game_state.position_y.get();
 
-        // Find the nearest station
+        // Find the nearest station (any type ending with "Station")
         if let Some(station) = locations.iter()
-            .filter(|l| l.location_type == "station")
+            .filter(|l| l.location_type.ends_with("Station") || l.location_type.ends_with("Port"))
             .min_by(|a, b| {
                 let dist_a = distance(player_x, player_y, a.x, a.y);
                 let dist_b = distance(player_x, player_y, b.x, b.y);

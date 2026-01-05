@@ -247,11 +247,10 @@ fn handle_debug_event(
                     }
 
                     // Increment hit count (only when actually pausing)
-                    if bp_id != Uuid::nil() {
-                        if let Some(bp) = state.breakpoints.write().iter_mut().find(|b| b.id == bp_id) {
+                    if bp_id != Uuid::nil()
+                        && let Some(bp) = state.breakpoints.write().iter_mut().find(|b| b.id == bp_id) {
                             bp.hit_count += 1;
                         }
-                    }
 
                     pause_and_wait(
                         state,
@@ -346,8 +345,8 @@ fn pause_and_wait(
     // Build paused state
     let paused_state = PausedState {
         script_path: source.unwrap_or(&state.script_path).to_string(),
-        line: pos.line().unwrap_or(0) as usize,
-        column: pos.position().unwrap_or(0) as usize,
+        line: pos.line().unwrap_or(0),
+        column: pos.position().unwrap_or(0),
         call_stack,
         local_variables,
         entity_context: state.entity_context.clone(),
@@ -426,8 +425,8 @@ fn collect_call_stack(debugger: &Debugger) -> Vec<StackFrame> {
                 index,
                 function_name: frame.fn_name.to_string(),
                 source: frame.source.as_ref().map(|s| s.to_string()),
-                line: frame.pos.line().map(|l| l as usize),
-                column: frame.pos.position().map(|c| c as usize),
+                line: frame.pos.line(),
+                column: frame.pos.position(),
             }
         })
         .collect()
@@ -491,7 +490,7 @@ pub fn expand_variable(value: &Dynamic, parent_path: &str) -> Vec<Variable> {
         map.iter()
             .map(|(k, v)| {
                 let child_path = format!("{}.{}", parent_path, k);
-                dynamic_to_variable(&k.to_string(), v, &child_path)
+                dynamic_to_variable(k.as_ref(), v, &child_path)
             })
             .collect()
     } else {

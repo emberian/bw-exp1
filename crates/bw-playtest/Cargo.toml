@@ -1,0 +1,30 @@
+[package]
+name = "bw-playtest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "GM playtest system for BLACKWING - isolated state forking and testing"
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+bw-game = { path = "../bw-game" }
+bw-scripting = { path = "../bw-scripting" }
+bw-shared = { path = "../bw-shared" }
+
+# Async
+tokio.workspace = true
+
+# Concurrency
+dashmap.workspace = true
+parking_lot.workspace = true
+
+# Core types
+uuid.workspace = true
+chrono.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true

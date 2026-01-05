@@ -83,13 +83,19 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
     // Draw locations
     for location in &state.game.locations {
         if let Some((sx, sy)) = to_screen(location.position.0, location.position.1) {
-            let (ch, style) = match location.location_type.as_str() {
-                "Station" => ('S', Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-                "Jumpgate" => ('J', Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                "MiningSite" => ('M', Style::default().fg(Color::Yellow)),
-                "Debris" => ('#', Style::default().fg(Color::DarkGray)),
-                "AsteroidField" => ('A', Style::default().fg(Color::Gray)),
-                _ => ('?', Style::default().fg(Color::White)),
+            let loc_type = location.location_type.as_str();
+            let (ch, style) = if loc_type.ends_with("Station") || loc_type.ends_with("Port") {
+                ('S', Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
+            } else if loc_type.contains("Jumpgate") || loc_type.contains("gate") {
+                ('J', Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+            } else if loc_type.contains("Mining") {
+                ('M', Style::default().fg(Color::Yellow))
+            } else if loc_type.contains("Debris") {
+                ('#', Style::default().fg(Color::DarkGray))
+            } else if loc_type.contains("Asteroid") {
+                ('A', Style::default().fg(Color::Gray))
+            } else {
+                ('?', Style::default().fg(Color::White))
             };
             grid[sy][sx] = (ch, style);
         }
@@ -130,14 +136,14 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Draw cursor if active
-    if let Some((cx, cy)) = state.ui.map_cursor {
-        if let Some((sx, sy)) = to_screen(cx, cy) {
-            let (ch, mut style) = grid[sy][sx];
-            // Show cursor as 'X' if on empty space
-            let ch = if ch == ' ' || ch == '.' { 'X' } else { ch };
-            style = style.bg(Color::DarkGray);
-            grid[sy][sx] = (ch, style);
-        }
+    if let Some((cx, cy)) = state.ui.map_cursor
+        && let Some((sx, sy)) = to_screen(cx, cy)
+    {
+        let (ch, mut style) = grid[sy][sx];
+        // Show cursor as 'X' if on empty space
+        let ch = if ch == ' ' || ch == '.' { 'X' } else { ch };
+        style = style.bg(Color::DarkGray);
+        grid[sy][sx] = (ch, style);
     }
 
     // Render grid

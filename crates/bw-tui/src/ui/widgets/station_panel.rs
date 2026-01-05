@@ -10,6 +10,17 @@ use ratatui::{
 
 use crate::state::AppState;
 
+/// Distance threshold for detecting if player is docked at a station.
+const DOCK_PROXIMITY_THRESHOLD: f64 = 50.0;
+
+/// Calculate 3D distance between two positions.
+fn distance_3d(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    let dz = a.2 - b.2;
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
 pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
     let block = Block::default()
         .title(" Station Services ")
@@ -19,11 +30,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Find current station from docked status
+    // Find current station from docked status (any type ending with "Station" or "Port")
     let station = state.game.locations.iter().find(|l| {
-        l.location_type == "Station"
-            && (state.game.position.0 - l.position.0).abs() < 50.0
-            && (state.game.position.1 - l.position.1).abs() < 50.0
+        (l.location_type.ends_with("Station") || l.location_type.ends_with("Port"))
+            && distance_3d(state.game.position, l.position) < DOCK_PROXIMITY_THRESHOLD
     });
 
     if let Some(station) = station {

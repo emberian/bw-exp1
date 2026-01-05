@@ -30,6 +30,7 @@ const MAX_ERRORS: usize = 100;
 
 /// A script error with context for debugging.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ScriptError {
     /// The script file where the error occurred.
     pub script: String,
@@ -45,18 +46,6 @@ pub struct ScriptError {
     pub tick: u64,
 }
 
-impl Default for ScriptError {
-    fn default() -> Self {
-        Self {
-            script: String::new(),
-            function: String::new(),
-            message: String::new(),
-            line: 0,
-            column: 0,
-            tick: 0,
-        }
-    }
-}
 
 impl ScriptError {
     /// Create a new script error with basic info.

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 // Thread-local storage for yield requests from the currently executing script.
 thread_local! {
-    pub static YIELD_REQUEST: RefCell<Option<YieldRequest>> = RefCell::new(None);
+    pub static YIELD_REQUEST: RefCell<Option<YieldRequest>> = const { RefCell::new(None) };
 }
 
 /// A suspended script execution that can be resumed later.

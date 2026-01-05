@@ -1,4 +1,5 @@
 //! Export state for managing export operations
+#![allow(dead_code)] // Public API methods not yet used by all UI components
 
 use leptos::prelude::*;
 use bw_shared::dto::{ExportSummaryDto, ExportStatus};

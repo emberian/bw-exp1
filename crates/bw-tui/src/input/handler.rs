@@ -7,6 +7,14 @@ use crate::state::{AppState, InputMode, Modal, PanelFocus};
 
 use super::keybindings::*;
 
+/// Calculate 3D distance between two positions.
+fn distance_3d(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    let dz = a.2 - b.2;
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
 /// Input handler for processing keyboard events
 pub struct InputHandler;
 
@@ -32,6 +40,26 @@ impl InputHandler {
         // Handle mission choice dialog (takes priority)
         if state.game.mission_choice.is_some() {
             return self.handle_mission_choice(code, state);
+        }
+
+        // Handle generic choice dialog
+        if state.game.generic_choice.is_some() {
+            return self.handle_generic_choice(code, state);
+        }
+
+        // Handle squadron invite (if any pending)
+        if !state.game.squadron_invites.is_empty()
+            && let Some(msg) = self.handle_squadron_invite(code, state)
+        {
+            return Some(msg);
+        }
+
+        // Handle alliance proposal (if any pending, only when no squadron invites)
+        if state.game.squadron_invites.is_empty()
+            && !state.game.alliance_proposals.is_empty()
+            && let Some(msg) = self.handle_alliance_proposal(code, state)
+        {
+            return Some(msg);
         }
 
         // Handle modal if present
@@ -155,12 +183,12 @@ impl InputHandler {
                 state.debug.toggle();
             }
             "dock" => {
-                // Find nearest station and dock
+                // Find nearest station and dock (any type ending with "Station" or "Port")
                 if let Some(station) = state
                     .game
                     .locations
                     .iter()
-                    .find(|l| l.location_type == "Station")
+                    .find(|l| l.location_type.ends_with("Station") || l.location_type.ends_with("Port"))
                 {
                     return Some(ClientMessage::dock(station.id));
                 }
@@ -173,10 +201,10 @@ impl InputHandler {
                 return Some(ClientMessage::stop_movement());
             }
             "goto" => {
-                if parts.len() >= 3 {
-                    if let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
-                        return Some(ClientMessage::move_to_position(x, y, 0.0));
-                    }
+                if parts.len() >= 3
+                    && let (Ok(x), Ok(y)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>())
+                {
+                    return Some(ClientMessage::move_to_position(x, y, 0.0));
                 }
                 state.ui.add_notification("Usage: goto <x> <y>".into());
             }
@@ -191,6 +219,61 @@ impl InputHandler {
             }
             "metrics" => {
                 return Some(ClientMessage::SubscribeMetrics);
+            }
+            // Squadron commands
+            "squadron" | "sq" => {
+                if parts.len() < 2 {
+                    state.ui.add_notification("Usage: squadron <create|leave|info>".into());
+                    return None;
+                }
+                match parts[1] {
+                    "create" => {
+                        if parts.len() >= 4 {
+                            let name = parts[2].to_string();
+                            let tag = parts[3].to_string();
+                            state.ui.add_notification(format!("Creating squadron [{}] {}...", tag, name));
+                            return Some(ClientMessage::create_squadron(name, tag));
+                        }
+                        state.ui.add_notification("Usage: squadron create <name> <tag>".into());
+                    }
+                    "leave" => {
+                        if state.game.squadron.is_some() {
+                            state.ui.add_notification("Leaving squadron...".into());
+                            return Some(ClientMessage::leave_squadron());
+                        }
+                        state.ui.add_notification("Not in a squadron".into());
+                    }
+                    "info" => {
+                        if let Some(ref sq) = state.game.squadron {
+                            state.ui.add_notification(format!(
+                                "[{}] {} - {} members",
+                                sq.tag, sq.name, sq.member_count
+                            ));
+                        } else {
+                            state.ui.add_notification("Not in a squadron".into());
+                        }
+                    }
+                    _ => {
+                        state.ui.add_notification("Usage: squadron <create|leave|info>".into());
+                    }
+                }
+            }
+            // Station service commands
+            "service" | "use" => {
+                if parts.len() >= 2 {
+                    let service = parts[1..].join(" ");
+                    return Some(ClientMessage::use_service(service));
+                }
+                state.ui.add_notification("Usage: service <service_name>".into());
+            }
+            "repair" => {
+                return Some(ClientMessage::use_service("Repair"));
+            }
+            "refuel" => {
+                return Some(ClientMessage::use_service("Refuel"));
+            }
+            "rearm" => {
+                return Some(ClientMessage::use_service("Rearm"));
             }
             _ => {
                 state.ui.add_notification(format!("Unknown command: {}", parts[0]));
@@ -213,11 +296,8 @@ impl InputHandler {
                 if let Some(Modal::Confirm { on_confirm, .. }) = state.ui.modal.take() {
                     return match on_confirm {
                         crate::state::ConfirmAction::AbandonMission => {
-                            if let Some(mission) = &state.game.active_mission {
-                                Some(ClientMessage::abandon_mission(mission.id))
-                            } else {
-                                None
-                            }
+                            state.game.active_mission.as_ref()
+                                .map(|mission| ClientMessage::abandon_mission(mission.id))
                         }
                         crate::state::ConfirmAction::Undock => Some(ClientMessage::undock()),
                         crate::state::ConfirmAction::Disengage => {
@@ -247,25 +327,131 @@ impl InputHandler {
         }
 
         // Number keys 1-9 to select choice
-        if let KeyCode::Char(c) = code {
-            if let Some(digit) = c.to_digit(10) {
-                if digit >= 1 {
-                    let idx = (digit - 1) as usize;
-                    if let Some(ref choice) = state.game.mission_choice {
-                        if let Some(selected) = choice.choices.get(idx) {
-                            if selected.is_available {
-                                let mission_id = choice.mission_id;
-                                let choice_id = selected.id.clone();
-                                // Clear the choice dialog
-                                state.game.mission_choice = None;
-                                return Some(ClientMessage::mission_choice(mission_id, choice_id));
-                            } else {
-                                state.ui.add_notification("That choice is not available".into());
-                            }
-                        }
-                    }
+        if let KeyCode::Char(c) = code
+            && let Some(digit) = c.to_digit(10)
+            && digit >= 1
+        {
+            let idx = (digit - 1) as usize;
+            if let Some(ref choice) = state.game.mission_choice
+                && let Some(selected) = choice.choices.get(idx)
+            {
+                if selected.is_available {
+                    let mission_id = choice.mission_id;
+                    let choice_id = selected.id.clone();
+                    // Clear the choice dialog
+                    state.game.mission_choice = None;
+                    return Some(ClientMessage::mission_choice(mission_id, choice_id));
+                } else {
+                    state.ui.add_notification("That choice is not available".into());
                 }
             }
+        }
+        None
+    }
+
+    fn handle_generic_choice(
+        &mut self,
+        code: KeyCode,
+        state: &mut AppState,
+    ) -> Option<ClientMessage> {
+        // Esc to dismiss (some generic choices may be dismissable)
+        if code == KeyCode::Esc {
+            state.game.generic_choice = None;
+            return None;
+        }
+
+        // Number keys 1-9 to select choice
+        if let KeyCode::Char(c) = code
+            && let Some(digit) = c.to_digit(10)
+            && digit >= 1
+        {
+            let idx = (digit - 1) as usize;
+            if let Some(ref choice) = state.game.generic_choice
+                && let Some(selected) = choice.choices.get(idx)
+            {
+                if selected.is_available {
+                    let choice_id = choice.choice_id.clone();
+                    let selected_id = selected.id.clone();
+                    // Clear the choice dialog
+                    state.game.generic_choice = None;
+                    // Generic choices use ScriptAction
+                    return Some(ClientMessage::action(
+                        "respond_choice",
+                        serde_json::json!({
+                            "choice_id": choice_id,
+                            "selected": selected_id
+                        }),
+                    ));
+                } else {
+                    state.ui.add_notification("That choice is not available".into());
+                }
+            }
+        }
+        None
+    }
+
+    fn handle_squadron_invite(
+        &mut self,
+        code: KeyCode,
+        state: &mut AppState,
+    ) -> Option<ClientMessage> {
+        // Only handle if there are invites
+        if state.game.squadron_invites.is_empty() {
+            return None;
+        }
+
+        // y to accept first invite, n to decline
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(invite) = state.game.squadron_invites.first() {
+                    let invite_id = invite.invite_id;
+                    state.game.squadron_invites.remove(0);
+                    state.ui.add_notification("Accepted squadron invite".into());
+                    return Some(ClientMessage::accept_squadron_invite(invite_id));
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if let Some(invite) = state.game.squadron_invites.first() {
+                    let invite_id = invite.invite_id;
+                    state.game.squadron_invites.remove(0);
+                    state.ui.add_notification("Declined squadron invite".into());
+                    return Some(ClientMessage::decline_squadron_invite(invite_id));
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn handle_alliance_proposal(
+        &mut self,
+        code: KeyCode,
+        state: &mut AppState,
+    ) -> Option<ClientMessage> {
+        // Only handle if there are proposals
+        if state.game.alliance_proposals.is_empty() {
+            return None;
+        }
+
+        // y to accept first proposal, n to decline
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(proposal) = state.game.alliance_proposals.first() {
+                    let proposal_id = proposal.proposal_id;
+                    state.game.alliance_proposals.remove(0);
+                    state.ui.add_notification("Accepted alliance proposal".into());
+                    return Some(ClientMessage::accept_alliance(proposal_id));
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if let Some(proposal) = state.game.alliance_proposals.first() {
+                    let proposal_id = proposal.proposal_id;
+                    state.game.alliance_proposals.remove(0);
+                    state.ui.add_notification("Declined alliance proposal".into());
+                    return Some(ClientMessage::decline_alliance(proposal_id));
+                }
+            }
+            _ => {}
         }
         None
     }
@@ -278,21 +464,23 @@ impl InputHandler {
     ) -> Option<ClientMessage> {
         // Navigation with hjkl or arrows
         let step = 50.0;
+        // Map cursor is 2D, extract x,y from 3D player position
+        let pos_2d = (state.game.position.0, state.game.position.1);
         match code {
             KeyCode::Up | KeyCode::Char('k') if modifiers.is_empty() => {
-                let (x, y) = state.ui.map_cursor.unwrap_or(state.game.position);
+                let (x, y) = state.ui.map_cursor.unwrap_or(pos_2d);
                 state.ui.map_cursor = Some((x, y - step));
             }
             KeyCode::Down | KeyCode::Char('j') if modifiers.is_empty() => {
-                let (x, y) = state.ui.map_cursor.unwrap_or(state.game.position);
+                let (x, y) = state.ui.map_cursor.unwrap_or(pos_2d);
                 state.ui.map_cursor = Some((x, y + step));
             }
             KeyCode::Left | KeyCode::Char('h') if modifiers.is_empty() => {
-                let (x, y) = state.ui.map_cursor.unwrap_or(state.game.position);
+                let (x, y) = state.ui.map_cursor.unwrap_or(pos_2d);
                 state.ui.map_cursor = Some((x - step, y));
             }
             KeyCode::Right | KeyCode::Char('l') if modifiers.is_empty() => {
-                let (x, y) = state.ui.map_cursor.unwrap_or(state.game.position);
+                let (x, y) = state.ui.map_cursor.unwrap_or(pos_2d);
                 state.ui.map_cursor = Some((x + step, y));
             }
             _ => {}
@@ -307,12 +495,12 @@ impl InputHandler {
         }
 
         if DOCK.matches(code, modifiers) {
-            // Find nearest station
+            // Find nearest station (any type ending with "Station" or "Port")
             if let Some(station) = state
                 .game
                 .locations
                 .iter()
-                .find(|l| l.location_type == "Station")
+                .find(|l| l.location_type.ends_with("Station") || l.location_type.ends_with("Port"))
             {
                 return Some(ClientMessage::dock(station.id));
             }
@@ -345,11 +533,10 @@ impl InputHandler {
 
         // Jump to adjacent sector (g key)
         if JUMP.matches(code, modifiers) {
-            // Check if near a jumpgate
+            // Check if near a jumpgate (within 100 units in 3D space)
             let near_jumpgate = state.game.locations.iter().find(|l| {
-                l.location_type == "Jumpgate"
-                    && (state.game.position.0 - l.position.0).abs() < 100.0
-                    && (state.game.position.1 - l.position.1).abs() < 100.0
+                (l.location_type.contains("Jumpgate") || l.location_type.contains("gate"))
+                    && distance_3d(state.game.position, l.position) < 100.0
             });
 
             if near_jumpgate.is_some() {
@@ -387,14 +574,13 @@ impl InputHandler {
         }
 
         // Number keys for quick ship selection
-        if let KeyCode::Char(c) = code {
-            if let Some(digit) = c.to_digit(10) {
-                if digit > 0 {
-                    let idx = (digit - 1) as usize;
-                    if idx < state.game.ships.len() {
-                        state.ui.ship_selected = idx;
-                    }
-                }
+        if let KeyCode::Char(c) = code
+            && let Some(digit) = c.to_digit(10)
+            && digit > 0
+        {
+            let idx = (digit - 1) as usize;
+            if idx < state.game.ships.len() {
+                state.ui.ship_selected = idx;
             }
         }
 
@@ -434,22 +620,21 @@ impl InputHandler {
         }
 
         // Mission actions
-        if ACCEPT.matches(code, modifiers) {
-            if let Some(mission) = state.game.available_missions.get(state.ui.mission_selected) {
-                if mission.can_accept {
-                    return Some(ClientMessage::accept_mission(mission.id));
-                }
-            }
+        if ACCEPT.matches(code, modifiers)
+            && let Some(mission) = state.game.available_missions.get(state.ui.mission_selected)
+            && mission.can_accept
+        {
+            return Some(ClientMessage::accept_mission(mission.id));
         }
 
-        if ABANDON.matches(code, modifiers) {
-            if state.game.active_mission.is_some() {
-                state.ui.modal = Some(Modal::Confirm {
-                    title: "Abandon Mission".into(),
-                    message: "Are you sure you want to abandon the current mission?".into(),
-                    on_confirm: crate::state::ConfirmAction::AbandonMission,
-                });
-            }
+        if ABANDON.matches(code, modifiers)
+            && state.game.active_mission.is_some()
+        {
+            state.ui.modal = Some(Modal::Confirm {
+                title: "Abandon Mission".into(),
+                message: "Are you sure you want to abandon the current mission?".into(),
+                on_confirm: crate::state::ConfirmAction::AbandonMission,
+            });
         }
 
         None

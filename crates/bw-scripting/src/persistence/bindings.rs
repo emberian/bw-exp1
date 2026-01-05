@@ -271,7 +271,18 @@ fn dynamic_to_json(value: &Dynamic) -> serde_json::Value {
     } else if let Some(i) = value.clone().try_cast::<i64>() {
         serde_json::Value::Number(i.into())
     } else if let Some(f) = value.clone().try_cast::<f64>() {
-        serde_json::json!(f)
+        // Handle special float values that JSON doesn't support natively
+        if f.is_nan() {
+            serde_json::Value::String("__NaN__".to_string())
+        } else if f.is_infinite() {
+            if f.is_sign_positive() {
+                serde_json::Value::String("__Infinity__".to_string())
+            } else {
+                serde_json::Value::String("__-Infinity__".to_string())
+            }
+        } else {
+            serde_json::json!(f)
+        }
     } else if let Some(s) = value.clone().try_cast::<String>() {
         serde_json::Value::String(s)
     } else if let Some(arr) = value.clone().try_cast::<rhai::Array>() {
@@ -302,7 +313,15 @@ fn json_to_dynamic(value: &serde_json::Value) -> Dynamic {
                 Dynamic::UNIT
             }
         }
-        serde_json::Value::String(s) => Dynamic::from(s.clone()),
+        serde_json::Value::String(s) => {
+            // Handle special float values encoded as strings
+            match s.as_str() {
+                "__NaN__" => Dynamic::from(f64::NAN),
+                "__Infinity__" => Dynamic::from(f64::INFINITY),
+                "__-Infinity__" => Dynamic::from(f64::NEG_INFINITY),
+                _ => Dynamic::from(s.clone()),
+            }
+        }
         serde_json::Value::Array(arr) => {
             let rhai_arr: rhai::Array = arr.iter().map(json_to_dynamic).collect();
             Dynamic::from(rhai_arr)

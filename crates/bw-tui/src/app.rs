@@ -72,12 +72,12 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
 
             // Handle events with timeout for responsiveness
-            if event::poll(Duration::from_millis(16))? {
-                if let Event::Key(key) = event::read()? {
-                    // Only handle key press events (not release)
-                    if key.kind == KeyEventKind::Press {
-                        self.handle_key(key.code, key.modifiers);
-                    }
+            if event::poll(Duration::from_millis(16))?
+                && let Event::Key(key) = event::read()?
+            {
+                // Only handle key press events (not release)
+                if key.kind == KeyEventKind::Press {
+                    self.handle_key(key.code, key.modifiers);
                 }
             }
 

@@ -31,11 +31,10 @@ fn find_scripts_recursive(base: &Path, dir: &Path, scripts: &mut Vec<String>) {
             let path = entry.path();
             if path.is_dir() {
                 find_scripts_recursive(base, &path, scripts);
-            } else if path.extension().is_some_and(|ext| ext == "rhai") {
-                if let Ok(relative) = path.strip_prefix(base) {
+            } else if path.extension().is_some_and(|ext| ext == "rhai")
+                && let Ok(relative) = path.strip_prefix(base) {
                     scripts.push(relative.to_string_lossy().to_string());
                 }
-            }
         }
     }
 }

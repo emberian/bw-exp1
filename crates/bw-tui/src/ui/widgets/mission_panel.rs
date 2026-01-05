@@ -106,13 +106,13 @@ fn draw_available_missions(frame: &mut Frame, area: Rect, state: &AppState) {
             }
 
             // Expiry warning
-            if let Some(expires) = mission.expires_in_seconds {
-                if expires < 300 {
-                    spans.push(Span::styled(
-                        format!(" ({}s)", expires),
-                        Style::default().fg(Color::Red),
-                    ));
-                }
+            if let Some(expires) = mission.expires_in_seconds
+                && expires < 300
+            {
+                spans.push(Span::styled(
+                    format!(" ({}s)", expires),
+                    Style::default().fg(Color::Red),
+                ));
             }
 
             let style = if is_selected {

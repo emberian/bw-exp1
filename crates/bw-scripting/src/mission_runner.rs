@@ -173,7 +173,7 @@ impl MissionOutcome {
             .and_then(|v| v.clone().into_array().ok())
             .map(|arr| {
                 arr.into_iter()
-                    .filter_map(|c| MissionChoice::from_dynamic(c))
+                    .filter_map(MissionChoice::from_dynamic)
                     .collect()
             })
             .unwrap_or_default();
@@ -315,7 +315,7 @@ impl MissionChoice {
             .and_then(|v| v.clone().into_array().ok())
             .map(|arr| {
                 arr.into_iter()
-                    .filter_map(|r| ChoiceRequirement::from_dynamic(r))
+                    .filter_map(ChoiceRequirement::from_dynamic)
                     .collect()
             })
             .unwrap_or_default();

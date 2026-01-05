@@ -1,15 +1,21 @@
 //! State inspector state for live state viewing
+#![allow(dead_code)] // Public API methods not yet used by all UI components
 
 use leptos::prelude::*;
 use bw_shared::{EntityType, dto::{StateChangeDto, WatchDto}};
 use uuid::Uuid;
+
+/// Maximum number of entities to store in memory
+const MAX_ENTITIES: usize = 1000;
+/// Maximum number of recent changes to keep
+const MAX_CHANGES: usize = 100;
 
 /// State for the state inspector component
 #[derive(Clone, Copy)]
 pub struct InspectorState {
     /// Currently selected entity type
     pub selected_type: RwSignal<Option<EntityType>>,
-    /// Entities in current snapshot
+    /// Entities in current snapshot (limited to MAX_ENTITIES)
     pub entities: RwSignal<Vec<serde_json::Value>>,
     /// Total count for pagination
     pub total_count: RwSignal<usize>,
@@ -21,7 +27,7 @@ pub struct InspectorState {
     pub selected_entity: RwSignal<Option<Uuid>>,
     /// Selected entity details
     pub entity_detail: RwSignal<Option<serde_json::Value>>,
-    /// Recent state changes
+    /// Recent state changes (limited to MAX_CHANGES)
     pub changes: RwSignal<Vec<StateChangeDto>>,
     /// Current tick
     pub current_tick: RwSignal<u64>,
@@ -59,6 +65,18 @@ impl InspectorState {
         entities: Vec<serde_json::Value>,
         total_count: usize,
     ) {
+        // Limit entity storage to prevent unbounded memory growth
+        let entities = if entities.len() > MAX_ENTITIES {
+            tracing::warn!(
+                "[inspector] Truncating entity list from {} to {} items",
+                entities.len(),
+                MAX_ENTITIES
+            );
+            entities.into_iter().take(MAX_ENTITIES).collect()
+        } else {
+            entities
+        };
+
         self.entities.set(entities);
         self.total_count.set(total_count);
         self.current_tick.set(tick);
@@ -69,12 +87,12 @@ impl InspectorState {
     pub fn on_state_update(&self, tick: u64, _entity_type: EntityType, changes: Vec<StateChangeDto>) {
         self.current_tick.set(tick);
 
-        // Prepend new changes, keep max 100
+        // Prepend new changes, keep max MAX_CHANGES
         self.changes.update(|c| {
             for change in changes.into_iter().rev() {
                 c.insert(0, change);
             }
-            c.truncate(100);
+            c.truncate(MAX_CHANGES);
         });
     }
 
@@ -107,10 +125,10 @@ impl InspectorState {
     /// Handle watch value update
     pub fn on_watch_value(&self, watch_id: Uuid, _tick: u64, value: serde_json::Value, error: Option<String>) {
         self.watches.update(|watches| {
-            if let Some(watch) = watches.iter_mut().find(|w| w.id == watch_id) {
-                if error.is_none() {
-                    watch.last_value = Some(value);
-                }
+            if let Some(watch) = watches.iter_mut().find(|w| w.id == watch_id)
+                && error.is_none()
+            {
+                watch.last_value = Some(value);
             }
         });
     }

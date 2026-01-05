@@ -2,8 +2,9 @@
 //!
 //! Uses thread_local storage since WASM is single-threaded and Leptos
 //! context requires Send+Sync which Rc<RefCell<WebSocket>> doesn't provide.
+#![allow(dead_code)] // API methods not yet used by all UI components
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -23,6 +24,51 @@ use crate::state::{
 
 thread_local! {
     static ADMIN_WS: RefCell<Option<AdminWsClient>> = const { RefCell::new(None) };
+    /// Store state references for use in WebSocket callbacks (outside reactive context)
+    static STATE_REFS: RefCell<Option<StateRefs>> = const { RefCell::new(None) };
+    /// Connection generation counter to detect stale callbacks
+    static CONNECTION_GEN: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Stored state references for WebSocket message handling
+/// These are used in callbacks that run outside the Leptos reactive context.
+#[derive(Clone, Copy)]
+struct StateRefs {
+    gm_state: GMEditorState,
+    staged: StagedChangesState,
+    debug: DebugPanelState,
+    schema: SchemaState,
+    validation: ValidationState,
+    inspector: InspectorState,
+    export: ExportState,
+}
+
+/// Initialize state references (call from app component after providing contexts)
+pub fn init_state_refs(
+    gm_state: GMEditorState,
+    staged: StagedChangesState,
+    debug: DebugPanelState,
+    schema: SchemaState,
+    validation: ValidationState,
+    inspector: InspectorState,
+    export: ExportState,
+) {
+    STATE_REFS.with(|refs| {
+        *refs.borrow_mut() = Some(StateRefs {
+            gm_state,
+            staged,
+            debug,
+            schema,
+            validation,
+            inspector,
+            export,
+        });
+    });
+}
+
+/// Get stored state references
+fn get_state_refs() -> Option<StateRefs> {
+    STATE_REFS.with(|refs| *refs.borrow())
 }
 
 /// Initialize the admin WebSocket client (call once from app.rs)
@@ -49,9 +95,24 @@ pub fn shutdown_admin_ws() {
     });
 }
 
+/// Connection state for UI display
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionState {
+    Connecting,
+    Connected,
+    Disconnected,
+    Error,
+}
+
 /// WebSocket client for admin operations
 pub struct AdminWsClient {
     ws: RefCell<Option<WebSocket>>,
+    /// Connection generation - incremented on each new connection to detect stale callbacks
+    generation: Cell<u32>,
+    /// Current connection state for UI
+    connection_state: RwSignal<ConnectionState>,
+    /// Last error message
+    last_error: RwSignal<Option<String>>,
     /// Store closures to prevent memory leaks (dropped when client is dropped)
     #[allow(dead_code)]
     closures: RefCell<Vec<Closure<dyn FnMut(web_sys::Event)>>>,
@@ -67,6 +128,9 @@ impl AdminWsClient {
     fn new(ws_url: &str, auth_token: &str) -> Self {
         let mut client = Self {
             ws: RefCell::new(None),
+            generation: Cell::new(0),
+            connection_state: RwSignal::new(ConnectionState::Connecting),
+            last_error: RwSignal::new(None),
             closures: RefCell::new(Vec::new()),
             message_closure: RefCell::new(None),
             error_closure: RefCell::new(None),
@@ -77,12 +141,39 @@ impl AdminWsClient {
         client
     }
 
+    /// Get the current connection state signal
+    pub fn connection_state(&self) -> RwSignal<ConnectionState> {
+        self.connection_state
+    }
+
+    /// Get the last error message signal
+    pub fn last_error(&self) -> RwSignal<Option<String>> {
+        self.last_error
+    }
+
     /// Connect to the WebSocket server
     fn connect(&mut self, ws_url: &str, auth_token: &str) {
+        // Increment generation to invalidate any stale callbacks
+        let conn_gen = self.generation.get().wrapping_add(1);
+        self.generation.set(conn_gen);
+        CONNECTION_GEN.with(|g| g.set(conn_gen));
+
+        // Clear old closures before creating new connection
+        self.closures.borrow_mut().clear();
+        *self.message_closure.borrow_mut() = None;
+        *self.error_closure.borrow_mut() = None;
+        *self.close_closure.borrow_mut() = None;
+
+        self.connection_state.set(ConnectionState::Connecting);
+        self.last_error.set(None);
+
         let ws = match WebSocket::new(ws_url) {
             Ok(ws) => ws,
             Err(e) => {
-                tracing::error!("[gm-ws] Failed to create WebSocket: {:?}", e);
+                let err_msg = format!("Failed to create WebSocket: {:?}", e);
+                tracing::error!("[gm-ws] {}", err_msg);
+                self.connection_state.set(ConnectionState::Error);
+                self.last_error.set(Some(err_msg));
                 return;
             }
         };
@@ -95,8 +186,17 @@ impl AdminWsClient {
         // Set up open handler - authenticate on connect
         let auth_token = auth_token.to_string();
         let ws_clone = ws.clone();
+        let conn_state = self.connection_state;
         let onopen = Closure::wrap(Box::new(move |_: web_sys::Event| {
+            // Check if this callback is still valid
+            let current_gen = CONNECTION_GEN.with(|g| g.get());
+            if current_gen != conn_gen {
+                tracing::warn!("[gm-ws] Ignoring stale open callback (gen {} vs {})", conn_gen, current_gen);
+                return;
+            }
+
             tracing::info!("[gm-ws] Connected, authenticating...");
+            conn_state.set(ConnectionState::Connected);
 
             let auth_msg = ClientMessage::Authenticate {
                 token: auth_token.clone(),
@@ -115,6 +215,12 @@ impl AdminWsClient {
 
         // Message handler
         let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
+            // Check if this callback is still valid
+            let current_gen = CONNECTION_GEN.with(|g| g.get());
+            if current_gen != conn_gen {
+                return; // Silently ignore stale messages
+            }
+
             if let Ok(buffer) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let array = js_sys::Uint8Array::new(&buffer);
                 let bytes = array.to_vec();
@@ -129,16 +235,33 @@ impl AdminWsClient {
         *self.message_closure.borrow_mut() = Some(onmessage);
 
         // Error handler
+        let conn_state = self.connection_state;
+        let last_error = self.last_error;
         let onerror = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
-            tracing::error!("[gm-ws] WebSocket error: {:?}", e.message());
+            let current_gen = CONNECTION_GEN.with(|g| g.get());
+            if current_gen != conn_gen {
+                return;
+            }
+
+            let err_msg = e.message();
+            tracing::error!("[gm-ws] WebSocket error: {:?}", err_msg);
+            conn_state.set(ConnectionState::Error);
+            last_error.set(Some(err_msg));
         }) as Box<dyn FnMut(_)>);
         ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
         // Store closure to prevent memory leak
         *self.error_closure.borrow_mut() = Some(onerror);
 
         // Close handler
+        let conn_state = self.connection_state;
         let onclose = Closure::wrap(Box::new(move |_: web_sys::CloseEvent| {
+            let current_gen = CONNECTION_GEN.with(|g| g.get());
+            if current_gen != conn_gen {
+                return;
+            }
+
             tracing::info!("[gm-ws] Connection closed");
+            conn_state.set(ConnectionState::Disconnected);
         }) as Box<dyn FnMut(_)>);
         ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
         // Store closure to prevent memory leak
@@ -153,17 +276,41 @@ impl AdminWsClient {
     }
 
     /// Send an admin message
-    fn send(&self, msg: AdminClientMessage) {
+    fn send(&self, msg: AdminClientMessage) -> bool {
         let client_msg = ClientMessage::Admin(msg);
 
-        if let Ok(bytes) = rmp_serde::to_vec(&client_msg) {
-            if let Some(ws) = self.ws.borrow().as_ref() {
-                let array = js_sys::Uint8Array::from(&bytes[..]);
-                if let Err(e) = ws.send_with_array_buffer(&array.buffer()) {
-                    tracing::error!("[gm-ws] Failed to send: {:?}", e);
-                }
-            }
+        let Some(ws) = self.ws.borrow().as_ref().cloned() else {
+            let err = "Cannot send - no WebSocket connection";
+            tracing::error!("[gm-ws] {}", err);
+            self.last_error.set(Some(err.to_string()));
+            return false;
+        };
+
+        // Check WebSocket ready state
+        const WS_OPEN: u16 = 1; // WebSocket.OPEN
+        if ws.ready_state() != WS_OPEN {
+            let err = format!("Cannot send - WebSocket not open (state: {})", ws.ready_state());
+            tracing::error!("[gm-ws] {}", err);
+            self.last_error.set(Some(err));
+            return false;
         }
+
+        let Ok(bytes) = rmp_serde::to_vec(&client_msg) else {
+            let err = "Failed to serialize message";
+            tracing::error!("[gm-ws] {}", err);
+            self.last_error.set(Some(err.to_string()));
+            return false;
+        };
+
+        let array = js_sys::Uint8Array::from(&bytes[..]);
+        if let Err(e) = ws.send_with_array_buffer(&array.buffer()) {
+            let err = format!("Failed to send: {:?}", e);
+            tracing::error!("[gm-ws] {}", err);
+            self.last_error.set(Some(err));
+            return false;
+        }
+
+        true
     }
 
     /// Request list of scripts
@@ -500,16 +647,24 @@ fn handle_server_message(msg: ServerMessage) {
 
 /// Handle admin-specific messages
 fn handle_admin_message(msg: AdminServerMessage) {
-    // Try to get contexts - they may not be available during initial setup
-    let gm_state = use_context::<GMEditorState>();
-    let staged = use_context::<StagedChangesState>();
+    // Get stored state references (NOT use_context - we're outside reactive context!)
+    let Some(refs) = get_state_refs() else {
+        tracing::warn!("[gm-ws] State refs not initialized, dropping message");
+        return;
+    };
+
+    let gm_state = refs.gm_state;
+    let staged = refs.staged;
+    let debug_state = refs.debug;
+    let schema_state = refs.schema;
+    let validation_state = refs.validation;
+    let inspector_state = refs.inspector;
+    let export_state = refs.export;
 
     match msg {
         AdminServerMessage::ScriptList { files } => {
-            if let Some(state) = gm_state {
-                state.scripts.set(files);
-                state.loading_scripts.set(false);
-            }
+            gm_state.scripts.set(files);
+            gm_state.loading_scripts.set(false);
         }
 
         AdminServerMessage::ScriptContent {
@@ -517,19 +672,15 @@ fn handle_admin_message(msg: AdminServerMessage) {
             content,
             last_modified: _,
         } => {
-            if let Some(state) = gm_state {
-                state.selected_script.set(Some(path));
-                state.script_content.set(content.clone());
-                state.script_original.set(content);
-                state.loading_scripts.set(false);
-            }
+            gm_state.selected_script.set(Some(path));
+            gm_state.script_content.set(content.clone());
+            gm_state.script_original.set(content);
+            gm_state.loading_scripts.set(false);
         }
 
         AdminServerMessage::SimConfigData { config } => {
-            if let Some(state) = gm_state {
-                state.sim_config.set(Some(config));
-                state.loading_config.set(false);
-            }
+            gm_state.sim_config.set(Some(config));
+            gm_state.loading_config.set(false);
         }
 
         AdminServerMessage::EntityList {
@@ -537,29 +688,21 @@ fn handle_admin_message(msg: AdminServerMessage) {
             total_count: _,
             entity_type: _,
         } => {
-            if let Some(state) = gm_state {
-                state.entities.set(entities);
-                state.loading_entities.set(false);
-            }
+            gm_state.entities.set(entities);
+            gm_state.loading_entities.set(false);
         }
 
         AdminServerMessage::EntityDetails { data, .. } => {
-            if let Some(state) = gm_state {
-                state.entity_details.set(Some(data));
-            }
+            gm_state.entity_details.set(Some(data));
         }
 
         AdminServerMessage::SectorList { sectors } => {
-            if let Some(state) = gm_state {
-                state.sectors.set(sectors);
-            }
+            gm_state.sectors.set(sectors);
         }
 
         AdminServerMessage::StagedPreview { changes, errors } => {
-            if let Some(staged) = staged {
-                staged.update_previews(changes, errors);
-                staged.preview_loading.set(false);
-            }
+            staged.update_previews(changes, errors);
+            staged.preview_loading.set(false);
         }
 
         AdminServerMessage::CommitResult {
@@ -567,27 +710,23 @@ fn handle_admin_message(msg: AdminServerMessage) {
             applied_count,
             errors,
         } => {
-            if let Some(staged) = staged {
-                staged.commit_loading.set(false);
-                if success {
-                    staged.clear();
-                    staged
-                        .last_result
-                        .set(Some(format!("Successfully applied {} changes", applied_count)));
-                } else {
-                    staged
-                        .last_result
-                        .set(Some(format!("Commit failed: {}", errors.join(", "))));
-                }
+            staged.commit_loading.set(false);
+            if success {
+                staged.clear();
+                staged
+                    .last_result
+                    .set(Some(format!("Successfully applied {} changes", applied_count)));
+            } else {
+                staged
+                    .last_result
+                    .set(Some(format!("Commit failed: {}", errors.join(", "))));
             }
         }
 
         AdminServerMessage::AdminError { code, message } => {
             tracing::error!("[gm-ws] Admin error {}: {}", code, message);
-            if let Some(state) = gm_state {
-                state.error.set(Some(format!("{}: {}", code, message)));
-                state.clear_error_delayed();
-            }
+            gm_state.error.set(Some(format!("{}: {}", code, message)));
+            gm_state.clear_error_delayed();
         }
 
         // Playtest messages - not yet handled in GM editor UI
@@ -635,62 +774,52 @@ fn handle_admin_message(msg: AdminServerMessage) {
         AdminServerMessage::ScriptError { script, function, message, line, column, tick } => {
             tracing::warn!("[gm-ws] Script error in {}::{}:{}: {} (tick {})",
                 script, function, line, message, tick);
-            if let Some(state) = gm_state {
-                state.add_script_error(script, function, message, line, column, tick);
-            }
+            gm_state.add_script_error(script, function, message, line, column, tick);
         }
 
         AdminServerMessage::ScriptErrors { errors } => {
             tracing::info!("[gm-ws] Received {} script errors", errors.len());
-            if let Some(state) = gm_state {
-                for error in errors {
-                    state.add_script_error(
-                        error.script,
-                        error.function,
-                        error.message,
-                        error.line,
-                        error.column,
-                        error.tick,
-                    );
-                }
+            for error in errors {
+                gm_state.add_script_error(
+                    error.script,
+                    error.function,
+                    error.message,
+                    error.line,
+                    error.column,
+                    error.tick,
+                );
             }
         }
 
         AdminServerMessage::ScriptReloaded { path, success, error, warnings } => {
             if success {
                 tracing::info!("[gm-ws] Script reloaded: {} ({} warnings)", path, warnings.len());
-                if let Some(state) = gm_state {
-                    state.add_notification(format!("Reloaded: {}", path), "success".to_string());
-                    for warning in warnings {
-                        state.add_notification(format!("Warning: {}", warning), "warning".to_string());
-                    }
+                gm_state.add_notification(format!("Reloaded: {}", path), "success".to_string());
+                for warning in warnings {
+                    gm_state.add_notification(format!("Warning: {}", warning), "warning".to_string());
                 }
             } else {
                 tracing::warn!("[gm-ws] Script reload failed: {} - {:?}", path, error);
-                if let Some(state) = gm_state {
-                    state.add_notification(
-                        format!("Reload failed: {} - {}", path, error.unwrap_or_default()),
-                        "error".to_string(),
-                    );
-                }
+                gm_state.add_notification(
+                    format!("Reload failed: {} - {}", path, error.unwrap_or_default()),
+                    "error".to_string(),
+                );
             }
         }
 
         AdminServerMessage::DefinitionsReloaded { file, ships_loaded, weapons_loaded, errors } => {
             tracing::info!("[gm-ws] Definitions reloaded: {} ships, {} weapons from {}",
                 ships_loaded, weapons_loaded, file);
-            if let Some(state) = gm_state {
-                if errors.is_empty() {
-                    state.add_notification(
-                        format!("Reloaded: {} ships, {} weapons", ships_loaded, weapons_loaded),
-                        "success".to_string(),
-                    );
-                } else {
-                    state.add_notification(
-                        format!("Partial reload: {} errors", errors.len()),
-                        "warning".to_string(),
-                    );
-                }
+            if errors.is_empty() {
+                gm_state.add_notification(
+                    format!("Reloaded: {} ships, {} weapons", ships_loaded, weapons_loaded),
+                    "success".to_string(),
+                );
+            } else {
+                gm_state.add_notification(
+                    format!("Partial reload: {} errors", errors.len()),
+                    "warning".to_string(),
+                );
             }
         }
 
@@ -706,80 +835,59 @@ fn handle_admin_message(msg: AdminServerMessage) {
 
         AdminServerMessage::DebugSessionStarted { session_id } => {
             tracing::info!("[gm-ws] Debug session started: {}", session_id);
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_session_started(session_id);
-            }
+            debug_state.on_session_started(session_id);
         }
 
         AdminServerMessage::DebugSessionEnded => {
             tracing::info!("[gm-ws] Debug session ended");
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_session_ended();
-            }
+            debug_state.on_session_ended();
         }
 
         AdminServerMessage::BreakpointSet { breakpoint } => {
             tracing::debug!("[gm-ws] Breakpoint set: {}:{}",
                 breakpoint.script, breakpoint.line);
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_breakpoint_set(breakpoint);
-            }
+            debug_state.on_breakpoint_set(breakpoint);
         }
 
         AdminServerMessage::FunctionBreakpointSet { breakpoint } => {
             tracing::debug!("[gm-ws] Function breakpoint set: {}",
                 breakpoint.function_name);
-            // Function breakpoints stored separately in debug state
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.function_breakpoints.update(|bps| bps.push(breakpoint));
-            }
+            debug_state.function_breakpoints.update(|bps| bps.push(breakpoint));
         }
 
         AdminServerMessage::BreakpointRemoved { breakpoint_id } => {
             tracing::debug!("[gm-ws] Breakpoint removed: {}", breakpoint_id);
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_breakpoint_removed(breakpoint_id);
-            }
+            debug_state.on_breakpoint_removed(breakpoint_id);
         }
 
         AdminServerMessage::BreakpointToggled { breakpoint_id, enabled } => {
             tracing::debug!("[gm-ws] Breakpoint toggled: {} = {}",
                 breakpoint_id, enabled);
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_breakpoint_toggled(breakpoint_id, enabled);
-            }
+            debug_state.on_breakpoint_toggled(breakpoint_id, enabled);
         }
 
         AdminServerMessage::BreakpointList { breakpoints, function_breakpoints } => {
             tracing::debug!("[gm-ws] Received {} breakpoints, {} function breakpoints",
                 breakpoints.len(), function_breakpoints.len());
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_breakpoint_list(breakpoints, function_breakpoints);
-            }
+            debug_state.on_breakpoint_list(breakpoints, function_breakpoints);
         }
 
         AdminServerMessage::DebugPaused { script, line, column, reason, call_stack, entity_context } => {
             tracing::info!("[gm-ws] Debug paused at {}:{}", script, line);
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_paused(script, line, column, reason, call_stack, entity_context);
-                // Automatically request variables for frame 0
-                with_admin_ws(|ws| ws.get_variables(0));
-            }
+            debug_state.on_paused(script, line, column, reason, call_stack, entity_context);
+            // Automatically request variables for frame 0
+            with_admin_ws(|ws| ws.get_variables(0));
         }
 
         AdminServerMessage::DebugResumed => {
             tracing::debug!("[gm-ws] Debug resumed");
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_resumed();
-            }
+            debug_state.on_resumed();
         }
 
         AdminServerMessage::DebugVariables { frame_index, variables } => {
             tracing::debug!("[gm-ws] Received {} variables for frame {}",
                 variables.len(), frame_index);
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_variables(frame_index, variables);
-            }
+            debug_state.on_variables(frame_index, variables);
         }
 
         AdminServerMessage::EvaluationResult { expression, result, type_name, success, error } => {
@@ -796,16 +904,12 @@ fn handle_admin_message(msg: AdminServerMessage) {
         AdminServerMessage::CallStack { frames } => {
             tracing::debug!("[gm-ws] Received call stack with {} frames",
                 frames.len());
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_call_stack(frames);
-            }
+            debug_state.on_call_stack(frames);
         }
 
         AdminServerMessage::DebugError { message } => {
             tracing::error!("[gm-ws] Debug error: {}", message);
-            if let Some(debug_state) = use_context::<DebugPanelState>() {
-                debug_state.on_error(message);
-            }
+            debug_state.on_error(message);
         }
 
         AdminServerMessage::VariableExpanded { variable_path, children } => {
@@ -819,24 +923,18 @@ fn handle_admin_message(msg: AdminServerMessage) {
 
         AdminServerMessage::ArchetypeSchemas { schemas } => {
             tracing::info!("[gm-ws] Received {} archetype schemas", schemas.len());
-            if let Some(schema_state) = use_context::<SchemaState>() {
-                schema_state.on_schemas(schemas);
-            }
+            schema_state.on_schemas(schemas);
         }
 
         AdminServerMessage::ArchetypeSchemaDetail { archetype_type, name, fields } => {
             tracing::info!("[gm-ws] Schema detail for {}: {} ({} fields)",
                 archetype_type, name, fields.len());
-            if let Some(schema_state) = use_context::<SchemaState>() {
-                schema_state.on_schema_detail(archetype_type, name, fields);
-            }
+            schema_state.on_schema_detail(archetype_type, name, fields);
         }
 
         AdminServerMessage::ActionSchemas { actions } => {
             tracing::info!("[gm-ws] Received {} action schemas", actions.len());
-            if let Some(schema_state) = use_context::<SchemaState>() {
-                schema_state.on_action_schemas(actions);
-            }
+            schema_state.on_action_schemas(actions);
         }
 
         // === Validation ===
@@ -848,9 +946,7 @@ fn handle_admin_message(msg: AdminServerMessage) {
                 tracing::warn!("[gm-ws] Validation failed for {}: {} errors, {} warnings",
                     path, errors.len(), warnings.len());
             }
-            if let Some(validation_state) = use_context::<ValidationState>() {
-                validation_state.on_validation_result(path, errors, warnings, is_valid);
-            }
+            validation_state.on_validation_result(path, errors, warnings, is_valid);
         }
 
         AdminServerMessage::DefinitionValidationResult { definition_type, errors, warnings, is_valid } => {
@@ -860,63 +956,47 @@ fn handle_admin_message(msg: AdminServerMessage) {
                 tracing::warn!("[gm-ws] Definition validation failed for {}: {} errors, {} warnings",
                     definition_type, errors.len(), warnings.len());
             }
-            if let Some(validation_state) = use_context::<ValidationState>() {
-                validation_state.on_validation_result(definition_type, errors, warnings, is_valid);
-            }
+            validation_state.on_validation_result(definition_type, errors, warnings, is_valid);
         }
 
         // === State Introspection ===
 
         AdminServerMessage::StateSubscribed { entity_types } => {
             tracing::info!("[gm-ws] Subscribed to state updates for {:?}", entity_types);
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_subscribed(entity_types);
-            }
+            inspector_state.on_subscribed(entity_types);
         }
 
         AdminServerMessage::StateUnsubscribed => {
             tracing::info!("[gm-ws] Unsubscribed from state updates");
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_unsubscribed();
-            }
+            inspector_state.on_unsubscribed();
         }
 
         AdminServerMessage::StateUpdate { tick, entity_type, changes } => {
             tracing::debug!("[gm-ws] State update (tick {}): {:?} - {} changes",
                 tick, entity_type, changes.len());
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_state_update(tick, entity_type, changes);
-            }
+            inspector_state.on_state_update(tick, entity_type, changes);
         }
 
         AdminServerMessage::StateSnapshot { tick, entity_type, entities, total_count } => {
             tracing::info!("[gm-ws] State snapshot (tick {}): {:?} - {} of {} entities",
                 tick, entity_type, entities.len(), total_count);
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_snapshot(tick, entity_type, entities, total_count);
-            }
+            inspector_state.on_snapshot(tick, entity_type, entities, total_count);
         }
 
         AdminServerMessage::WatchCreated { watch } => {
             tracing::info!("[gm-ws] Watch created: {} ({})",
                 watch.name.as_deref().unwrap_or("unnamed"), watch.id);
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_watch_created(watch);
-            }
+            inspector_state.on_watch_created(watch);
         }
 
         AdminServerMessage::WatchRemoved { watch_id } => {
             tracing::info!("[gm-ws] Watch removed: {}", watch_id);
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_watch_removed(watch_id);
-            }
+            inspector_state.on_watch_removed(watch_id);
         }
 
         AdminServerMessage::WatchList { watches } => {
             tracing::info!("[gm-ws] Received {} watches", watches.len());
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_watch_list(watches);
-            }
+            inspector_state.on_watch_list(watches);
         }
 
         AdminServerMessage::WatchValue { watch_id, tick, value, error } => {
@@ -925,82 +1005,58 @@ fn handle_admin_message(msg: AdminServerMessage) {
             } else {
                 tracing::debug!("[gm-ws] Watch {} value at tick {}: {:?}", watch_id, tick, value);
             }
-            if let Some(inspector_state) = use_context::<InspectorState>() {
-                inspector_state.on_watch_value(watch_id, tick, value, error);
-            }
+            inspector_state.on_watch_value(watch_id, tick, value, error);
         }
 
         // === Export ===
 
         AdminServerMessage::ExportCreated { export_id, name } => {
             tracing::info!("[gm-ws] Export created: {} ({})", name, export_id);
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_export_created(export_id, name.clone());
-            }
-            if let Some(state) = gm_state {
-                state.add_notification(format!("Export '{}' started", name), "info".to_string());
-            }
+            export_state.on_export_created(export_id, name.clone());
+            gm_state.add_notification(format!("Export '{}' started", name), "info".to_string());
         }
 
         AdminServerMessage::ExportProgress { export_id, phase, percent } => {
             tracing::info!("[gm-ws] Export {} progress: {} ({}%)", export_id, phase, percent);
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_progress(export_id, phase, percent);
-            }
+            export_state.on_progress(export_id, phase, percent);
         }
 
         AdminServerMessage::ExportCompleted { export_id, size_bytes, download_url } => {
             let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
             tracing::info!("[gm-ws] Export {} completed: {:.2}MB, url: {}",
                 export_id, size_mb, download_url);
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_completed(export_id, size_bytes, download_url);
-            }
-            if let Some(state) = gm_state {
-                state.add_notification(
-                    format!("Export completed ({:.2}MB)", size_mb),
-                    "success".to_string(),
-                );
-            }
+            export_state.on_completed(export_id, size_bytes, download_url);
+            gm_state.add_notification(
+                format!("Export completed ({:.2}MB)", size_mb),
+                "success".to_string(),
+            );
         }
 
         AdminServerMessage::ExportFailed { export_id, error } => {
             tracing::error!("[gm-ws] Export {} failed: {}", export_id, error);
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_failed(export_id, error.clone());
-            }
-            if let Some(state) = gm_state {
-                state.add_notification(format!("Export failed: {}", error), "error".to_string());
-            }
+            export_state.on_failed(export_id, error.clone());
+            gm_state.add_notification(format!("Export failed: {}", error), "error".to_string());
         }
 
         AdminServerMessage::ExportStatus { export } => {
             tracing::info!("[gm-ws] Export status: {} - {:?}", export.name, export.status);
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_status(export);
-            }
+            export_state.on_status(export);
         }
 
         AdminServerMessage::ExportList { exports } => {
             tracing::info!("[gm-ws] Received {} exports", exports.len());
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_export_list(exports);
-            }
+            export_state.on_export_list(exports);
         }
 
         AdminServerMessage::ExportDeleted { export_id } => {
             tracing::info!("[gm-ws] Export deleted: {}", export_id);
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_deleted(export_id);
-            }
+            export_state.on_deleted(export_id);
         }
 
         AdminServerMessage::ExportDownloadUrl { export_id, url, expires_at } => {
             tracing::info!("[gm-ws] Export {} download URL: {} (expires {})",
                 export_id, url, expires_at);
-            if let Some(export_state) = use_context::<ExportState>() {
-                export_state.on_download_url(export_id, url, expires_at);
-            }
+            export_state.on_download_url(export_id, url, expires_at);
         }
     }
 }

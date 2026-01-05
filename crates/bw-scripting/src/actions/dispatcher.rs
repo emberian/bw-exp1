@@ -178,43 +178,35 @@ impl ActionDispatcher {
                 }
                 ActionRequirement::ShipStatus(allowed) => {
                     // Check ship status via state accessor
-                    if let Some(ref accessor) = self.state_accessor {
-                        if let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id) {
-                            if !allowed.iter().any(|s| s == &ship.status) {
+                    if let Some(ref accessor) = self.state_accessor
+                        && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
+                            && !allowed.iter().any(|s| s == &ship.status) {
                                 return Err(format!(
                                     "Action requires ship status {:?}, but ship is '{}'",
                                     allowed, ship.status
                                 ));
                             }
-                        }
-                    }
                 }
                 ActionRequirement::MustBeDocked => {
-                    if let Some(ref accessor) = self.state_accessor {
-                        if let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id) {
-                            if ship.status != "docked" {
+                    if let Some(ref accessor) = self.state_accessor
+                        && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
+                            && ship.status != "docked" {
                                 return Err("Must be docked to perform this action".to_string());
                             }
-                        }
-                    }
                 }
                 ActionRequirement::MustBeUndocked => {
-                    if let Some(ref accessor) = self.state_accessor {
-                        if let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id) {
-                            if ship.status == "docked" {
+                    if let Some(ref accessor) = self.state_accessor
+                        && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
+                            && ship.status == "docked" {
                                 return Err("Cannot perform this action while docked".to_string());
                             }
-                        }
-                    }
                 }
                 ActionRequirement::NotInCombat => {
-                    if let Some(ref accessor) = self.state_accessor {
-                        if let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id) {
-                            if ship.status == "in_combat" {
+                    if let Some(ref accessor) = self.state_accessor
+                        && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
+                            && ship.status == "in_combat" {
                                 return Err("Cannot perform this action during combat".to_string());
                             }
-                        }
-                    }
                 }
                 ActionRequirement::SameSector => {
                     // This requires target info which should be in params

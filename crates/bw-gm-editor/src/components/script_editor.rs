@@ -1,15 +1,12 @@
 //! Script editor component with CodeMirror integration
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use bw_shared::StagedChange;
 
 use crate::api::with_admin_ws;
-use crate::bindings::{init_codemirror, update_codemirror_content};
+use crate::bindings::{init_codemirror, update_codemirror_content, CodeMirrorHandle};
 use crate::state::{GMEditorState, StagedChangesState};
 
 /// Script editor with file browser and CodeMirror
@@ -29,29 +26,44 @@ pub fn ScriptEditor() -> impl IntoView {
     // Reference to the CodeMirror container
     let editor_ref = NodeRef::<leptos::html::Div>::new();
 
-    // Track if CodeMirror has been initialized
-    let cm_initialized = Arc::new(AtomicBool::new(false));
+    // Track CodeMirror handle for cleanup (CodeMirrorHandle is Copy so RwSignal works)
+    let cm_handle = RwSignal::new(None::<CodeMirrorHandle>);
+
+    // Cleanup when component unmounts
+    on_cleanup({
+        let editor_ref = editor_ref.clone();
+        move || {
+            if let Some(handle) = cm_handle.get() {
+                if let Some(el) = editor_ref.get()
+                    && let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>()
+                {
+                    handle.destroy(html_el);
+                }
+            }
+        }
+    });
 
     // Initialize CodeMirror when content changes from server
     Effect::new({
-        let cm_initialized = cm_initialized.clone();
         move |_| {
             // Trigger on script_original changes (set when file is loaded)
             let content = gm_state.script_original.get();
 
-            if let Some(el) = editor_ref.get() {
-                if let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>() {
-                    if !cm_initialized.load(Ordering::SeqCst) && !content.is_empty() {
-                        // First initialization
-                        let on_change = move |new_content: String| {
-                            gm_state.script_content.set(new_content);
-                        };
-                        init_codemirror(html_el, &content, on_change);
-                        cm_initialized.store(true, Ordering::SeqCst);
-                    } else if cm_initialized.load(Ordering::SeqCst) {
-                        // Update existing editor
-                        update_codemirror_content(html_el, &content);
-                    }
+            if let Some(el) = editor_ref.get()
+                && let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>()
+            {
+                let has_handle = cm_handle.get().is_some();
+
+                if !has_handle && !content.is_empty() {
+                    // First initialization
+                    let on_change = move |new_content: String| {
+                        gm_state.script_content.set(new_content);
+                    };
+                    let handle = init_codemirror(html_el, &content, on_change);
+                    cm_handle.set(Some(handle));
+                } else if has_handle {
+                    // Update existing editor
+                    update_codemirror_content(html_el, &content);
                 }
             }
         }

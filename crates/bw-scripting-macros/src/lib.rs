@@ -171,8 +171,7 @@ fn impl_rhai_serialize(input: &DeriveInput) -> syn::Result<TokenStream2> {
             continue;
         }
 
-        let key_name = attrs.rename.as_ref()
-            .map(|s| s.clone())
+        let key_name = attrs.rename.clone()
             .unwrap_or_else(|| field_name.to_string());
 
         if attrs.flatten {
@@ -310,8 +309,7 @@ fn impl_rhai_deserialize(input: &DeriveInput) -> syn::Result<TokenStream2> {
             continue;
         }
 
-        let key_name = attrs.rename.as_ref()
-            .map(|s| s.clone())
+        let key_name = attrs.rename.clone()
             .unwrap_or_else(|| field_name.to_string());
 
         let parser = if let Some(with_fn) = &attrs.with_fn {
@@ -550,8 +548,7 @@ fn impl_rhai_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         // Get the Rhai key name (respecting rename)
-        let key_name = attrs.rename.as_ref()
-            .map(|s| s.clone())
+        let key_name = attrs.rename.clone()
             .unwrap_or_else(|| field_name.to_string());
 
         // Get the Rust type as a string for schema

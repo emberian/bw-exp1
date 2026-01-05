@@ -235,13 +235,11 @@ impl BehaviorManager {
             let result = self.call_hook(id, "on_update", tick, delta_time);
 
             // Update local data if successful
-            if result.success {
-                if let Some(data) = &result.updated_local_data {
-                    if let Some(behavior) = self.behaviors.write().get_mut(&id) {
+            if result.success
+                && let Some(data) = &result.updated_local_data
+                    && let Some(behavior) = self.behaviors.write().get_mut(&id) {
                         behavior.local_data = data.clone();
                     }
-                }
-            }
 
             results.push(result);
         }
@@ -281,14 +279,13 @@ impl BehaviorManager {
                 let result = self.bt_runner.run(rhai_engine, tree, &ctx, &behavior.script_path);
 
                 // Save updated local_data if any was returned
-                if let Some(updated_data) = result.updated_data {
-                    if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
+                if let Some(updated_data) = result.updated_data
+                    && let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
                         // Merge updated data into existing local_data
                         for (key, value) in updated_data {
                             behavior.local_data.insert(key, value);
                         }
                     }
-                }
 
                 if let Some(error) = result.error {
                     tracing::warn!(
@@ -356,13 +353,11 @@ impl BehaviorManager {
             // (we call it anyway and let it fail silently if not present)
             let result = self.call_event_hook(&behavior, event_data.clone(), tick);
 
-            if result.success {
-                if let Some(data) = &result.updated_local_data {
-                    if let Some(b) = self.behaviors.write().get_mut(&id) {
+            if result.success
+                && let Some(data) = &result.updated_local_data
+                    && let Some(b) = self.behaviors.write().get_mut(&id) {
                         b.local_data = data.clone();
                     }
-                }
-            }
 
             results.push(result);
         }
@@ -372,23 +367,21 @@ impl BehaviorManager {
 
     /// Pause a behavior.
     pub fn pause(&self, behavior_id: Uuid) -> bool {
-        if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
-            if behavior.state == BehaviorState::Active {
+        if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id)
+            && behavior.state == BehaviorState::Active {
                 behavior.state = BehaviorState::Paused;
                 return true;
             }
-        }
         false
     }
 
     /// Resume a paused behavior.
     pub fn resume(&self, behavior_id: Uuid) -> bool {
-        if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id) {
-            if behavior.state == BehaviorState::Paused {
+        if let Some(behavior) = self.behaviors.write().get_mut(&behavior_id)
+            && behavior.state == BehaviorState::Paused {
                 behavior.state = BehaviorState::Active;
                 return true;
             }
-        }
         false
     }
 

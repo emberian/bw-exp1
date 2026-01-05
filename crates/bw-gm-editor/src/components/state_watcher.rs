@@ -1,4 +1,5 @@
 //! State watcher component for tracking expressions over time
+#![allow(dead_code)] // Leptos component props appear unused to clippy
 
 use leptos::prelude::*;
 use bw_shared::dto::WatchDto;
@@ -141,6 +142,7 @@ pub fn StateWatcher() -> impl IntoView {
 }
 
 /// Watch list display
+#[allow(unused)] // Clippy false positive - props used via macro expansion
 #[component]
 fn WatchList(watches: RwSignal<Vec<WatchDto>>) -> impl IntoView {
     view! {
@@ -168,6 +170,7 @@ fn WatchList(watches: RwSignal<Vec<WatchDto>>) -> impl IntoView {
 }
 
 /// Single watch card
+#[allow(unused)] // Clippy false positive - props used via macro expansion
 #[component]
 fn WatchCard(watch: WatchDto) -> impl IntoView {
     let watch_id = watch.id;

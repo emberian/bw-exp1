@@ -202,11 +202,10 @@ impl<C: HandlerContext> HandlerRegistry<C> {
         let handler = self.handlers.write().remove(name);
 
         if let Some(ref h) = handler {
-            if let HandlerType::Script { ref script_path, .. } = h.handler_type {
-                if let Some(names) = self.by_script.write().get_mut(script_path) {
+            if let HandlerType::Script { ref script_path, .. } = h.handler_type
+                && let Some(names) = self.by_script.write().get_mut(script_path) {
                     names.retain(|n| n != name);
                 }
-            }
             tracing::debug!(name = %name, "Handler unregistered");
         }
 

@@ -1,0 +1,63 @@
+[package]
+name = "bw-runtime"
+version.workspace = true
+edition.workspace = true
+description = "BLACKWING game server runtime - HTTP API, WebSocket, and game loop orchestration"
+
+[[bin]]
+name = "blackwing-server"
+path = "src/main.rs"
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+bw-game = { path = "../bw-game" }
+bw-shared = { path = "../bw-shared" }
+bw-scripting = { path = "../bw-scripting" }
+bw-auth = { path = "../bw-auth" }
+bw-persistence = { path = "../bw-persistence" }
+bw-playtest = { path = "../bw-playtest" }
+
+# Async
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+
+# Web
+axum.workspace = true
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+
+# Concurrency
+dashmap.workspace = true
+parking_lot.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+rhai.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Utils
+thiserror.workspace = true
+anyhow.workspace = true
+dotenvy.workspace = true
+rand.workspace = true
+toml.workspace = true
+
+# Authentication (primitives in bw-auth, middleware here)
+
+# File watching (hot-reload, debug only)
+notify = "7.0"
+
+# Rate limiting
+governor = "0.8"
+
+[dev-dependencies]
+tempfile = "3.14"

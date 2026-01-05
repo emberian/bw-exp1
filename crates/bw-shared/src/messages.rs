@@ -159,10 +159,20 @@ impl ClientMessage {
     }
 
     pub fn squadron_action(action_type: impl Into<String>, params: serde_json::Value) -> Self {
-        let mut p = params;
-        if let Some(obj) = p.as_object_mut() {
-            obj.insert("action_type".to_string(), serde_json::Value::String(action_type.into()));
-        }
+        let action_type = action_type.into();
+        let p = match params {
+            serde_json::Value::Object(mut obj) => {
+                obj.insert("action_type".to_string(), serde_json::Value::String(action_type));
+                serde_json::Value::Object(obj)
+            }
+            serde_json::Value::Null => {
+                serde_json::json!({ "action_type": action_type })
+            }
+            other => {
+                // Wrap non-object params in an object with action_type
+                serde_json::json!({ "action_type": action_type, "params": other })
+            }
+        };
         Self::action("squadron_action", p)
     }
 

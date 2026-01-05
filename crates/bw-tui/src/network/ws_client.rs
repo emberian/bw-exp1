@@ -106,7 +106,7 @@ async fn run_connection(
     if let Some(token) = token {
         let auth_msg = ClientMessage::Authenticate { token };
         let bytes = serialize_message(&auth_msg)?;
-        write.send(Message::Binary(bytes.into())).await?;
+        write.send(Message::Binary(bytes)).await?;
     }
 
     // Main loop - handle both incoming and outgoing messages
@@ -115,7 +115,7 @@ async fn run_connection(
             // Outgoing message from application
             Some(msg) = rx.recv() => {
                 let bytes = serialize_message(&msg)?;
-                if let Err(e) = write.send(Message::Binary(bytes.into())).await {
+                if let Err(e) = write.send(Message::Binary(bytes)).await {
                     let _ = event_tx.send(NetworkEvent::Disconnected(e.to_string()));
                     break;
                 }

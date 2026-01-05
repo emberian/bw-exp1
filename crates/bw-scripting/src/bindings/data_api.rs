@@ -103,8 +103,8 @@ impl DataStore {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "toml") {
-                if let Some(category) = path.file_stem().and_then(|s| s.to_str()) {
+            if path.extension().is_some_and(|ext| ext == "toml")
+                && let Some(category) = path.file_stem().and_then(|s| s.to_str()) {
                     match self.load_file(&path) {
                         Ok(entries) => {
                             tracing::info!("Loaded {} entries from data/{}.toml", entries.len(), category);
@@ -115,7 +115,6 @@ impl DataStore {
                         }
                     }
                 }
-            }
         }
     }
 
@@ -514,7 +513,7 @@ fn effect_to_dynamic(arch: &EffectArchetype) -> Dynamic {
 
     // Convert params map
     let params: Map = arch.params.iter()
-        .map(|(k, v)| (k.clone().into(), v.clone()))
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     map.insert("params".into(), Dynamic::from(params));
 
@@ -557,7 +556,7 @@ fn ability_to_dynamic(arch: &AbilityArchetype) -> Dynamic {
         let mut emap = Map::new();
         emap.insert("effect_id".into(), Dynamic::from(e.effect_id.clone()));
         let params: Map = e.params.iter()
-            .map(|(k, v)| (k.clone().into(), v.clone()))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         emap.insert("params".into(), Dynamic::from(params));
         Dynamic::from(emap)

@@ -474,17 +474,17 @@ impl WsService {
         Effect::new(move |_| {
             // First check if WS is open - only drain queue if we can actually send
             // This prevents message loss when multiple effects exist from reconnections
-            if let Some(ref ws) = *ws_send.borrow() {
-                if ws.ready_state() == WebSocket::OPEN {
-                    // Drain and send all queued messages
-                    let messages: Vec<ClientMessage> = outgoing_queue_signal
-                        .try_update(|queue| std::mem::take(queue))
-                        .unwrap_or_default();
+            if let Some(ref ws) = *ws_send.borrow()
+                && ws.ready_state() == WebSocket::OPEN
+            {
+                // Drain and send all queued messages
+                let messages: Vec<ClientMessage> = outgoing_queue_signal
+                    .try_update(std::mem::take)
+                    .unwrap_or_default();
 
-                    for msg in messages {
-                        if let Ok(bytes) = serialize_message(&msg) {
-                            let _ = ws.send_with_u8_array(&bytes);
-                        }
+                for msg in messages {
+                    if let Ok(bytes) = serialize_message(&msg) {
+                        let _ = ws.send_with_u8_array(&bytes);
                     }
                 }
             }

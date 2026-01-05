@@ -157,11 +157,10 @@ impl MissionGenerator {
         }
 
         // Check cooldown
-        if let Some(&last_time) = self.last_spawn_time.get(&sector.id) {
-            if current_time - last_time < self.config.min_cooldown as f64 {
+        if let Some(&last_time) = self.last_spawn_time.get(&sector.id)
+            && current_time - last_time < self.config.min_cooldown as f64 {
                 return None;
             }
-        }
 
         // Roll for spawn
         let mut rng = rand::thread_rng();

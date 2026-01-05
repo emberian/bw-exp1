@@ -29,14 +29,15 @@ use crate::context::with_accessor;
 ///
 /// # Clone Safety
 ///
-/// Clones share the same committed state via Arc<AtomicBool>, so
+/// Clones share the same finalized state via Arc<AtomicBool>, so
 /// committing or rolling back one clone affects all clones.
 #[derive(Debug, Clone)]
 pub struct TransactionContext {
     /// The checkpoint (mutation index) when transaction started.
     checkpoint: usize,
-    /// Whether commit() was called (shared across clones).
-    committed: Arc<AtomicBool>,
+    /// Whether the transaction has been finalized (committed or rolled back).
+    /// Shared across clones to ensure only one finalization occurs.
+    finalized: Arc<AtomicBool>,
 }
 
 impl TransactionContext {
@@ -48,20 +49,20 @@ impl TransactionContext {
 
         Self {
             checkpoint,
-            committed: Arc::new(AtomicBool::new(false)),
+            finalized: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Commit the transaction, making all mutations permanent.
     pub fn commit(&mut self) -> bool {
-        // Use compare_exchange to ensure only one commit succeeds
-        if self.committed.compare_exchange(
+        // Use compare_exchange to ensure only one finalization succeeds
+        if self.finalized.compare_exchange(
             false,
             true,
             Ordering::SeqCst,
             Ordering::SeqCst
         ).is_err() {
-            return true; // Already committed
+            return true; // Already finalized
         }
 
         with_accessor(|accessor| {
@@ -73,14 +74,14 @@ impl TransactionContext {
 
     /// Explicitly rollback the transaction.
     pub fn rollback(&mut self) {
-        // Use compare_exchange to ensure only one rollback succeeds
-        if self.committed.compare_exchange(
+        // Use compare_exchange to ensure only one finalization succeeds
+        if self.finalized.compare_exchange(
             false,
             true,
             Ordering::SeqCst,
             Ordering::SeqCst
         ).is_err() {
-            return; // Already committed or rolled back
+            return; // Already finalized (committed or rolled back)
         }
 
         with_accessor(|accessor| {
@@ -88,9 +89,9 @@ impl TransactionContext {
         });
     }
 
-    /// Check if transaction is committed.
-    pub fn is_committed(&mut self) -> bool {
-        self.committed.load(Ordering::SeqCst)
+    /// Check if transaction has been finalized (committed or rolled back).
+    pub fn is_finalized(&mut self) -> bool {
+        self.finalized.load(Ordering::SeqCst)
     }
 }
 
@@ -102,8 +103,8 @@ impl Default for TransactionContext {
 
 impl Drop for TransactionContext {
     fn drop(&mut self) {
-        // Auto-rollback if not committed (use compare_exchange to ensure only one drop does rollback)
-        if self.committed.compare_exchange(
+        // Auto-rollback if not finalized (use compare_exchange to ensure only one drop does rollback)
+        if self.finalized.compare_exchange(
             false,
             true,
             Ordering::SeqCst,
@@ -131,7 +132,7 @@ impl CustomType for TransactionContext {
             .with_name("TransactionContext")
             .with_fn("commit", Self::commit)
             .with_fn("rollback", Self::rollback)
-            .with_get("is_committed", Self::is_committed);
+            .with_get("is_finalized", Self::is_finalized);
     }
 }
 

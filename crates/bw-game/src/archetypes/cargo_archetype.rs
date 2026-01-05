@@ -160,9 +160,10 @@ impl CargoArchetype {
     }
 
     /// Calculate adjusted price based on volatility and a random factor.
+    /// Returns at least 1 to prevent zero or negative prices.
     pub fn calculate_price(&self, volatility_factor: f32) -> i64 {
         let adjustment = 1.0 + (volatility_factor * self.volatility);
-        (self.base_price as f32 * adjustment) as i64
+        ((self.base_price as f32 * adjustment) as i64).max(1)
     }
 
     /// Get demand multiplier for a station type.
@@ -263,5 +264,8 @@ mod tests {
 
         // Negative volatility
         assert_eq!(cargo.calculate_price(-0.5), 75);
+
+        // Extreme negative volatility should clamp to minimum of 1
+        assert_eq!(cargo.calculate_price(-3.0), 1);
     }
 }

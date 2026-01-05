@@ -143,11 +143,10 @@ impl BehaviorContext {
 
     /// Update local_data from a Rhai map.
     pub fn update_local_data(&mut self, map: &Map) {
-        if let Some(data) = map.get("local_data") {
-            if let Some(new_data) = data.clone().try_cast::<Map>() {
+        if let Some(data) = map.get("local_data")
+            && let Some(new_data) = data.clone().try_cast::<Map>() {
                 self.local_data = new_data;
             }
-        }
     }
 }
 

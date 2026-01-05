@@ -385,24 +385,24 @@ impl WatchRegistry {
 
         for watch_id in watch_ids {
             let mut watches = self.watches.write();
-            if let Some(watch) = watches.get_mut(&watch_id) {
-                if let Some(new_value) = get_value(&watch.property) {
-                    let old_value = watch.last_value.clone();
+            if let Some(watch) = watches.get_mut(&watch_id)
+                && let Some(new_value) = get_value(&watch.property)
+            {
+                let old_value = watch.last_value.clone();
 
-                    if watch.should_trigger(&new_value) {
-                        events.push(WatchTriggerEvent {
-                            watch_id: watch.id,
-                            entity_id: watch.entity_id,
-                            property: watch.property.clone(),
-                            old_value,
-                            new_value,
-                            callback: watch.callback.clone(),
-                            owner_script: watch.owner_script.clone(),
-                        });
+                if watch.should_trigger(&new_value) {
+                    events.push(WatchTriggerEvent {
+                        watch_id: watch.id,
+                        entity_id: watch.entity_id,
+                        property: watch.property.clone(),
+                        old_value,
+                        new_value,
+                        callback: watch.callback.clone(),
+                        owner_script: watch.owner_script.clone(),
+                    });
 
-                        if !watch.active {
-                            to_remove.push(watch_id);
-                        }
+                    if !watch.active {
+                        to_remove.push(watch_id);
                     }
                 }
             }

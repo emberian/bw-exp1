@@ -454,16 +454,14 @@ impl BehaviorTreeRunner {
             }
 
             DecoratorKind::Repeat(count) => {
-                {
+                if let Some(max) = count {
                     let states = self.states.read();
-                    if let Some(state) = states.get(&state_key) {
-                        if let Some(max) = count {
-                            if state.repeat_count >= *max {
-                                drop(states);
-                                self.states.write().remove(&state_key);
-                                return BtStatus::Success;
-                            }
-                        }
+                    if let Some(state) = states.get(&state_key)
+                        && state.repeat_count >= *max
+                    {
+                        drop(states);
+                        self.states.write().remove(&state_key);
+                        return BtStatus::Success;
                     }
                 }
 
@@ -492,12 +490,11 @@ impl BehaviorTreeRunner {
             DecoratorKind::Cooldown(seconds) => {
                 {
                     let states = self.states.read();
-                    if let Some(state) = states.get(&state_key) {
-                        if let Some(last) = state.last_execution {
-                            if ctx.game_time - last < *seconds {
-                                return BtStatus::Failure;
-                            }
-                        }
+                    if let Some(state) = states.get(&state_key)
+                        && let Some(last) = state.last_execution
+                        && ctx.game_time - last < *seconds
+                    {
+                        return BtStatus::Failure;
                     }
                 }
 
@@ -513,10 +510,10 @@ impl BehaviorTreeRunner {
             DecoratorKind::RunOnce => {
                 {
                     let states = self.states.read();
-                    if let Some(state) = states.get(&state_key) {
-                        if let Some(result) = state.stored_result {
-                            return result;
-                        }
+                    if let Some(state) = states.get(&state_key)
+                        && let Some(result) = state.stored_result
+                    {
+                        return result;
                     }
                 }
 
@@ -534,12 +531,11 @@ impl BehaviorTreeRunner {
 
                 {
                     let states = self.states.read();
-                    if let Some(state) = states.get(&time_key) {
-                        if let Some(start) = state.last_execution {
-                            if ctx.game_time - start > *seconds {
-                                return BtStatus::Failure;
-                            }
-                        }
+                    if let Some(state) = states.get(&time_key)
+                        && let Some(start) = state.last_execution
+                        && ctx.game_time - start > *seconds
+                    {
+                        return BtStatus::Failure;
                     }
                 }
 

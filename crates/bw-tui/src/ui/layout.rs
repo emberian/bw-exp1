@@ -97,13 +97,7 @@ fn draw_left_sidebar(frame: &mut Frame, area: Rect, state: &AppState) {
     };
 
     let block = Block::default()
-        .title(format!(
-            " {} ",
-            match state.ui.left_tab {
-                crate::state::LeftTab::Missions => "[1]Missions [2]Squad",
-                crate::state::LeftTab::Squadron => "[1]Missions [2]Squad",
-            }
-        ))
+        .title(" [1]Missions [2]Squad ")
         .borders(Borders::ALL)
         .border_style(border_style);
 
@@ -129,14 +123,7 @@ fn draw_right_sidebar(frame: &mut Frame, area: Rect, state: &AppState) {
     };
 
     let block = Block::default()
-        .title(format!(
-            " {} ",
-            match state.ui.right_tab {
-                crate::state::RightTab::Ship => "[1]Ship [2]Comms [3]Combat",
-                crate::state::RightTab::Comms => "[1]Ship [2]Comms [3]Combat",
-                crate::state::RightTab::Combat => "[1]Ship [2]Comms [3]Combat",
-            }
-        ))
+        .title(" [1]Ship [2]Comms [3]Combat ")
         .borders(Borders::ALL)
         .border_style(border_style);
 

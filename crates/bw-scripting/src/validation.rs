@@ -189,6 +189,54 @@ pub static API_FUNCTIONS: &[ApiFn] = &[
     ApiFn::new("random_float", 0, ReturnType::Number),
     ApiFn::new("random_int", 2, ReturnType::Number),
     ApiFn::new("current_tick", 0, ReturnType::Number),
+
+    // === Combat Engagement API ===
+    ApiFn::new("create_combat_engagement", 3, ReturnType::String), // (attacker_id, defender_id, sector_id) -> engagement_id
+    ApiFn::new("query_combat_engagement", 1, ReturnType::Nullable), // (engagement_id) -> engagement or ()
+    ApiFn::new("end_combat_engagement", 2, ReturnType::Bool),       // (engagement_id, reason) -> success
+    ApiFn::new("set_weapon_cooldown", 3, ReturnType::Unit),         // (ship_id, weapon_index, ticks)
+    ApiFn::new("distance_between", 2, ReturnType::Number),          // (pos1, pos2) -> distance
+
+    // === Location API ===
+    ApiFn::new("query_location", 1, ReturnType::Nullable), // (location_id) -> location or ()
+
+    // === Squadron API ===
+    ApiFn::new("query_squadron", 1, ReturnType::Nullable),          // (squadron_id) -> squadron or ()
+    ApiFn::new("modify_squadron", 2, ReturnType::Bool),             // (squadron_id, changes) -> success
+    ApiFn::new("create_squadron", 3, ReturnType::String),           // (name, tag, leader_id) -> squadron_id
+    ApiFn::new("disband_squadron", 1, ReturnType::Bool),            // (squadron_id) -> success
+    ApiFn::new("add_to_squadron", 3, ReturnType::Bool),             // (player_id, squadron_id, role) -> success
+    ApiFn::new("remove_from_squadron", 2, ReturnType::Bool),        // (player_id, squadron_id) -> success
+    ApiFn::new("squadron_tag_exists", 1, ReturnType::Bool),         // (tag) -> exists
+    ApiFn::new("update_squadron_leader", 2, ReturnType::Bool),      // (squadron_id, new_leader_id) -> success
+    ApiFn::new("broadcast_to_squadron", 2, ReturnType::Bool),       // (squadron_id, message) -> success
+
+    // === Squadron Invites API ===
+    ApiFn::new("create_squadron_invite", 3, ReturnType::String),    // (squadron_id, inviter_id, target_id) -> invite_id
+    ApiFn::new("get_squadron_invite", 1, ReturnType::Nullable),     // (invite_id) -> invite or ()
+    ApiFn::new("delete_squadron_invite", 1, ReturnType::Bool),      // (invite_id) -> success
+    ApiFn::new("send_squadron_invite", 2, ReturnType::Bool),        // (target_id, invite_data) -> success
+
+    // === Squadron Relations API ===
+    ApiFn::new("are_squadrons_at_war", 2, ReturnType::Bool),        // (squadron_id1, squadron_id2) -> at_war
+    ApiFn::new("are_squadrons_allied", 2, ReturnType::Bool),        // (squadron_id1, squadron_id2) -> allied
+    ApiFn::new("declare_war", 2, ReturnType::Bool),                 // (squadron_id1, squadron_id2) -> success
+    ApiFn::new("create_peace_proposal", 2, ReturnType::String),     // (from_squadron, to_squadron) -> proposal_id
+    ApiFn::new("create_alliance_proposal", 2, ReturnType::String),  // (from_squadron, to_squadron) -> proposal_id
+    ApiFn::new("get_alliance_proposal", 1, ReturnType::Nullable),   // (proposal_id) -> proposal or ()
+    ApiFn::new("delete_alliance_proposal", 1, ReturnType::Bool),    // (proposal_id) -> success
+    ApiFn::new("send_alliance_proposal", 2, ReturnType::Bool),      // (target_squadron_id, proposal_data) -> success
+    ApiFn::new("create_alliance", 2, ReturnType::Bool),             // (squadron_id1, squadron_id2) -> success
+
+    // === Mission API ===
+    ApiFn::new("query_mission", 1, ReturnType::Nullable),           // (mission_id) -> mission or ()
+    ApiFn::new("add_player_mission", 2, ReturnType::Bool),          // (player_id, mission_id) -> success
+    ApiFn::new("remove_player_mission", 2, ReturnType::Bool),       // (player_id, mission_id) -> success
+    ApiFn::new("modify_mission", 2, ReturnType::Bool),              // (mission_id, changes) -> success
+    ApiFn::new("record_mission_choice", 4, ReturnType::Bool),       // (mission_id, choice_id, player_id, choice_data) -> success
+
+    // === Communication API ===
+    ApiFn::new("send_hail", 2, ReturnType::Bool),                   // (target_id, hail_data) -> success
 ];
 
 /// Lookup API function by name.
@@ -489,8 +537,8 @@ fn collect_fn_call(call_expr: &FnCallExpr, pos: Option<Position>, analysis: &mut
         "subscribe_event" | "subscribe_event_filtered" => {
             // subscribe_event(event_type, handler_fn)
             // subscribe_event_filtered(event_type, handler_fn, filter_type, filter_value)
-            if call_expr.args.len() >= 2 {
-                if let (Some(event_type), Some(handler_fn)) = (
+            if call_expr.args.len() >= 2
+                && let (Some(event_type), Some(handler_fn)) = (
                     extract_string_literal(&call_expr.args[0]),
                     extract_string_literal(&call_expr.args[1]),
                 ) {
@@ -500,13 +548,12 @@ fn collect_fn_call(call_expr: &FnCallExpr, pos: Option<Position>, analysis: &mut
                         position: pos,
                     });
                 }
-            }
         }
         "subscribe_events" => {
             // subscribe_events(event_types_array, handler_fn)
             // We can't easily extract array literals here, but we can get the handler
-            if call_expr.args.len() >= 2 {
-                if let Some(handler_fn) = extract_string_literal(&call_expr.args[1]) {
+            if call_expr.args.len() >= 2
+                && let Some(handler_fn) = extract_string_literal(&call_expr.args[1]) {
                     // For array subscriptions, we mark event_type as "*" (multiple)
                     // We'll extract individual types if the array is a literal
                     if let Some(event_types) = extract_string_array(&call_expr.args[0]) {
@@ -526,7 +573,6 @@ fn collect_fn_call(call_expr: &FnCallExpr, pos: Option<Position>, analysis: &mut
                         });
                     }
                 }
-            }
         }
         _ => {}
     }
@@ -537,11 +583,7 @@ fn extract_string_literal(expr: &Expr) -> Option<String> {
     match expr {
         Expr::StringConstant(s, _) => Some(s.to_string()),
         Expr::DynamicConstant(boxed, _) => {
-            if let Some(s) = boxed.clone().try_cast::<rhai::ImmutableString>() {
-                Some(s.to_string())
-            } else {
-                None
-            }
+            boxed.clone().try_cast::<rhai::ImmutableString>().map(|s| s.to_string())
         }
         _ => None,
     }
@@ -654,7 +696,14 @@ pub static BINARY_OP_RULES: &[BinaryOpRule] = &[
     BinaryOpRule::new("+", InferredType::Float, InferredType::Float, InferredType::Float),
     BinaryOpRule::new("+", InferredType::Int, InferredType::Float, InferredType::Float),
     BinaryOpRule::new("+", InferredType::Float, InferredType::Int, InferredType::Float),
+    // String concatenation - Rhai allows String + anything with auto-conversion
     BinaryOpRule::new("+", InferredType::String, InferredType::String, InferredType::String),
+    BinaryOpRule::new("+", InferredType::String, InferredType::Int, InferredType::String),
+    BinaryOpRule::new("+", InferredType::String, InferredType::Float, InferredType::String),
+    BinaryOpRule::new("+", InferredType::String, InferredType::Bool, InferredType::String),
+    BinaryOpRule::new("+", InferredType::Int, InferredType::String, InferredType::String),
+    BinaryOpRule::new("+", InferredType::Float, InferredType::String, InferredType::String),
+    BinaryOpRule::new("+", InferredType::Bool, InferredType::String, InferredType::String),
 
     BinaryOpRule::new("-", InferredType::Int, InferredType::Int, InferredType::Int),
     BinaryOpRule::new("-", InferredType::Float, InferredType::Float, InferredType::Float),
@@ -819,6 +868,611 @@ fn is_archetype_lookup_fn(name: &str) -> bool {
     ARCHETYPE_LOOKUP_FNS.contains(&name)
 }
 
+/// Maps archetype lookup functions to their registry category.
+fn archetype_category(fn_name: &str) -> Option<&'static str> {
+    match fn_name {
+        "get_ship_def" | "get_ship" => Some("ships"),
+        "get_weapon_def" | "get_weapon" => Some("weapons"),
+        "get_cargo_def" => Some("cargo"),
+        "get_effect" => Some("effects"),
+        "get_ability" => Some("abilities"),
+        "get_faction" => Some("factions"),
+        "get_upgrade_def" => Some("upgrades"),
+        "get_stance_def" => Some("stances"),
+        _ => None,
+    }
+}
+
+/// Registry of known archetype IDs collected from definition scripts.
+#[derive(Debug, Clone, Default)]
+pub struct ArchetypeRegistry {
+    pub ships: HashSet<String>,
+    pub weapons: HashSet<String>,
+    pub cargo: HashSet<String>,
+    pub effects: HashSet<String>,
+    pub abilities: HashSet<String>,
+    pub factions: HashSet<String>,
+    pub upgrades: HashSet<String>,
+    pub stances: HashSet<String>,
+}
+
+impl ArchetypeRegistry {
+    /// Create empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if an ID exists in the specified category.
+    pub fn contains(&self, category: &str, id: &str) -> bool {
+        match category {
+            "ships" => self.ships.contains(id),
+            "weapons" => self.weapons.contains(id),
+            "cargo" => self.cargo.contains(id),
+            "effects" => self.effects.contains(id),
+            "abilities" => self.abilities.contains(id),
+            "factions" => self.factions.contains(id),
+            "upgrades" => self.upgrades.contains(id),
+            "stances" => self.stances.contains(id),
+            _ => false,
+        }
+    }
+
+    /// Add an ID to the specified category.
+    pub fn insert(&mut self, category: &str, id: String) {
+        match category {
+            "ships" => { self.ships.insert(id); }
+            "weapons" => { self.weapons.insert(id); }
+            "cargo" => { self.cargo.insert(id); }
+            "effects" => { self.effects.insert(id); }
+            "abilities" => { self.abilities.insert(id); }
+            "factions" => { self.factions.insert(id); }
+            "upgrades" => { self.upgrades.insert(id); }
+            "stances" => { self.stances.insert(id); }
+            _ => {}
+        }
+    }
+
+    /// Build registry by executing definition scripts and calling all_*() functions.
+    pub fn from_definitions_dir(dir: &Path) -> Self {
+        let mut registry = Self::new();
+        let mut engine = Engine::new();
+        engine.set_max_expr_depths(128, 128);
+
+        // Map of filename patterns to (category, function_name)
+        let script_configs: &[(&str, &str, &str)] = &[
+            ("ships", "ships", "all_ships"),
+            ("weapons", "weapons", "all_weapons"),
+            ("cargo", "cargo", "all_cargo"),
+            ("effects", "effects", "all_effects"),
+            ("abilities", "abilities", "all_abilities"),
+            ("factions", "factions", "all_factions"),
+        ];
+
+        for (filename, category, fn_name) in script_configs {
+            let script_path = dir.join(format!("{}.rhai", filename));
+            if !script_path.exists() {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&script_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let ast = match engine.compile(&content) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+
+            // Call the all_*() function and extract IDs
+            let result: Result<rhai::Array, _> = engine.call_fn(&mut rhai::Scope::new(), &ast, fn_name, ());
+            if let Ok(array) = result {
+                for item in array {
+                    if let Some(map) = item.try_cast::<rhai::Map>()
+                        && let Some(id_val) = map.get("id")
+                            && let Ok(id) = id_val.clone().into_string() {
+                                registry.insert(category, id);
+                            }
+                }
+            }
+        }
+
+        registry
+    }
+
+    /// Build registry from definition script validation results (static analysis fallback).
+    pub fn from_definition_results(results: &[DefinitionScriptValidation]) -> Self {
+        let mut registry = Self::new();
+
+        for result in results {
+            // Determine category from script path
+            let category = if result.path.contains("ships") {
+                "ships"
+            } else if result.path.contains("weapons") {
+                "weapons"
+            } else if result.path.contains("cargo") {
+                "cargo"
+            } else if result.path.contains("effects") {
+                "effects"
+            } else if result.path.contains("abilities") {
+                "abilities"
+            } else if result.path.contains("factions") {
+                "factions"
+            } else {
+                continue;
+            };
+
+            for def in &result.definitions {
+                registry.insert(category, def.id.clone());
+            }
+        }
+
+        registry
+    }
+
+    /// Total number of registered IDs across all categories.
+    pub fn total_count(&self) -> usize {
+        self.ships.len() + self.weapons.len() + self.cargo.len() +
+        self.effects.len() + self.abilities.len() + self.factions.len() +
+        self.upgrades.len() + self.stances.len()
+    }
+}
+
+// ============================================================================
+// Cross-Script Dependency Analysis (E950/W950)
+// ============================================================================
+
+use std::collections::HashMap;
+
+/// Information about a script's action registrations and calls.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptActionInfo {
+    /// Actions this script registers (action_name -> handler_name)
+    pub provides: HashMap<String, String>,
+    /// Actions this script calls (action_name -> positions where called)
+    pub requires: HashSet<String>,
+    /// Script path
+    pub path: String,
+}
+
+/// Graph of script dependencies for cycle detection and missing action checking.
+#[derive(Debug, Default)]
+pub struct ScriptDependencyGraph {
+    /// Map of script path -> action info
+    pub scripts: HashMap<String, ScriptActionInfo>,
+    /// All actions registered across all scripts (action_name -> script_path)
+    pub action_providers: HashMap<String, String>,
+}
+
+impl ScriptDependencyGraph {
+    /// Create a new empty dependency graph.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a script's info to the graph.
+    pub fn add_script(&mut self, path: &str, info: ScriptActionInfo) {
+        // Register all actions this script provides
+        for action_name in info.provides.keys() {
+            self.action_providers.insert(action_name.clone(), path.to_string());
+        }
+        self.scripts.insert(path.to_string(), info);
+    }
+
+    /// Find actions that are called but not registered by any script.
+    pub fn find_missing_actions(&self) -> Vec<(String, String)> {
+        // (action_name, script_that_requires_it)
+        let mut missing = Vec::new();
+
+        for (script_path, info) in &self.scripts {
+            for action_name in &info.requires {
+                // Skip if this action is provided by any script
+                if !self.action_providers.contains_key(action_name) {
+                    // Also skip common engine-provided actions
+                    if !is_builtin_action(action_name) {
+                        missing.push((action_name.clone(), script_path.clone()));
+                    }
+                }
+            }
+        }
+
+        missing
+    }
+
+    /// Detect circular dependencies between scripts.
+    /// Returns list of (script_a, script_b) pairs that form cycles.
+    pub fn find_cycles(&self) -> Vec<Vec<String>> {
+        // Build dependency edges: script A depends on script B if A requires an action that B provides
+        let mut deps: HashMap<&str, HashSet<&str>> = HashMap::new();
+
+        for (script_path, info) in &self.scripts {
+            let mut script_deps = HashSet::new();
+            for action_name in &info.requires {
+                if let Some(provider_path) = self.action_providers.get(action_name) {
+                    if provider_path != script_path {
+                        script_deps.insert(provider_path.as_str());
+                    }
+                }
+            }
+            if !script_deps.is_empty() {
+                deps.insert(script_path.as_str(), script_deps);
+            }
+        }
+
+        // Find cycles using DFS
+        let mut cycles = Vec::new();
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+        let mut path = Vec::new();
+
+        fn dfs<'a>(
+            node: &'a str,
+            deps: &HashMap<&'a str, HashSet<&'a str>>,
+            visited: &mut HashSet<&'a str>,
+            rec_stack: &mut HashSet<&'a str>,
+            path: &mut Vec<&'a str>,
+            cycles: &mut Vec<Vec<String>>,
+        ) {
+            visited.insert(node);
+            rec_stack.insert(node);
+            path.push(node);
+
+            if let Some(neighbors) = deps.get(node) {
+                for &neighbor in neighbors {
+                    if !visited.contains(neighbor) {
+                        dfs(neighbor, deps, visited, rec_stack, path, cycles);
+                    } else if rec_stack.contains(neighbor) {
+                        // Found a cycle - extract the cycle from path
+                        let cycle_start = path.iter().position(|&n| n == neighbor).unwrap();
+                        let cycle: Vec<String> = path[cycle_start..].iter().map(|s| s.to_string()).collect();
+                        if cycle.len() > 1 {
+                            cycles.push(cycle);
+                        }
+                    }
+                }
+            }
+
+            path.pop();
+            rec_stack.remove(node);
+        }
+
+        for script_path in self.scripts.keys() {
+            if !visited.contains(script_path.as_str()) {
+                dfs(script_path.as_str(), &deps, &mut visited, &mut rec_stack, &mut path, &mut cycles);
+            }
+        }
+
+        cycles
+    }
+}
+
+/// Check if an action name is a built-in engine action (not from scripts).
+fn is_builtin_action(name: &str) -> bool {
+    // Common actions that might be called but not defined in scripts
+    // (because they're handled by the engine or registered elsewhere)
+    matches!(name,
+        "login" | "logout" | "register" |
+        "chat" | "whisper" |
+        "ping" | "pong" |
+        "heartbeat" |
+        // Add more as needed
+        _  if name.starts_with("__") // Internal actions
+    )
+}
+
+// ============================================================================
+// Nested Access Schema (E501/W502)
+// ============================================================================
+
+/// Type of a field in an object schema for nested access validation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NestedFieldType {
+    String,
+    Int,
+    Float,
+    Bool,
+    Uuid,
+    /// Array of elements with inner type
+    Array(&'static str),  // Element schema name, or "dynamic" for unknown
+    /// Reference to another object schema
+    Object(&'static str),
+    /// Optional wrapper
+    Optional(&'static str),  // Inner schema name
+    /// Unknown/dynamic type
+    Dynamic,
+}
+
+/// A field in an object schema.
+#[derive(Debug, Clone)]
+pub struct NestedFieldSchema {
+    pub name: &'static str,
+    pub field_type: NestedFieldType,
+}
+
+/// Schema for an object type (Ship, Player, Weapon, etc.)
+#[derive(Debug, Clone)]
+pub struct ObjectSchema {
+    pub name: &'static str,
+    pub fields: &'static [NestedFieldSchema],
+}
+
+impl ObjectSchema {
+    /// Find a field by name.
+    pub fn get_field(&self, name: &str) -> Option<&NestedFieldSchema> {
+        self.fields.iter().find(|f| f.name == name)
+    }
+}
+
+/// Static schema definitions for known object types.
+pub static SHIP_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Ship",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "owner_id", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "ship_class", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "position", field_type: NestedFieldType::Object("Position") },
+        NestedFieldSchema { name: "hull", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "shields", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "status", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "is_player", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "faction_tag", field_type: NestedFieldType::Optional("String") },
+        NestedFieldSchema { name: "is_hostile", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "sector_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "ammunition", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "fuel", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "morale", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "experience", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "faction_id", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "can_attack", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "can_move", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "attack", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "defense", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "speed", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "sensor_range", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "combat_stance", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "locked_target", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "cargo", field_type: NestedFieldType::Array("CargoItem") },
+        NestedFieldSchema { name: "cargo_capacity", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "cargo_used", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "upgrades", field_type: NestedFieldType::Array("InstalledUpgrade") },
+        // Runtime-specific fields (not in DTO, but available to scripts)
+        NestedFieldSchema { name: "weapons", field_type: NestedFieldType::Array("Weapon") },
+        NestedFieldSchema { name: "engagement_id", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "combat_target", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "docked_at", field_type: NestedFieldType::Optional("Uuid") },
+    ],
+};
+
+pub static PLAYER_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Player",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "username", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "reputation", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "fame", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "faction_tag", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "squadron_tag", field_type: NestedFieldType::Optional("String") },
+        NestedFieldSchema { name: "is_online", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "is_admin", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "credits", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "game_mode", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "owned_ships", field_type: NestedFieldType::Array("Uuid") },
+        NestedFieldSchema { name: "active_ship_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "sector_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "faction_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "squadron_id", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "missions_completed", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "missions_failed", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "is_disgraced", field_type: NestedFieldType::Bool },
+        // Runtime-specific fields (not in DTO, but available to scripts)
+        NestedFieldSchema { name: "squadron_role", field_type: NestedFieldType::Optional("String") },
+        NestedFieldSchema { name: "active_missions", field_type: NestedFieldType::Array("Uuid") },
+    ],
+};
+
+pub static CARGO_ITEM_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "CargoItem",
+    fields: &[
+        NestedFieldSchema { name: "type", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "cargo_type", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "quantity", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "price", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "purchase_price", field_type: NestedFieldType::Int },
+    ],
+};
+
+pub static INSTALLED_UPGRADE_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "InstalledUpgrade",
+    fields: &[
+        NestedFieldSchema { name: "upgrade_id", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "slot", field_type: NestedFieldType::String },
+    ],
+};
+
+pub static POSITION_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Position",
+    fields: &[
+        NestedFieldSchema { name: "x", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "y", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "z", field_type: NestedFieldType::Float },
+    ],
+};
+
+pub static WEAPON_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Weapon",
+    fields: &[
+        NestedFieldSchema { name: "name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "damage", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "range", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "accuracy", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "cooldown", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "cooldown_remaining", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "ammo_cost", field_type: NestedFieldType::Float },
+    ],
+};
+
+pub static LOCATION_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Location",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "location_type", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "position", field_type: NestedFieldType::Object("Position") },
+        NestedFieldSchema { name: "faction_tag", field_type: NestedFieldType::Optional("String") },
+        NestedFieldSchema { name: "faction_id", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "services", field_type: NestedFieldType::Array("String") },
+        NestedFieldSchema { name: "sector_id", field_type: NestedFieldType::Uuid },
+    ],
+};
+
+pub static SECTOR_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Sector",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "danger_level", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "controlling_faction", field_type: NestedFieldType::Optional("String") },
+        NestedFieldSchema { name: "locations", field_type: NestedFieldType::Array("Location") },
+        NestedFieldSchema { name: "adjacent_sectors", field_type: NestedFieldType::Array("AdjacentSector") },
+    ],
+};
+
+pub static ADJACENT_SECTOR_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "AdjacentSector",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "danger_level", field_type: NestedFieldType::String },
+    ],
+};
+
+pub static COMBAT_ENGAGEMENT_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "CombatEngagement",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "attacker_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "defender_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "sector_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "round", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "started_at", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "status", field_type: NestedFieldType::String },
+    ],
+};
+
+pub static SQUADRON_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Squadron",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "tag", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "motto", field_type: NestedFieldType::Optional("String") },
+        NestedFieldSchema { name: "leader_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "leader_name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "member_count", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "reputation_bonus", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "fame_bonus", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "is_at_war", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "wargames_enabled", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "privateering_enabled", field_type: NestedFieldType::Bool },
+    ],
+};
+
+pub static SQUADRON_INVITE_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "SquadronInvite",
+    fields: &[
+        NestedFieldSchema { name: "invite_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "squadron_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "inviter_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "target_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "squadron_name", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "squadron_tag", field_type: NestedFieldType::String },
+    ],
+};
+
+pub static MISSION_SCHEMA: ObjectSchema = ObjectSchema {
+    name: "Mission",
+    fields: &[
+        NestedFieldSchema { name: "id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "title", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "description", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "mission_type", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "status", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "priority", field_type: NestedFieldType::String },
+        NestedFieldSchema { name: "reputation_reward", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "fame_reward", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "is_high_profile", field_type: NestedFieldType::Bool },
+        NestedFieldSchema { name: "progress", field_type: NestedFieldType::Float },
+        NestedFieldSchema { name: "sector_id", field_type: NestedFieldType::Uuid },
+        NestedFieldSchema { name: "player_id", field_type: NestedFieldType::Uuid },
+        // Additional fields used by scripts
+        NestedFieldSchema { name: "min_reputation", field_type: NestedFieldType::Int },
+        NestedFieldSchema { name: "accepted_by", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "pending_choice", field_type: NestedFieldType::Optional("String") },
+        NestedFieldSchema { name: "choices", field_type: NestedFieldType::Array("Choice") },
+        NestedFieldSchema { name: "target_id", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "target_sector_id", field_type: NestedFieldType::Optional("Uuid") },
+        NestedFieldSchema { name: "credit_reward", field_type: NestedFieldType::Int },
+    ],
+};
+
+/// Get schema by name.
+pub fn get_object_schema(name: &str) -> Option<&'static ObjectSchema> {
+    match name {
+        "Ship" => Some(&SHIP_SCHEMA),
+        "Player" => Some(&PLAYER_SCHEMA),
+        "CargoItem" => Some(&CARGO_ITEM_SCHEMA),
+        "InstalledUpgrade" => Some(&INSTALLED_UPGRADE_SCHEMA),
+        "Position" => Some(&POSITION_SCHEMA),
+        "Weapon" => Some(&WEAPON_SCHEMA),
+        "Location" => Some(&LOCATION_SCHEMA),
+        "Sector" => Some(&SECTOR_SCHEMA),
+        "AdjacentSector" => Some(&ADJACENT_SECTOR_SCHEMA),
+        "CombatEngagement" => Some(&COMBAT_ENGAGEMENT_SCHEMA),
+        "Squadron" => Some(&SQUADRON_SCHEMA),
+        "SquadronInvite" => Some(&SQUADRON_INVITE_SCHEMA),
+        "Mission" => Some(&MISSION_SCHEMA),
+        _ => None,
+    }
+}
+
+/// A segment in an access path (e.g., ship["cargo"][0]["quantity"])
+#[derive(Debug, Clone)]
+pub enum AccessSegment {
+    /// Field access with literal string key
+    Field(String),
+    /// Array index with literal integer
+    Index(i64),
+    /// Dynamic key/index that can't be validated statically
+    Dynamic,
+}
+
+/// An access path representing a chain of accesses.
+#[derive(Debug, Clone)]
+pub struct AccessPath {
+    /// The root variable name
+    pub root: String,
+    /// The chain of access segments
+    pub segments: Vec<AccessSegment>,
+    /// Source position
+    pub position: Option<Position>,
+}
+
+/// Maps API function return types to schema names.
+fn api_return_schema(fn_name: &str) -> Option<&'static str> {
+    match fn_name {
+        "query_ship" | "get_ship" => Some("Ship"),
+        "query_player" | "get_player" => Some("Player"),
+        "query_location" => Some("Location"),
+        "query_sector" => Some("Sector"),
+        "query_combat_engagement" => Some("CombatEngagement"),
+        "query_squadron" => Some("Squadron"),
+        "get_squadron_invite" => Some("SquadronInvite"),
+        "query_mission" => Some("Mission"),
+        _ => None,
+    }
+}
+
 /// Tracks null guard information for complex conditionals.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NullGuardInfo {
@@ -843,6 +1497,8 @@ pub struct VarState {
     pub defined_at: Option<Position>,
     /// If this is a boolean that tracks another variable's null state
     pub null_guard_of: Option<NullGuardInfo>,
+    /// Schema name for nested access validation (e.g., "Ship", "Player")
+    pub schema_name: Option<String>,
 }
 
 /// A scope containing variables.
@@ -882,8 +1538,16 @@ pub struct FunctionAnalysis {
     pub implicit_coercions: Vec<(String, Option<Position>)>,
     /// Invalid archetype IDs (empty string) - E900
     pub invalid_archetype_ids: Vec<(String, Option<Position>)>,
-    /// Unknown archetype IDs (not in registry) - W900
+    /// Unknown archetype IDs (not in registry) - W900 (populated by validator, not analyzer)
     pub unknown_archetype_ids: Vec<(String, String, Option<Position>)>, // (fn_name, id, position)
+    /// All archetype lookups found: (fn_name, id, position) - for W900 checking against registry
+    pub archetype_lookups: Vec<(String, String, Option<Position>)>,
+    /// Nested access paths for E501/W502 validation
+    pub nested_accesses: Vec<AccessPath>,
+    /// Invalid nested field accesses - E501 (field doesn't exist in schema)
+    pub invalid_nested_accesses: Vec<(String, Option<Position>)>, // (description, position)
+    /// Dynamic nested accesses that can't be validated - W502
+    pub dynamic_nested_accesses: Vec<(String, Option<Position>)>, // (description, position)
     /// Whether all control flow paths return a value
     pub all_paths_return: bool,
     /// Dead code positions
@@ -998,6 +1662,32 @@ impl<'a> FunctionAnalyzer<'a> {
             null_checked: false,
             defined_at: pos,
             null_guard_of: None,
+            schema_name: None,
+        };
+        self.scopes[self.current_scope].vars.insert(name.to_string(), state);
+    }
+
+    /// Define a variable with a known schema type.
+    fn define_var_with_schema(
+        &mut self,
+        name: &str,
+        inferred_type: InferredType,
+        pos: Option<Position>,
+        schema_name: &str,
+    ) {
+        // Check for shadowing
+        if self.lookup_var(name).is_some() {
+            self.result.shadowed_vars.push((name.to_string(), pos));
+        }
+
+        let state = VarState {
+            name: name.to_string(),
+            inferred_type,
+            used: false,
+            null_checked: false,
+            defined_at: pos,
+            null_guard_of: None,
+            schema_name: Some(schema_name.to_string()),
         };
         self.scopes[self.current_scope].vars.insert(name.to_string(), state);
     }
@@ -1022,6 +1712,7 @@ impl<'a> FunctionAnalyzer<'a> {
             null_checked: false,
             defined_at: pos,
             null_guard_of: Some(null_guard),
+            schema_name: None,
         };
         self.scopes[self.current_scope].vars.insert(name.to_string(), state);
     }
@@ -1080,11 +1771,10 @@ impl<'a> FunctionAnalyzer<'a> {
 
     /// Check if accessing a variable would be an unchecked nullable access.
     fn check_nullable_access(&mut self, name: &str, pos: Option<Position>) {
-        if let Some(state) = self.lookup_var(name) {
-            if state.inferred_type == InferredType::Nullable && !state.null_checked {
+        if let Some(state) = self.lookup_var(name)
+            && state.inferred_type == InferredType::Nullable && !state.null_checked {
                 self.result.unchecked_nullables.push((name.to_string(), pos));
             }
-        }
     }
 
     /// Analyze a sequence of statements. Returns true if all paths return.
@@ -1106,8 +1796,8 @@ impl<'a> FunctionAnalyzer<'a> {
             has_returned = self.analyze_stmt(stmt);
 
             // If the last statement is an expression (implicit return), treat it as returning
-            if is_last && !has_returned {
-                if let Stmt::Expr(expr) = stmt {
+            if is_last && !has_returned
+                && let Stmt::Expr(expr) = stmt {
                     // Record as implicit return and capture map keys if present
                     self.result.returns.push(Some(stmt.position()));
                     if let Some(keys) = self.extract_map_keys(expr.as_ref()) {
@@ -1115,7 +1805,6 @@ impl<'a> FunctionAnalyzer<'a> {
                     }
                     has_returned = true;
                 }
-            }
         }
 
         has_returned
@@ -1135,6 +1824,10 @@ impl<'a> FunctionAnalyzer<'a> {
                 // Check if this is a null guard assignment: let valid = x != () or let valid = x == ()
                 if let Some(null_guard) = self.detect_null_guard(init_expr) {
                     self.define_var_with_null_guard(&var_name, inferred_type, Some(*pos), null_guard);
+                }
+                // Check if the init expression is a function call that returns a known schema type
+                else if let Some(schema_name) = self.extract_schema_from_expr(init_expr) {
+                    self.define_var_with_schema(&var_name, inferred_type, Some(*pos), &schema_name);
                 } else {
                     self.define_var(&var_name, inferred_type, Some(*pos));
                 }
@@ -1154,12 +1847,33 @@ impl<'a> FunctionAnalyzer<'a> {
 
                 // Analyze condition and check for null checks
                 self.analyze_expr(&flow.expr);
+
+                // Detect IsNull guard BEFORE extract_null_checks - we need it for early-return pattern
+                let is_null_guard_var = self.detect_null_guard(&flow.expr)
+                    .and_then(|guard| {
+                        if let NullGuardInfo::IsNull(var_name) = guard {
+                            Some(var_name)
+                        } else {
+                            None
+                        }
+                    });
+
                 self.extract_null_checks(&flow.expr);
 
                 // Analyze if branch (body)
                 self.push_scope();
                 let if_returns = self.analyze_statements(flow.body.statements().iter());
                 self.pop_scope();
+
+                // Early-return pattern: `if x == () { return ... }`
+                // If the if-body always returns AND the condition was `IsNull(var)`,
+                // then code AFTER this if-block can safely assume var is non-null
+                // because the only way to reach it is if the condition was false (var != ())
+                if if_returns {
+                    if let Some(var_name) = is_null_guard_var {
+                        self.mark_null_checked(&var_name);
+                    }
+                }
 
                 // Analyze else branch (branch) - it may be empty
                 let else_returns = if flow.branch.is_empty() {
@@ -1267,12 +1981,56 @@ impl<'a> FunctionAnalyzer<'a> {
             }
 
             Expr::Index(boxed, _flags, pos) => {
-                // x["key"] - check for nullable access
+                // x["key"] or nested x["a"]["b"] - check for nullable access and validate path
+
+                // E501: Check for primitive literal being indexed (e.g., 123["field"], "str"["key"])
+                let primitive_type = match &boxed.lhs {
+                    Expr::IntegerConstant(_, _) => Some("integer"),
+                    Expr::FloatConstant(_, _) => Some("float"),
+                    Expr::StringConstant(_, _) => Some("string"),
+                    Expr::CharConstant(_, _) => Some("char"),
+                    Expr::BoolConstant(_, _) => Some("boolean"),
+                    Expr::Unit(_) => Some("unit"),
+                    _ => None,
+                };
+                if let Some(type_name) = primitive_type {
+                    self.result.invalid_nested_accesses.push((
+                        format!("Cannot index {} literal - only maps and arrays support indexing", type_name),
+                        Some(*pos),
+                    ));
+                }
+
                 if let Expr::Variable(var_box, _, _) = &boxed.lhs {
                     let var_name = var_box.1.to_string();
                     self.check_nullable_access(&var_name, Some(*pos));
                     self.use_var(&var_name, Some(*pos));
                 }
+
+                // Try to extract and validate the full access path (E501/W502)
+                if let Some((root_var, segments, path_pos)) = self.extract_access_path(expr) {
+                    // Record the access path
+                    self.result.nested_accesses.push(AccessPath {
+                        root: root_var.clone(),
+                        segments: segments.clone(),
+                        position: path_pos,
+                    });
+
+                    // Check for dynamic segments (W502)
+                    let has_dynamic = segments.iter().any(|s| matches!(s, AccessSegment::Dynamic));
+                    if has_dynamic {
+                        let path_desc = self.format_access_path(&root_var, &segments);
+                        self.result.dynamic_nested_accesses.push((
+                            format!("Dynamic key in access path '{}' cannot be validated", path_desc),
+                            path_pos,
+                        ));
+                    } else {
+                        // Validate static path against schema (E501)
+                        if let Some(error_msg) = self.validate_access_path(&root_var, &segments) {
+                            self.result.invalid_nested_accesses.push((error_msg, path_pos));
+                        }
+                    }
+                }
+
                 self.analyze_expr(&boxed.rhs);
             }
 
@@ -1344,18 +2102,23 @@ impl<'a> FunctionAnalyzer<'a> {
         }
 
         // Check for archetype lookup functions with string literal IDs
-        if is_archetype_lookup_fn(fn_name) && !call_expr.args.is_empty() {
-            if let Some(id) = extract_string_literal(&call_expr.args[0]) {
+        if is_archetype_lookup_fn(fn_name) && !call_expr.args.is_empty()
+            && let Some(id) = extract_string_literal(&call_expr.args[0]) {
                 if id.is_empty() {
                     // E900: Empty string is definitely invalid
                     self.result.invalid_archetype_ids.push((
                         format!("{}() called with empty string", fn_name),
                         None,
                     ));
+                } else {
+                    // Record lookup for W900 validation against registry
+                    self.result.archetype_lookups.push((
+                        fn_name.to_string(),
+                        id,
+                        None,
+                    ));
                 }
-                // Note: W900 for unknown IDs requires a registry, handled at higher level
             }
-        }
     }
 
     /// Infer the type of an expression.
@@ -1410,6 +2173,133 @@ impl<'a> FunctionAnalyzer<'a> {
         }
     }
 
+    /// Extract schema name from an expression if it's a function call that returns a known type.
+    fn extract_schema_from_expr(&self, expr: &Expr) -> Option<String> {
+        if let Expr::FnCall(call_expr, _) = expr {
+            let fn_name = call_expr.name.as_str();
+            return api_return_schema(fn_name).map(|s| s.to_string());
+        }
+        None
+    }
+
+    /// Extract a nested access path from an expression.
+    /// Returns (root_var_name, segments, position) if it's an access chain starting from a variable.
+    fn extract_access_path(&self, expr: &Expr) -> Option<(String, Vec<AccessSegment>, Option<Position>)> {
+        let mut segments = Vec::new();
+        let mut current = expr;
+        let mut pos = None;
+
+        // Walk up the nested Index expressions to find the root
+        loop {
+            match current {
+                Expr::Index(boxed, _flags, p) => {
+                    if pos.is_none() {
+                        pos = Some(*p);
+                    }
+                    // Extract the index key
+                    let segment = match &boxed.rhs {
+                        Expr::StringConstant(s, _) => AccessSegment::Field(s.to_string()),
+                        Expr::IntegerConstant(i, _) => AccessSegment::Index(*i),
+                        Expr::DynamicConstant(dyn_val, _) => {
+                            if let Some(s) = dyn_val.clone().try_cast::<rhai::ImmutableString>() {
+                                AccessSegment::Field(s.to_string())
+                            } else if let Some(i) = dyn_val.clone().try_cast::<i64>() {
+                                AccessSegment::Index(i)
+                            } else {
+                                AccessSegment::Dynamic
+                            }
+                        }
+                        _ => AccessSegment::Dynamic,
+                    };
+                    segments.push(segment);
+                    current = &boxed.lhs;
+                }
+                Expr::Variable(var_box, _, _) => {
+                    let var_name = var_box.1.to_string();
+                    segments.reverse(); // Reverse since we built from inside-out
+                    return Some((var_name, segments, pos));
+                }
+                _ => {
+                    // Not a simple variable[...] chain
+                    return None;
+                }
+            }
+        }
+    }
+
+    /// Validate an access path against schema.
+    /// Returns None if valid, Some(error_msg) if invalid.
+    fn validate_access_path(&self, root_var: &str, segments: &[AccessSegment]) -> Option<String> {
+        // Get the root variable's schema
+        let var_state = self.lookup_var(root_var)?;
+        let schema_name = var_state.schema_name.as_ref()?;
+        let mut current_schema = get_object_schema(schema_name)?;
+
+        let mut path_str = root_var.to_string();
+
+        for segment in segments {
+            match segment {
+                AccessSegment::Field(field_name) => {
+                    path_str.push_str(&format!("[\"{}\"]", field_name));
+
+                    if let Some(field) = current_schema.get_field(field_name) {
+                        // Valid field - update current schema if it's a nested object
+                        match &field.field_type {
+                            NestedFieldType::Object(obj_name) => {
+                                if let Some(next_schema) = get_object_schema(obj_name) {
+                                    current_schema = next_schema;
+                                } else {
+                                    return None; // Unknown nested type, can't validate further
+                                }
+                            }
+                            NestedFieldType::Array(elem_name) => {
+                                // After accessing an array field, we need an index next
+                                // For now, continue validation if next segment is an index
+                                if let Some(next_schema) = get_object_schema(elem_name) {
+                                    current_schema = next_schema;
+                                }
+                                // If elem_name is not a known schema, we can't validate further
+                            }
+                            _ => {
+                                // Primitive type - further access would be invalid
+                                // but we'll let it pass for now
+                            }
+                        }
+                    } else {
+                        // Field doesn't exist in schema
+                        return Some(format!(
+                            "Unknown field '{}' in {}: {} has no field '{}'",
+                            field_name, path_str, current_schema.name, field_name
+                        ));
+                    }
+                }
+                AccessSegment::Index(_) => {
+                    path_str.push_str("[n]");
+                    // Index into array - schema already updated above
+                }
+                AccessSegment::Dynamic => {
+                    // Can't validate dynamic access
+                    return None;
+                }
+            }
+        }
+
+        None // Valid
+    }
+
+    /// Format an access path as a human-readable string (e.g., `ship["cargo"][0]["type"]`).
+    fn format_access_path(&self, root: &str, segments: &[AccessSegment]) -> String {
+        let mut result = root.to_string();
+        for segment in segments {
+            match segment {
+                AccessSegment::Field(name) => result.push_str(&format!("[\"{}\"]", name)),
+                AccessSegment::Index(i) => result.push_str(&format!("[{}]", i)),
+                AccessSegment::Dynamic => result.push_str("[?]"),
+            }
+        }
+        result
+    }
+
     /// Detect null guard patterns in an expression.
     /// Returns Some(NullGuardInfo) if the expression is a null check like `x != ()` or `x == ()`.
     fn detect_null_guard(&self, expr: &Expr) -> Option<NullGuardInfo> {
@@ -1440,33 +2330,43 @@ impl<'a> FunctionAnalyzer<'a> {
     }
 
     /// Extract null check patterns from a condition expression.
-    /// e.g., `x == ()` or `x != ()` marks x as null-checked in the appropriate branch.
+    /// This is called BEFORE entering the if-body scope, so we only mark variables
+    /// as checked when the condition GUARANTEES the variable is non-null in the if-body.
+    ///
+    /// - `x != ()` (IsNotNull) → x is safe in if-body, mark as checked
+    /// - `x == ()` (IsNull) → x is NULL in if-body, DO NOT mark (would be safe in else)
     fn extract_null_checks(&mut self, condition: &Expr) {
         // Direct null check pattern: var == () or var != ()
         if let Some(guard_info) = self.detect_null_guard(condition) {
-            let name = match &guard_info {
-                NullGuardInfo::IsNotNull(n) | NullGuardInfo::IsNull(n) => n.clone(),
-            };
-            // For `x != ()`, the variable is null-checked in the if branch
-            // For `x == ()`, the variable is null-checked in the else branch
-            // For simplicity, we mark it as checked in both cases
-            self.mark_null_checked(&name);
+            // Only mark as checked for IsNotNull - the if-body is the safe branch
+            // For IsNull, the if-body is the NULL case, so don't mark as safe
+            if let NullGuardInfo::IsNotNull(name) = guard_info {
+                self.mark_null_checked(&name);
+            }
+            // IsNull: the variable is null in the if-body, so accessing it would be unsafe
+            // We could track this for the else-body, but we don't have that infrastructure
             return;
         }
 
         // Check if condition is a variable that tracks a null guard
         if let Expr::Variable(var_box, _, _) = condition {
             let var_name = var_box.1.to_string();
-            if let Some(state) = self.lookup_var(&var_name) {
-                if let Some(guard_info) = &state.null_guard_of {
-                    // This variable was assigned from a null check
-                    let guarded_var = match guard_info {
-                        NullGuardInfo::IsNotNull(n) => n.clone(),
-                        NullGuardInfo::IsNull(n) => n.clone(),
-                    };
-                    self.mark_null_checked(&guarded_var);
-                    return;
-                }
+            // Clone the guarded var name before mutating self
+            let guarded_var_to_mark = self.lookup_var(&var_name)
+                .and_then(|state| state.null_guard_of.as_ref())
+                .and_then(|guard_info| {
+                    // Only mark if the guard indicates non-null
+                    // e.g., `let valid = x != (); if valid { ... }` → x is safe
+                    // but `let is_null = x == (); if is_null { ... }` → x is NULL, unsafe
+                    if let NullGuardInfo::IsNotNull(guarded_var) = guard_info {
+                        Some(guarded_var.clone())
+                    } else {
+                        None
+                    }
+                });
+            if let Some(name) = guarded_var_to_mark {
+                self.mark_null_checked(&name);
+                return;
             }
         }
 
@@ -1478,33 +2378,41 @@ impl<'a> FunctionAnalyzer<'a> {
             return;
         }
 
-        // Handle Expr::Or (||) - recurse into both sides
-        if let Expr::Or(boxed_exprs, _) = condition {
-            for expr in boxed_exprs.iter() {
-                self.extract_null_checks(expr);
-            }
+        // Handle Expr::Or (||) - DO NOT extract null checks
+        // For `a != () || b != ()`, only ONE side needs to be true,
+        // so we can't guarantee either variable is non-null in the body.
+        if let Expr::Or(_, _) = condition {
             return;
         }
 
         // Check for negation: !valid where valid is a null guard
         if let Expr::FnCall(call_expr, _) = condition {
             let fn_name = call_expr.name.as_str();
-            if fn_name == "!" && call_expr.args.len() == 1 {
-                if let Expr::Variable(var_box, _, _) = &call_expr.args[0] {
+            if fn_name == "!" && call_expr.args.len() == 1
+                && let Expr::Variable(var_box, _, _) = &call_expr.args[0] {
                     let var_name = var_box.1.to_string();
-                    if let Some(state) = self.lookup_var(&var_name) {
-                        if let Some(guard_info) = &state.null_guard_of {
-                            // !valid where valid = x != () means we're in the null case
-                            // But we still mark x as considered checked for simplicity
-                            let guarded_var = match guard_info {
-                                NullGuardInfo::IsNotNull(n) | NullGuardInfo::IsNull(n) => n.clone(),
-                            };
-                            self.mark_null_checked(&guarded_var);
-                            return;
-                        }
+                    // Clone the guarded var name before mutating self
+                    // Negation flips the meaning:
+                    // - `!valid` where `valid = x != ()` → x IS null, unsafe
+                    // - `!is_null` where `is_null = x == ()` → x is NOT null, safe
+                    let guarded_var_to_mark = self.lookup_var(&var_name)
+                        .and_then(|state| state.null_guard_of.as_ref())
+                        .and_then(|guard_info| {
+                            match guard_info {
+                                NullGuardInfo::IsNull(guarded_var) => {
+                                    // !is_null means variable is NOT null - safe to access
+                                    Some(guarded_var.clone())
+                                }
+                                NullGuardInfo::IsNotNull(_) => {
+                                    // !valid means variable IS null - NOT safe to access
+                                    None
+                                }
+                            }
+                        });
+                    if let Some(name) = guarded_var_to_mark {
+                        self.mark_null_checked(&name);
                     }
                 }
-            }
         }
     }
 
@@ -2100,6 +3008,7 @@ impl ActionValidationReport {
 pub struct ActionScriptValidator {
     engine: Engine,
     action_schema: Option<ActionSchemaRegistry>,
+    archetype_registry: Option<ArchetypeRegistry>,
 }
 
 impl ActionScriptValidator {
@@ -2110,12 +3019,18 @@ impl ActionScriptValidator {
         engine.set_max_expr_depths(128, 128);
 
         Self::register_stub_api(&mut engine);
-        Self { engine, action_schema: None }
+        Self { engine, action_schema: None, archetype_registry: None }
     }
 
     /// Create a validator with an action schema registry for param validation.
     pub fn with_schema(mut self, schema: ActionSchemaRegistry) -> Self {
         self.action_schema = Some(schema);
+        self
+    }
+
+    /// Create a validator with an archetype registry for W900 validation.
+    pub fn with_archetype_registry(mut self, registry: ArchetypeRegistry) -> Self {
+        self.archetype_registry = Some(registry);
         self
     }
 
@@ -2731,6 +3646,47 @@ impl ActionScriptValidator {
                 line: pos.and_then(|p| p.line()),
             });
         }
+
+        // W900: Unknown archetype IDs (check against registry if available)
+        if let Some(registry) = &self.archetype_registry {
+            for (fn_name, id, pos) in &analysis.archetype_lookups {
+                if let Some(category) = archetype_category(fn_name)
+                    && !registry.contains(category, id) {
+                        warnings.push(ActionValidationWarning {
+                            code: "W900",
+                            message: format!(
+                                "In '{}()': Archetype ID '{}' not found in {} definitions",
+                                handler_name, id, category
+                            ),
+                            line: pos.and_then(|p| p.line()),
+                        });
+                    }
+            }
+        }
+
+        // E501: Invalid nested field accesses (field doesn't exist in schema)
+        for (msg, pos) in &analysis.invalid_nested_accesses {
+            errors.push(ActionValidationError {
+                code: "E501",
+                message: format!(
+                    "In '{}()': {}",
+                    handler_name, msg
+                ),
+                line: pos.and_then(|p| p.line()),
+            });
+        }
+
+        // W502: Dynamic nested accesses that can't be validated
+        for (msg, pos) in &analysis.dynamic_nested_accesses {
+            warnings.push(ActionValidationWarning {
+                code: "W502",
+                message: format!(
+                    "In '{}()': {}",
+                    handler_name, msg
+                ),
+                line: pos.and_then(|p| p.line()),
+            });
+        }
     }
 
     /// Check variable flow within a function.
@@ -2903,6 +3859,9 @@ impl ActionScriptValidator {
 
         self.validate_dir_recursive(dir, &mut scripts);
 
+        // Cross-script validation (E950/W950)
+        self.check_cross_script_dependencies(&mut scripts);
+
         for script in &scripts {
             total_errors += script.errors.len();
             total_warnings += script.warnings.len();
@@ -2912,6 +3871,56 @@ impl ActionScriptValidator {
             scripts,
             total_errors,
             total_warnings,
+        }
+    }
+
+    /// Check for cross-script issues like duplicate action registrations.
+    fn check_cross_script_dependencies(&self, scripts: &mut [ActionScriptValidation]) {
+        // Build map of action_name -> (script_path, handler_name)
+        let mut action_registry: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+        for script in scripts.iter() {
+            for action in &script.registered_actions {
+                action_registry
+                    .entry(action.name.clone())
+                    .or_default()
+                    .push((script.path.clone(), action.handler.clone()));
+            }
+        }
+
+        // W950: Duplicate action registrations
+        for (action_name, registrations) in &action_registry {
+            if registrations.len() > 1 {
+                // Multiple scripts register the same action - warn all of them
+                let providers: Vec<String> = registrations.iter()
+                    .map(|(path, _)| {
+                        // Extract just the filename for readability
+                        Path::new(path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(path)
+                            .to_string()
+                    })
+                    .collect();
+
+                let warning_msg = format!(
+                    "Action '{}' is registered in multiple scripts: {}",
+                    action_name,
+                    providers.join(", ")
+                );
+
+                // Add warning to the first script that registers it
+                // (to avoid cluttering all scripts with the same warning)
+                if let Some((first_path, _)) = registrations.first() {
+                    if let Some(script) = scripts.iter_mut().find(|s| &s.path == first_path) {
+                        script.warnings.push(ActionValidationWarning {
+                            code: "W950",
+                            message: warning_msg,
+                            line: None,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -3492,27 +4501,24 @@ pub fn validate_script(
                 result.missing_required.push(spec.clone());
             }
             Some(f) => {
-                if let Some(expected_params) = spec.param_count {
-                    if f.params.len() != expected_params {
+                if let Some(expected_params) = spec.param_count
+                    && f.params.len() != expected_params {
                         result.wrong_params.push((spec.clone(), f.params.len()));
                     }
-                }
             }
         }
     }
 
     // Check optional functions for parameter mismatches (warnings only)
     for spec in &contract.optional {
-        if let Some(f) = functions.iter().find(|f| f.name == spec.name) {
-            if let Some(expected_params) = spec.param_count {
-                if f.params.len() != expected_params {
+        if let Some(f) = functions.iter().find(|f| f.name == spec.name)
+            && let Some(expected_params) = spec.param_count
+                && f.params.len() != expected_params {
                     result.warnings.push(format!(
                         "Optional function '{}' has {} parameters, expected {} ({})",
                         spec.name, f.params.len(), expected_params, spec.description
                     ));
                 }
-            }
-        }
     }
 
     result
@@ -4730,6 +5736,37 @@ fn handler(ctx, params) {
     }
 
     #[test]
+    fn test_function_analyzer_or_condition_not_safe() {
+        // Test: if ship != () || other != () { ship["name"] }
+        // With OR, only ONE side needs to be true, so neither is guaranteed non-null
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    let other = get_ship(ctx["other_id"]);
+    if ship != () || other != () {
+        let name = ship["name"];
+        return #{ success: true, data: name };
+    }
+    #{ success: false }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // OR condition should NOT protect the access - ship could still be null
+        // if `other != ()` was the true branch
+        let ship_accesses: Vec<_> = analysis.unchecked_nullables
+            .iter()
+            .filter(|(name, _)| name == "ship")
+            .collect();
+        assert!(
+            !ship_accesses.is_empty(),
+            "OR condition 'ship != () || ...' should NOT protect access - ship could be null. \
+             Expected warning but got none."
+        );
+    }
+
+    #[test]
     fn test_function_analyzer_return_map_keys() {
         // Use explicit return to ensure we capture map keys
         let content = r#"
@@ -5454,11 +6491,17 @@ fn handle_test(ctx, params) {
         assert!(check_binary_op("+", &InferredType::Int, &InferredType::Float).is_ok());
         assert!(check_binary_op("+", &InferredType::Float, &InferredType::Int).is_ok());
 
+        // Test string concatenation with non-strings (now allowed in Rhai)
+        assert!(check_binary_op("+", &InferredType::String, &InferredType::Int).is_ok());
+        assert!(check_binary_op("+", &InferredType::Int, &InferredType::String).is_ok());
+        assert!(check_binary_op("+", &InferredType::String, &InferredType::Float).is_ok());
+        assert!(check_binary_op("+", &InferredType::String, &InferredType::Bool).is_ok());
+
         // Test invalid operations
-        assert!(check_binary_op("+", &InferredType::String, &InferredType::Int).is_err());
-        assert!(check_binary_op("+", &InferredType::Int, &InferredType::String).is_err());
         assert!(check_binary_op("-", &InferredType::String, &InferredType::String).is_err());
         assert!(check_binary_op("&&", &InferredType::Int, &InferredType::Int).is_err());
+        assert!(check_binary_op("+", &InferredType::Bool, &InferredType::Int).is_err());
+        assert!(check_binary_op("-", &InferredType::Bool, &InferredType::Int).is_err());
 
         // Dynamic types always pass
         assert!(check_binary_op("+", &InferredType::Dynamic, &InferredType::Int).is_ok());
@@ -5486,9 +6529,9 @@ fn init() {
 }
 
 fn handle_test(ctx, params) {
-    let msg = "hello";
+    let flag = true;
     let num = 42;
-    let result = msg + num;  // String + Int - type error!
+    let result = flag + num;  // Bool + Int - type error!
     #{ success: true }
 }
 "#).unwrap();
@@ -5697,6 +6740,538 @@ fn handle_test(ctx, params) {
             e900_errors.is_empty(),
             "Should not have E900 errors for valid archetype ID. Errors: {:?}",
             e900_errors
+        );
+    }
+
+    // =========================================================================
+    // Archetype Registry Tests (W900)
+    // =========================================================================
+
+    #[test]
+    fn test_archetype_registry_from_definitions_dir() {
+        // Get scripts/definitions directory relative to workspace root
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let definitions_dir = std::path::PathBuf::from(manifest_dir)
+            .parent().unwrap()
+            .parent().unwrap()
+            .join("scripts")
+            .join("definitions");
+
+        if !definitions_dir.exists() {
+            eprintln!("Definitions directory not found at {:?}, skipping", definitions_dir);
+            return;
+        }
+
+        let registry = ArchetypeRegistry::from_definitions_dir(&definitions_dir);
+
+        eprintln!("Registry loaded: {} total IDs", registry.total_count());
+        eprintln!("  Ships: {:?}", registry.ships);
+        eprintln!("  Weapons: {:?}", registry.weapons);
+        eprintln!("  Factions: {:?}", registry.factions);
+
+        // Should have loaded some IDs
+        assert!(
+            registry.total_count() > 0,
+            "Registry should have loaded definitions"
+        );
+
+        // Check for known IDs from ships.rhai
+        assert!(
+            registry.ships.contains("patrol_corvette"),
+            "Should have patrol_corvette ship"
+        );
+    }
+
+    #[test]
+    fn test_unknown_archetype_id_w900() {
+        // Build a registry with known IDs
+        let mut registry = ArchetypeRegistry::new();
+        registry.ships.insert("patrol_corvette".to_string());
+        registry.ships.insert("frigate".to_string());
+
+        let validator = ActionScriptValidator::new()
+            .with_archetype_registry(registry);
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_w900.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship = get_ship_def("nonexistent_ship_xyz");
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have W900 warning for unknown archetype ID
+        assert!(
+            result.warnings.iter().any(|w| w.code == "W900" && w.message.contains("nonexistent_ship_xyz")),
+            "Should warn about unknown archetype ID. Warnings: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_known_archetype_id_no_w900() {
+        // Build a registry with known IDs
+        let mut registry = ArchetypeRegistry::new();
+        registry.ships.insert("patrol_corvette".to_string());
+
+        let validator = ActionScriptValidator::new()
+            .with_archetype_registry(registry);
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_no_w900.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship = get_ship_def("patrol_corvette");
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have W900 warning for known archetype ID
+        let w900_warnings: Vec<_> = result.warnings.iter()
+            .filter(|w| w.code == "W900")
+            .collect();
+        assert!(
+            w900_warnings.is_empty(),
+            "Should not warn about known archetype ID. Warnings: {:?}",
+            w900_warnings
+        );
+    }
+
+    #[test]
+    fn test_w900_without_registry_no_warning() {
+        // Without a registry, W900 should not be emitted
+        let validator = ActionScriptValidator::new();
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_no_registry.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship = get_ship_def("any_id_here");
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Without registry, no W900 warnings should be emitted
+        let w900_warnings: Vec<_> = result.warnings.iter()
+            .filter(|w| w.code == "W900")
+            .collect();
+        assert!(
+            w900_warnings.is_empty(),
+            "Without registry, should not emit W900 warnings. Warnings: {:?}",
+            w900_warnings
+        );
+    }
+
+    #[test]
+    fn test_e501_invalid_nested_field() {
+        // Access a field that doesn't exist in the schema
+        let validator = ActionScriptValidator::new();
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_e501.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship_id = ctx["ship_id"];
+    let ship = query_ship(ship_id);
+    if ship != () {
+        // "nonexistent_field" doesn't exist in Ship schema
+        let bad = ship["nonexistent_field"];
+    }
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have E501 error for unknown field
+        assert!(
+            result.errors.iter().any(|e| e.code == "E501" && e.message.contains("nonexistent_field")),
+            "Should error on unknown nested field. Errors: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_e501_valid_nested_field() {
+        // Access valid fields - should NOT produce E501
+        let validator = ActionScriptValidator::new();
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_e501_valid.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship_id = ctx["ship_id"];
+    let ship = query_ship(ship_id);
+    if ship != () {
+        // These are all valid Ship fields
+        let name = ship["name"];
+        let hull = ship["hull"];
+        let status = ship["status"];
+    }
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should NOT have E501 errors
+        let e501_errors: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == "E501")
+            .collect();
+        assert!(
+            e501_errors.is_empty(),
+            "Should not error on valid nested fields. Errors: {:?}",
+            e501_errors
+        );
+    }
+
+    #[test]
+    fn test_w502_dynamic_key_access() {
+        // Access with dynamic key - should produce W502 warning
+        let validator = ActionScriptValidator::new();
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_w502.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship_id = ctx["ship_id"];
+    let ship = query_ship(ship_id);
+    if ship != () {
+        let field_name = "hull";
+        // Dynamic key access can't be validated
+        let value = ship[field_name];
+    }
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should have W502 warning for dynamic access
+        assert!(
+            result.warnings.iter().any(|w| w.code == "W502"),
+            "Should warn about dynamic key access. Warnings: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn test_e501_nested_array_access() {
+        // Access nested array element fields - should work with valid fields
+        let validator = ActionScriptValidator::new();
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("test_e501_nested.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+
+fn handle_test(ctx, params) {
+    let ship_id = ctx["ship_id"];
+    let ship = query_ship(ship_id);
+    if ship != () {
+        let cargo = ship["cargo"];
+        // cargo[0] should be a CargoItem
+        // "quantity" is a valid CargoItem field (but we can't fully validate dynamic index)
+    }
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result = validator.validate_file(&test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        // Should not have E501 errors for valid access
+        let e501_errors: Vec<_> = result.errors.iter()
+            .filter(|e| e.code == "E501")
+            .collect();
+        assert!(
+            e501_errors.is_empty(),
+            "Should not error on valid nested access. Errors: {:?}",
+            e501_errors
+        );
+    }
+
+    #[test]
+    fn test_w950_duplicate_action_registration() {
+        // Two scripts registering the same action name should trigger W950
+        let validator = ActionScriptValidator::new();
+
+        let temp_dir = std::env::temp_dir().join("bw_w950_test");
+        let actions_dir = temp_dir.join("actions");
+        std::fs::create_dir_all(&actions_dir).ok();
+
+        // First script registers "duplicate_action"
+        let script1 = actions_dir.join("script1.rhai");
+        std::fs::write(&script1, r#"
+fn init() {
+    register_action("duplicate_action", "handle_action1");
+}
+
+fn handle_action1(ctx, params) {
+    #{ success: true }
+}
+"#).unwrap();
+
+        // Second script also registers "duplicate_action"
+        let script2 = actions_dir.join("script2.rhai");
+        std::fs::write(&script2, r#"
+fn init() {
+    register_action("duplicate_action", "handle_action2");
+}
+
+fn handle_action2(ctx, params) {
+    #{ success: true }
+}
+"#).unwrap();
+
+        let report = validator.validate_directory(&actions_dir);
+
+        // Cleanup
+        std::fs::remove_file(&script1).ok();
+        std::fs::remove_file(&script2).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+
+        // Should have W950 warning for duplicate action
+        let all_warnings: Vec<_> = report.scripts.iter()
+            .flat_map(|s| &s.warnings)
+            .collect();
+        assert!(
+            all_warnings.iter().any(|w| w.code == "W950" && w.message.contains("duplicate_action")),
+            "Should warn about duplicate action registration. Warnings: {:?}",
+            all_warnings
+        );
+    }
+
+    #[test]
+    fn test_w950_no_duplicates() {
+        // Two scripts with different actions should NOT trigger W950
+        let validator = ActionScriptValidator::new();
+
+        let temp_dir = std::env::temp_dir().join("bw_w950_nodup_test");
+        let actions_dir = temp_dir.join("actions");
+        std::fs::create_dir_all(&actions_dir).ok();
+
+        // First script
+        let script1 = actions_dir.join("script1.rhai");
+        std::fs::write(&script1, r#"
+fn init() {
+    register_action("action_one", "handle_one");
+}
+
+fn handle_one(ctx, params) {
+    #{ success: true }
+}
+"#).unwrap();
+
+        // Second script with different action
+        let script2 = actions_dir.join("script2.rhai");
+        std::fs::write(&script2, r#"
+fn init() {
+    register_action("action_two", "handle_two");
+}
+
+fn handle_two(ctx, params) {
+    #{ success: true }
+}
+"#).unwrap();
+
+        let report = validator.validate_directory(&actions_dir);
+
+        // Cleanup
+        std::fs::remove_file(&script1).ok();
+        std::fs::remove_file(&script2).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+
+        // Should NOT have W950 warnings
+        let w950_warnings: Vec<_> = report.scripts.iter()
+            .flat_map(|s| &s.warnings)
+            .filter(|w| w.code == "W950")
+            .collect();
+        assert!(
+            w950_warnings.is_empty(),
+            "Should not warn when no duplicates. Warnings: {:?}",
+            w950_warnings
+        );
+    }
+
+    // ===========================================================================
+    // Regression tests for soundness bugs
+    // ===========================================================================
+
+    #[test]
+    fn test_regression_is_null_guard_does_not_mark_safe_in_if_body() {
+        // Bug: `if x == ()` was incorrectly marking x as safe in the if-body
+        // Fix: Only mark as safe for IsNotNull guards, not IsNull guards
+        // Note: Use get_ship (returns Nullable) instead of query_ship (returns Map)
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    if ship == () {
+        // ship IS null here, accessing it should warn
+        let name = ship["name"];  // Should warn! W100
+        return #{ success: false };
+    }
+    #{ success: true }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // Should have a nullable access warning in the if-body
+        assert!(
+            !analysis.unchecked_nullables.is_empty(),
+            "Should warn about accessing ship (which is null) in the if-body. Got: {:?}",
+            analysis.unchecked_nullables
+        );
+    }
+
+    #[test]
+    fn test_regression_early_return_pattern_marks_safe() {
+        // The early return pattern: `if x == () { return }` should mark x safe AFTER
+        // This is valid and the fix needs to support it
+        // Note: Use get_ship (returns Nullable) instead of query_ship (returns Map)
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    if ship == () {
+        return #{ success: false };
+    }
+    // ship is NOT null here (we returned if it was)
+    let name = ship["name"];  // Should NOT warn
+    #{ success: true }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // Should NOT have any nullable access warnings
+        assert!(
+            analysis.unchecked_nullables.is_empty(),
+            "After early return, ship should be safe. Got: {:?}",
+            analysis.unchecked_nullables
+        );
+    }
+
+    #[test]
+    fn test_regression_negated_is_null_marks_safe() {
+        // Bug: `!is_null` where `is_null = x == ()` was not marking x as safe
+        // Fix: Negation of IsNull should mark as safe
+        // Note: Use get_ship (returns Nullable) instead of query_ship (returns Map)
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    let is_null = ship == ();
+    if !is_null {
+        // ship is NOT null (we negated the is_null check)
+        let name = ship["name"];  // Should NOT warn
+    }
+    #{ success: true }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // Should NOT have any nullable access warnings in the if-body
+        assert!(
+            analysis.unchecked_nullables.is_empty(),
+            "After !is_null check, ship should be safe. Got: {:?}",
+            analysis.unchecked_nullables
+        );
+    }
+
+    #[test]
+    fn test_regression_negated_is_not_null_does_not_mark_safe() {
+        // Bug: `!valid` where `valid = x != ()` was incorrectly marking x as safe
+        // Fix: Negation of IsNotNull should NOT mark as safe (x IS null)
+        // Note: Use get_ship (returns Nullable) instead of query_ship (returns Map)
+        let content = r#"
+fn handler(ctx, params) {
+    let ship = get_ship(ctx["ship_id"]);
+    let valid = ship != ();
+    if !valid {
+        // ship IS null (we negated the not-null check)
+        let name = ship["name"];  // Should warn! W100
+        return #{ success: false };
+    }
+    #{ success: true }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // Should have a nullable access warning
+        assert!(
+            !analysis.unchecked_nullables.is_empty(),
+            "After !valid (where valid = x != ()), ship IS null, should warn. Got: {:?}",
+            analysis.unchecked_nullables
+        );
+    }
+
+    #[test]
+    fn test_regression_primitive_field_access_error() {
+        // Bug: `123["field"]` was not being rejected
+        // Note: Rhai allows integer indexing on integers (bit access), so we test bool/float
+        let content = r#"
+fn handler(ctx, params) {
+    let y = true[0];  // Error: can't index boolean
+    let z = 3.14[0];  // Error: can't index float
+    #{ success: true }
+}
+"#;
+        let ast = parse_script(content);
+        let analysis = super::analyze_function(&ast, "handler");
+
+        // Should have invalid nested access errors for boolean and float
+        assert!(
+            analysis.invalid_nested_accesses.len() >= 2,
+            "Should error about indexing boolean/float. Got: {:?}",
+            analysis.invalid_nested_accesses
         );
     }
 }

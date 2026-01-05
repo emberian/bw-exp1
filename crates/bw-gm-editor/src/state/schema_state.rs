@@ -1,4 +1,5 @@
 //! Schema state for archetype browser
+#![allow(dead_code)] // Public API methods not yet used by all UI components
 
 use leptos::prelude::*;
 use bw_shared::dto::{ArchetypeSchemaDto, FieldSchemaDto, ActionSchemaDto};

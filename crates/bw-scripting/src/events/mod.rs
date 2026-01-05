@@ -175,11 +175,10 @@ impl EventRegistry {
             }
 
             // Remove from owner index
-            if let Some(owner_id) = sub.owner_entity_id {
-                if let Some(owner_subs) = self.by_owner.write().get_mut(&owner_id) {
+            if let Some(owner_id) = sub.owner_entity_id
+                && let Some(owner_subs) = self.by_owner.write().get_mut(&owner_id) {
                     owner_subs.retain(|sid| *sid != id);
                 }
-            }
 
             tracing::debug!(subscription_id = %id, "Event subscription removed");
             true

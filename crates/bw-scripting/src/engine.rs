@@ -268,7 +268,9 @@ impl ScriptStats {
         if self.call_count == 0 {
             Duration::ZERO
         } else {
-            self.total_time / self.call_count as u32
+            // Use checked division to handle large call counts safely
+            self.total_time.checked_div(self.call_count as u32)
+                .unwrap_or_else(|| self.total_time / u32::MAX)
         }
     }
 
@@ -327,7 +329,7 @@ impl ScriptProfiler {
 
         let key = format!("{}::{}", script, function);
         let mut stats = self.stats.write();
-        stats.entry(key).or_insert_with(ScriptStats::new).record(duration);
+        stats.entry(key).or_default().record(duration);
     }
 
     /// Get stats for a specific script/function.
@@ -615,11 +617,10 @@ impl ScriptEngine {
 
         for name in script_names {
             let contract = crate::validation::infer_contract(&name);
-            if let Ok(result) = self.validate_script(&name, &contract) {
-                if !result.is_valid() || !result.warnings.is_empty() {
+            if let Ok(result) = self.validate_script(&name, &contract)
+                && (!result.is_valid() || !result.warnings.is_empty()) {
                     results.push(result);
                 }
-            }
         }
 
         results

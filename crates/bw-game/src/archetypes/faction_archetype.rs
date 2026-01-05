@@ -15,7 +15,7 @@ use rhai::{Dynamic, Map};
 use serde::{Deserialize, Serialize};
 
 /// Behavior modifiers that affect NPC AI decisions.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactionBehaviors {
     /// Aggression level (0.0 = pacifist, 1.0 = extremely aggressive).
     pub aggression: f32,
@@ -39,6 +39,20 @@ pub struct FactionBehaviors {
     pub surrender_chance: f32,
 }
 
+impl Default for FactionBehaviors {
+    fn default() -> Self {
+        Self {
+            aggression: 0.5,
+            trade_preference: 0.5,
+            patrol_range: 1.0,
+            flee_threshold: 0.2,
+            target_preference: None,
+            calls_reinforcements: false,
+            surrender_chance: 0.0,
+        }
+    }
+}
+
 impl FactionBehaviors {
     /// Parse from Rhai map.
     pub fn from_dynamic(value: Dynamic) -> Self {
@@ -47,14 +61,15 @@ impl FactionBehaviors {
             None => return Self::default(),
         };
 
+        let defaults = Self::default();
         Self {
-            aggression: get_f32(&map, "aggression").unwrap_or(0.5),
-            trade_preference: get_f32(&map, "trade_preference").unwrap_or(0.5),
-            patrol_range: get_f32(&map, "patrol_range").unwrap_or(1.0),
-            flee_threshold: get_f32(&map, "flee_threshold").unwrap_or(0.2),
+            aggression: get_f32(&map, "aggression").unwrap_or(defaults.aggression),
+            trade_preference: get_f32(&map, "trade_preference").unwrap_or(defaults.trade_preference),
+            patrol_range: get_f32(&map, "patrol_range").unwrap_or(defaults.patrol_range),
+            flee_threshold: get_f32(&map, "flee_threshold").unwrap_or(defaults.flee_threshold),
             target_preference: get_string(&map, "target_preference"),
-            calls_reinforcements: get_bool(&map, "calls_reinforcements").unwrap_or(false),
-            surrender_chance: get_f32(&map, "surrender_chance").unwrap_or(0.0),
+            calls_reinforcements: get_bool(&map, "calls_reinforcements").unwrap_or(defaults.calls_reinforcements),
+            surrender_chance: get_f32(&map, "surrender_chance").unwrap_or(defaults.surrender_chance),
         }
     }
 }
@@ -340,8 +355,8 @@ mod tests {
     #[test]
     fn test_faction_behaviors_defaults() {
         let behaviors = FactionBehaviors::default();
-        assert_eq!(behaviors.aggression, 0.0);
-        assert_eq!(behaviors.flee_threshold, 0.0);
+        assert_eq!(behaviors.aggression, 0.5);
+        assert_eq!(behaviors.flee_threshold, 0.2);
         assert!(!behaviors.calls_reinforcements);
     }
 

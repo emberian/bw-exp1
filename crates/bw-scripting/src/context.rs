@@ -200,8 +200,8 @@ impl Drop for ExecutionGuard {
                 // Apply pending mutations and log any failures
                 let results = ctx.accessor.apply_pending_mutations();
                 for result in results {
-                    if !result.success {
-                        if let Some(ref error) = result.error {
+                    if !result.success
+                        && let Some(ref error) = result.error {
                             tracing::warn!(
                                 script = %ctx.script_path,
                                 mutation = ?result.mutation,
@@ -209,7 +209,6 @@ impl Drop for ExecutionGuard {
                                 "Mutation failed during script cleanup"
                             );
                         }
-                    }
                 }
 
                 // Clear error context

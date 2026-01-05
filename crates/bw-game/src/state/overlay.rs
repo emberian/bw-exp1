@@ -224,7 +224,7 @@ impl ShipChanges {
             self.experience = other.experience;
         }
         if other.position.is_some() {
-            self.position = other.position.clone();
+            self.position = other.position;
         }
         if other.status.is_some() {
             self.status = other.status.clone();
@@ -296,8 +296,10 @@ mod tests {
             morale: 100.0,
             experience: 0,
             status: "idle".to_string(),
-            is_player_ship: false,
+            is_player: false,
             faction_id: None,
+            faction_tag: None,
+            is_hostile: false,
             can_attack: true,
             can_move: true,
             attack: 10.0,

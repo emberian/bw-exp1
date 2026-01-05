@@ -314,13 +314,11 @@ impl FileStore {
                     let file_entry = file_entry?;
                     let file_path = file_entry.path();
 
-                    if file_path.extension().and_then(|e| e.to_str()) == Some("json") {
-                        if let Ok(contents) = fs::read_to_string(&file_path) {
-                            if let Ok(state) = serde_json::from_str::<ScriptState>(&contents) {
+                    if file_path.extension().and_then(|e| e.to_str()) == Some("json")
+                        && let Ok(contents) = fs::read_to_string(&file_path)
+                            && let Ok(state) = serde_json::from_str::<ScriptState>(&contents) {
                                 ns_cache.insert(state.key.clone(), state);
                             }
-                        }
-                    }
                 }
             }
         }
@@ -459,24 +457,9 @@ impl ScriptStateStore for FileStore {
             return Ok(false);
         }
 
-        // Clear current state
-        let mut cache = self.cache.write();
-        cache.clear();
+        // First, load checkpoint data into a temporary structure (before modifying anything)
+        let mut new_cache: HashMap<String, HashMap<String, ScriptState>> = HashMap::new();
 
-        // Clear current files (except checkpoints)
-        for entry in fs::read_dir(&self.base_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name != self.checkpoints_dir {
-                        fs::remove_dir_all(&path)?;
-                    }
-                }
-            }
-        }
-
-        // Load checkpoint data
         for entry in fs::read_dir(&checkpoint_path)? {
             let entry = entry?;
             let path = entry.path();
@@ -488,29 +471,38 @@ impl ScriptStateStore for FileStore {
                     .unwrap_or("")
                     .to_string();
 
-                let ns_cache = cache.entry(namespace.clone()).or_default();
+                let ns_cache = new_cache.entry(namespace.clone()).or_default();
 
                 for file_entry in fs::read_dir(&path)? {
                     let file_entry = file_entry?;
                     let file_path = file_entry.path();
 
                     if file_path.extension().and_then(|e| e.to_str()) == Some("json") {
-                        if let Ok(contents) = fs::read_to_string(&file_path) {
-                            if let Ok(state) = serde_json::from_str::<ScriptState>(&contents) {
-                                ns_cache.insert(state.key.clone(), state);
-                            }
-                        }
+                        let contents = fs::read_to_string(&file_path)?;
+                        let state: ScriptState = serde_json::from_str(&contents)
+                            .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
+                        ns_cache.insert(state.key.clone(), state);
                     }
                 }
             }
         }
 
-        // Copy to main storage
-        drop(cache);
-        let cache = self.cache.read();
-        for (_namespace, keys) in cache.iter() {
+        // Now that we've successfully loaded the checkpoint, proceed with destructive operations
+
+        // Clear current files (except checkpoints)
+        for entry in fs::read_dir(&self.base_path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && name != self.checkpoints_dir {
+                        fs::remove_dir_all(&path)?;
+                    }
+        }
+
+        // Write restored state to disk
+        for (_namespace, keys) in new_cache.iter() {
             for (_key, state) in keys.iter() {
-                // Manually call write_to_disk to avoid deadlock
                 let ns_path = self.namespace_path(&state.namespace);
                 fs::create_dir_all(&ns_path)?;
 
@@ -520,6 +512,10 @@ impl ScriptStateStore for FileStore {
                 fs::write(file_path, json)?;
             }
         }
+
+        // Finally, update the in-memory cache atomically
+        let mut cache = self.cache.write();
+        *cache = new_cache;
 
         Ok(true)
     }
@@ -534,11 +530,10 @@ impl ScriptStateStore for FileStore {
         let mut checkpoints = Vec::new();
         for entry in fs::read_dir(checkpoint_path)? {
             let entry = entry?;
-            if entry.path().is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
+            if entry.path().is_dir()
+                && let Some(name) = entry.file_name().to_str() {
                     checkpoints.push(name.to_string());
                 }
-            }
         }
 
         Ok(checkpoints)

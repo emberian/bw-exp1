@@ -622,10 +622,10 @@ impl GameState {
             ships.retain(|s| !ship_despawns.contains(&s.id));
 
             // Clear selected target if it was despawned
-            if let Some(target_id) = self.selected_target.get_untracked() {
-                if ship_despawns.contains(&target_id) {
-                    self.selected_target.set(None);
-                }
+            if let Some(target_id) = self.selected_target.get_untracked()
+                && ship_despawns.contains(&target_id)
+            {
+                self.selected_target.set(None);
             }
 
             // Add spawned ships

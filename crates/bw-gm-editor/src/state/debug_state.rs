@@ -1,6 +1,7 @@
 //! Debug panel state for the GM Editor
 //!
 //! Manages debug session state, breakpoints, and execution control.
+#![allow(dead_code)] // Public API methods not yet used by all UI components
 
 use leptos::prelude::*;
 use uuid::Uuid;

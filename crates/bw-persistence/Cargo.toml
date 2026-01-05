@@ -1,0 +1,31 @@
+[package]
+name = "bw-persistence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Database persistence layer for BLACKWING - SeaORM entities, queries, and streaming worker"
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+
+# Database
+sea-orm.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Concurrency
+dashmap.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true

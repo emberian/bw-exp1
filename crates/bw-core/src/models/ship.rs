@@ -243,14 +243,14 @@ impl Ship {
 
     /// Remove cargo from the hold. Returns false if not enough.
     pub fn remove_cargo(&mut self, cargo_type: &str, quantity: u32) -> bool {
-        if let Some(existing) = self.cargo.iter_mut().find(|c| c.cargo_type == cargo_type) {
-            if existing.quantity >= quantity {
-                existing.quantity -= quantity;
-                if existing.quantity == 0 {
-                    self.cargo.retain(|c| c.cargo_type != cargo_type);
-                }
-                return true;
+        if let Some(existing) = self.cargo.iter_mut().find(|c| c.cargo_type == cargo_type)
+            && existing.quantity >= quantity
+        {
+            existing.quantity -= quantity;
+            if existing.quantity == 0 {
+                self.cargo.retain(|c| c.cargo_type != cargo_type);
             }
+            return true;
         }
         false
     }

@@ -34,11 +34,11 @@ fn test_random_functions() {
 
     // Test rand() returns value between 0 and 1
     let result: f64 = engine.eval("rand()").unwrap();
-    assert!(result >= 0.0 && result < 1.0);
+    assert!((0.0..1.0).contains(&result));
 
     // Test rand_int returns value in range
     let result: i64 = engine.eval("rand_int(1, 10)").unwrap();
-    assert!(result >= 1 && result <= 10);
+    assert!((1..=10).contains(&result));
 }
 
 #[test]

@@ -20,6 +20,4 @@ pub use schema_browser::*;
 pub use script_editor::*;
 pub use staged_preview::*;
 pub use state_inspector::*;
-pub use state_watcher::*;
 pub use tab_bar::*;
-pub use validation_panel::*;
