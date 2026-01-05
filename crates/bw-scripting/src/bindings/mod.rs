@@ -1,0 +1,71 @@
+//! Rhai bindings for game APIs
+//!
+//! These bindings expose game functionality to Rhai scripts.
+
+mod ship_api;
+mod mission_api;
+mod combat_api;
+mod world_api;
+
+use rhai::Engine;
+
+
+/// Register all API bindings with the engine.
+pub fn register_all(engine: &mut Engine) {
+    ship_api::register(engine);
+    mission_api::register(engine);
+    combat_api::register(engine);
+    world_api::register(engine);
+
+    // Register common utility functions
+    register_utils(engine);
+}
+
+fn register_utils(engine: &mut Engine) {
+    // Random number generation
+    engine.register_fn("rand", || -> f64 {
+        use rand::Rng;
+        rand::thread_rng().r#gen()
+    });
+
+    engine.register_fn("rand_int", |min: i64, max: i64| -> i64 {
+        use rand::Rng;
+        rand::thread_rng().gen_range(min..=max)
+    });
+
+    engine.register_fn("rand_float", |min: f64, max: f64| -> f64 {
+        use rand::Rng;
+        rand::thread_rng().gen_range(min..=max)
+    });
+
+    // Math utilities
+    engine.register_fn("clamp", |value: f64, min: f64, max: f64| -> f64 {
+        value.clamp(min, max)
+    });
+
+    engine.register_fn("clamp_int", |value: i64, min: i64, max: i64| -> i64 {
+        value.clamp(min, max)
+    });
+
+    engine.register_fn("lerp", |a: f64, b: f64, t: f64| -> f64 {
+        a + (b - a) * t.clamp(0.0, 1.0)
+    });
+
+    // String utilities
+    engine.register_fn("uuid", || -> String {
+        uuid::Uuid::new_v4().to_string()
+    });
+
+    // Logging
+    engine.register_fn("log_info", |msg: &str| {
+        tracing::info!(script = true, "{}", msg);
+    });
+
+    engine.register_fn("log_warn", |msg: &str| {
+        tracing::warn!(script = true, "{}", msg);
+    });
+
+    engine.register_fn("log_error", |msg: &str| {
+        tracing::error!(script = true, "{}", msg);
+    });
+}

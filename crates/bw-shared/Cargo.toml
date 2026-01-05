@@ -1,0 +1,11 @@
+[package]
+name = "bw-shared"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+uuid.workspace = true
+chrono.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
