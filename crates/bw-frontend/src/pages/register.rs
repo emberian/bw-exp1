@@ -1,12 +1,25 @@
 //! Registration page
 
 use leptos::prelude::*;
-use crate::state::GameState;
+use gloo_net::http::Request;
+use serde::{Deserialize, Serialize};
+use wasm_bindgen_futures::spawn_local;
+
+#[derive(Serialize)]
+struct RegisterRequest {
+    username: String,
+    faction: String,
+}
+
+#[derive(Deserialize)]
+struct AuthResponse {
+    success: bool,
+    token: Option<String>,
+    error: Option<String>,
+}
 
 #[component]
 pub fn RegisterPage() -> impl IntoView {
-    let game_state = expect_context::<GameState>();
-
     let username = RwSignal::new(String::new());
     let faction = RwSignal::new("COMPACT".to_string());
     let error = RwSignal::new(Option::<String>::None);
@@ -26,10 +39,38 @@ pub fn RegisterPage() -> impl IntoView {
         loading.set(true);
         error.set(None);
 
-        // TODO: Call registration API
-        // For now, just redirect to game
-        let window = web_sys::window().unwrap();
-        let _ = window.location().set_href("/game");
+        // Call registration API asynchronously
+        spawn_local(async move {
+            let result = register_player(username_val, faction_val).await;
+
+            match result {
+                Ok(response) => {
+                    if response.success {
+                        if let Some(token) = response.token {
+                            // Store token in localStorage
+                            if let Some(storage) = web_sys::window()
+                                .and_then(|w| w.local_storage().ok())
+                                .flatten()
+                            {
+                                let _ = storage.set_item("auth_token", &token);
+                            }
+
+                            // Redirect to game
+                            if let Some(window) = web_sys::window() {
+                                let _ = window.location().set_href("/game");
+                            }
+                        }
+                    } else {
+                        error.set(Some(response.error.unwrap_or_else(|| "Registration failed".to_string())));
+                        loading.set(false);
+                    }
+                }
+                Err(e) => {
+                    error.set(Some(format!("Network error: {}", e)));
+                    loading.set(false);
+                }
+            }
+        });
     };
 
     view! {
@@ -105,6 +146,24 @@ pub fn RegisterPage() -> impl IntoView {
             </a>
         </div>
     }
+}
+
+/// Call the registration API.
+async fn register_player(username: String, faction: String) -> Result<AuthResponse, String> {
+    let request = RegisterRequest { username, faction };
+
+    let response = Request::post("/api/auth/register")
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .map_err(|e| format!("Failed to create request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    response
+        .json::<AuthResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }
 
 #[component]

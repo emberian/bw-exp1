@@ -5,13 +5,17 @@
 use leptos::prelude::*;
 use uuid::Uuid;
 
+use bw_shared::dto::*;
+use bw_shared::ChatChannel;
+
 /// Global game state, provided at app root.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct GameState {
     // Connection state
     pub connected: RwSignal<bool>,
     pub player_id: RwSignal<Option<Uuid>>,
     pub username: RwSignal<String>,
+    pub server_tick: RwSignal<u64>,
 
     // Player resources
     pub reputation: RwSignal<i32>,
@@ -26,6 +30,7 @@ pub struct GameState {
     pub experience: RwSignal<i32>,
 
     // Ship state
+    pub ship_id: RwSignal<Option<Uuid>>,
     pub ship_hull: RwSignal<f32>,
     pub ship_shields: RwSignal<f32>,
     pub ship_status: RwSignal<String>,
@@ -35,16 +40,113 @@ pub struct GameState {
     pub position_y: RwSignal<f64>,
 
     // Current sector
+    pub sector_id: RwSignal<Option<Uuid>>,
     pub sector_name: RwSignal<String>,
     pub sector_danger: RwSignal<String>,
+
+    // Locations in sector
+    pub locations: RwSignal<Vec<LocationInfo>>,
+
+    // Other ships in sector
+    pub ships: RwSignal<Vec<ShipInfo>>,
+
+    // Missions
+    pub available_missions: RwSignal<Vec<MissionInfo>>,
+    pub active_mission: RwSignal<Option<MissionInfo>>,
+
+    // Mission choice dialog
+    pub mission_choice: RwSignal<Option<MissionChoiceInfo>>,
+
+    // Chat messages
+    pub chat_messages: RwSignal<Vec<ChatMessageInfo>>,
 
     // Squadron state
     pub squadron: RwSignal<Option<SquadronInfo>>,
 
     // UI state
     pub selected_target: RwSignal<Option<Uuid>>,
-    pub active_mission: RwSignal<Option<Uuid>>,
     pub show_squadron_dialog: RwSignal<bool>,
+    pub show_mission_dialog: RwSignal<bool>,
+
+    // Combat state
+    pub combat_engagement_id: RwSignal<Option<Uuid>>,
+    pub combat_round: RwSignal<u32>,
+    pub combat_events: RwSignal<Vec<CombatEventInfo>>,
+    pub combat_resolved: RwSignal<bool>,
+    pub combat_winner: RwSignal<Option<String>>,
+
+    // Error/notification
+    pub last_error: RwSignal<Option<String>>,
+    pub notification: RwSignal<Option<String>>,
+}
+
+/// Location info for display.
+#[derive(Clone, Debug, Default)]
+pub struct LocationInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub location_type: String,
+    pub x: f64,
+    pub y: f64,
+    pub services: Vec<String>,
+}
+
+/// Ship info for display.
+#[derive(Clone, Debug, Default)]
+pub struct ShipInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub ship_class: String,
+    pub x: f64,
+    pub y: f64,
+    pub hull_percent: f32,
+    pub is_player: bool,
+    pub is_hostile: bool,
+    pub status: String,
+}
+
+/// Mission info for display.
+#[derive(Clone, Debug, Default)]
+pub struct MissionInfo {
+    pub id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub mission_type: String,
+    pub status: String,
+    pub reputation_reward: i32,
+    pub fame_reward: i32,
+    pub expires_in_seconds: Option<u32>,
+    pub progress: f32,
+    pub can_accept: bool,
+    pub is_high_profile: bool,
+}
+
+/// Mission choice info for dialog.
+#[derive(Clone, Debug, Default)]
+pub struct MissionChoiceInfo {
+    pub mission_id: Uuid,
+    pub description: String,
+    pub choices: Vec<ChoiceInfo>,
+}
+
+/// Single choice option.
+#[derive(Clone, Debug, Default)]
+pub struct ChoiceInfo {
+    pub id: String,
+    pub text: String,
+    pub is_available: bool,
+    pub requirement_text: Option<String>,
+}
+
+/// Chat message for display.
+#[derive(Clone, Debug)]
+pub struct ChatMessageInfo {
+    pub id: u64,
+    pub sender_name: String,
+    pub message: String,
+    pub channel: ChatChannel,
+    pub timestamp: u64,
+    pub is_system: bool,
 }
 
 /// Squadron information for display.
@@ -63,12 +165,30 @@ pub struct SquadronInfo {
     pub is_officer: bool,
 }
 
+/// Combat event info for display.
+#[derive(Clone, Debug)]
+pub struct CombatEventInfo {
+    pub event_type: String,
+    pub attacker_name: String,
+    pub target_name: String,
+    pub damage: Option<f32>,
+    pub hit: bool,
+    pub message: String,
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GameState {
     pub fn new() -> Self {
         Self {
             connected: RwSignal::new(false),
             player_id: RwSignal::new(None),
             username: RwSignal::new("Officer".to_string()),
+            server_tick: RwSignal::new(0),
 
             reputation: RwSignal::new(100),
             fame: RwSignal::new(0),
@@ -79,6 +199,7 @@ impl GameState {
             morale: RwSignal::new(50.0),
             experience: RwSignal::new(0),
 
+            ship_id: RwSignal::new(None),
             ship_hull: RwSignal::new(100.0),
             ship_shields: RwSignal::new(50.0),
             ship_status: RwSignal::new("Idle".to_string()),
@@ -86,14 +207,33 @@ impl GameState {
             position_x: RwSignal::new(0.0),
             position_y: RwSignal::new(0.0),
 
-            sector_name: RwSignal::new("Thornwick Sector".to_string()),
-            sector_danger: RwSignal::new("Moderate".to_string()),
+            sector_id: RwSignal::new(None),
+            sector_name: RwSignal::new("Unknown Sector".to_string()),
+            sector_danger: RwSignal::new("Unknown".to_string()),
+
+            locations: RwSignal::new(vec![]),
+            ships: RwSignal::new(vec![]),
+
+            available_missions: RwSignal::new(vec![]),
+            active_mission: RwSignal::new(None),
+            mission_choice: RwSignal::new(None),
+
+            chat_messages: RwSignal::new(vec![]),
 
             squadron: RwSignal::new(None),
 
             selected_target: RwSignal::new(None),
-            active_mission: RwSignal::new(None),
             show_squadron_dialog: RwSignal::new(false),
+            show_mission_dialog: RwSignal::new(false),
+
+            combat_engagement_id: RwSignal::new(None),
+            combat_round: RwSignal::new(0),
+            combat_events: RwSignal::new(vec![]),
+            combat_resolved: RwSignal::new(false),
+            combat_winner: RwSignal::new(None),
+
+            last_error: RwSignal::new(None),
+            notification: RwSignal::new(None),
         }
     }
 
@@ -131,6 +271,268 @@ impl GameState {
     /// Update squadron info.
     pub fn update_squadron(&self, info: Option<SquadronInfo>) {
         self.squadron.set(info);
+    }
+
+    /// Handle initial state from server.
+    pub fn handle_initial_state(
+        &self,
+        player: PlayerDto,
+        ship: ShipDto,
+        sector: SectorDto,
+        ships: Vec<ShipDto>,
+        missions: Vec<MissionDto>,
+    ) {
+        // Player info
+        self.player_id.set(Some(player.id));
+        self.username.set(player.username);
+        self.reputation.set(player.reputation);
+        self.fame.set(player.fame);
+
+        // Ship info
+        self.ship_id.set(Some(ship.id));
+        self.position_x.set(ship.position.x);
+        self.position_y.set(ship.position.y);
+        self.ship_hull.set(ship.hull_percent);
+        self.ship_shields.set(ship.shield_percent);
+        self.ship_status.set(ship.status);
+
+        // Sector info
+        self.sector_id.set(Some(sector.id));
+        self.sector_name.set(sector.name);
+        self.sector_danger.set(sector.danger_level);
+
+        // Locations
+        let locs: Vec<LocationInfo> = sector.locations.into_iter().map(|l| LocationInfo {
+            id: l.id,
+            name: l.name,
+            location_type: l.location_type,
+            x: l.position.x,
+            y: l.position.y,
+            services: l.services,
+        }).collect();
+        self.locations.set(locs);
+
+        // Other ships
+        let ship_infos: Vec<ShipInfo> = ships.into_iter().map(|s| ShipInfo {
+            id: s.id,
+            name: s.name,
+            ship_class: s.ship_class,
+            x: s.position.x,
+            y: s.position.y,
+            hull_percent: s.hull_percent,
+            is_player: s.is_player,
+            is_hostile: s.is_hostile,
+            status: s.status,
+        }).collect();
+        self.ships.set(ship_infos);
+
+        // Missions
+        let mission_infos: Vec<MissionInfo> = missions.into_iter().map(|m| MissionInfo {
+            id: m.id,
+            title: m.title,
+            description: m.description,
+            mission_type: m.mission_type,
+            status: m.status,
+            reputation_reward: m.reputation_reward,
+            fame_reward: m.fame_reward,
+            expires_in_seconds: m.expires_in_seconds,
+            progress: m.progress,
+            can_accept: m.can_accept,
+            is_high_profile: m.is_high_profile,
+        }).collect();
+        self.available_missions.set(mission_infos);
+    }
+
+    /// Handle state update from server.
+    pub fn handle_state_update(
+        &self,
+        tick: u64,
+        ship_updates: Vec<ShipUpdateDto>,
+        ship_spawns: Vec<ShipDto>,
+        ship_despawns: Vec<Uuid>,
+    ) {
+        self.server_tick.set(tick);
+
+        // Update existing ships
+        self.ships.update(|ships| {
+            for update in ship_updates {
+                // Check if it's our ship
+                if Some(update.id) == self.ship_id.get_untracked() {
+                    if let Some(pos) = &update.position {
+                        self.position_x.set(pos.x);
+                        self.position_y.set(pos.y);
+                    }
+                    if let Some(hull) = update.hull_percent {
+                        self.ship_hull.set(hull);
+                    }
+                    if let Some(shields) = update.shield_percent {
+                        self.ship_shields.set(shields);
+                    }
+                    if let Some(status) = update.status.clone() {
+                        self.ship_status.set(status);
+                    }
+                }
+
+                // Update in ships list
+                if let Some(ship) = ships.iter_mut().find(|s| s.id == update.id) {
+                    if let Some(pos) = update.position {
+                        ship.x = pos.x;
+                        ship.y = pos.y;
+                    }
+                    if let Some(hull) = update.hull_percent {
+                        ship.hull_percent = hull;
+                    }
+                    if let Some(status) = update.status {
+                        ship.status = status;
+                    }
+                }
+            }
+
+            // Remove despawned ships
+            ships.retain(|s| !ship_despawns.contains(&s.id));
+
+            // Add spawned ships
+            for spawn in ship_spawns {
+                ships.push(ShipInfo {
+                    id: spawn.id,
+                    name: spawn.name,
+                    ship_class: spawn.ship_class,
+                    x: spawn.position.x,
+                    y: spawn.position.y,
+                    hull_percent: spawn.hull_percent,
+                    is_player: spawn.is_player,
+                    is_hostile: spawn.is_hostile,
+                    status: spawn.status,
+                });
+            }
+        });
+    }
+
+    /// Handle mission choice from server.
+    pub fn handle_mission_choice(&self, mission_id: Uuid, description: String, choices: Vec<ChoiceDto>) {
+        let choice_infos: Vec<ChoiceInfo> = choices.into_iter().map(|c| ChoiceInfo {
+            id: c.id,
+            text: c.text,
+            is_available: c.is_available,
+            requirement_text: c.requirement_text,
+        }).collect();
+
+        self.mission_choice.set(Some(MissionChoiceInfo {
+            mission_id,
+            description,
+            choices: choice_infos,
+        }));
+        self.show_mission_dialog.set(true);
+    }
+
+    /// Handle mission result from server.
+    pub fn handle_mission_result(
+        &self,
+        _mission_id: Uuid,
+        success: bool,
+        reputation_change: i32,
+        fame_change: i32,
+        narrative: String,
+    ) {
+        // Clear mission choice dialog
+        self.mission_choice.set(None);
+        self.show_mission_dialog.set(false);
+
+        // Show result as notification
+        let result_text = if success { "Mission Complete!" } else { "Mission Failed" };
+        let notification = format!("{} {} (Rep: {:+}, Fame: {:+})",
+            result_text, narrative, reputation_change, fame_change);
+        self.notification.set(Some(notification));
+
+        // Clear active mission
+        self.active_mission.set(None);
+    }
+
+    /// Handle combat update from server.
+    pub fn handle_combat_update(
+        &self,
+        engagement_id: Uuid,
+        round: u32,
+        events: Vec<bw_shared::dto::CombatEventDto>,
+        is_resolved: bool,
+        winner: Option<String>,
+    ) {
+        self.combat_engagement_id.set(Some(engagement_id));
+        self.combat_round.set(round);
+        self.combat_resolved.set(is_resolved);
+        self.combat_winner.set(winner.clone());
+
+        // Convert DTOs to display info
+        let event_infos: Vec<CombatEventInfo> = events.into_iter().map(|e| CombatEventInfo {
+            event_type: e.event_type,
+            attacker_name: e.attacker_name,
+            target_name: e.target_name,
+            damage: e.damage,
+            hit: e.hit,
+            message: e.message,
+        }).collect();
+
+        // Append new events to existing list
+        self.combat_events.update(|existing| {
+            existing.extend(event_infos);
+            // Keep last 50 events
+            if existing.len() > 50 {
+                existing.drain(0..existing.len() - 50);
+            }
+        });
+
+        // If combat resolved, show notification
+        if is_resolved {
+            if let Some(w) = winner {
+                self.notification.set(Some(format!("Combat resolved. Winner: {}", w)));
+            } else {
+                self.notification.set(Some("Combat resolved.".to_string()));
+            }
+        }
+    }
+
+    /// Clear combat state.
+    pub fn clear_combat(&self) {
+        self.combat_engagement_id.set(None);
+        self.combat_round.set(0);
+        self.combat_events.set(vec![]);
+        self.combat_resolved.set(false);
+        self.combat_winner.set(None);
+    }
+
+    /// Check if in active combat.
+    pub fn in_combat(&self) -> bool {
+        self.combat_engagement_id.get().is_some() && !self.combat_resolved.get()
+    }
+
+    /// Add a chat message.
+    pub fn add_chat_message(&self, sender_name: String, message: String, channel: ChatChannel, timestamp: u64) {
+        self.chat_messages.update(|msgs| {
+            let id = msgs.len() as u64;
+            let is_system = channel == ChatChannel::System;
+            msgs.push(ChatMessageInfo {
+                id,
+                sender_name,
+                message,
+                channel,
+                timestamp,
+                is_system,
+            });
+            // Keep last 100 messages
+            if msgs.len() > 100 {
+                msgs.remove(0);
+            }
+        });
+    }
+
+    /// Set error message.
+    pub fn set_error(&self, message: String) {
+        self.last_error.set(Some(message));
+    }
+
+    /// Clear error message.
+    pub fn clear_error(&self) {
+        self.last_error.set(None);
     }
 
     /// Check if player is in a squadron.

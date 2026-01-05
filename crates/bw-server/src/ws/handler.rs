@@ -314,10 +314,11 @@ async fn handle_game_message(
     use crate::simulation::{
         dock_at_station, undock, use_service, start_mission, process_mission_choice,
         apply_resource_changes, start_combat, flee_from_combat,
-        create_squadron, invite_to_squadron, leave_squadron, process_squadron_action,
-        get_squadron_info,
+        create_squadron, invite_to_squadron, accept_squadron_invite, decline_squadron_invite,
+        leave_squadron, process_squadron_action, get_squadron_info,
+        accept_alliance, decline_alliance,
     };
-    use bw_core::models::StationService;
+    use bw_core::models::{StationService, Ship, ShipClass, Position};
 
     match msg {
         ClientMessage::MoveToPosition { x, y, z } => {
@@ -352,6 +353,41 @@ async fn handle_game_message(
                     if matches!(ship.status, ShipStatus::InTransit { .. }) {
                         ship.status = ShipStatus::Idle;
                     }
+                }
+            }
+        }
+
+        ClientMessage::MoveToLocation { location_id } => {
+            if let Some(sector) = state.sectors.get(&sector_id) {
+                // Find the location in the sector
+                if let Some(location) = sector.sector.locations.iter().find(|l| l.id == location_id) {
+                    let destination = location.position;
+
+                    if let Some(session) = state.players.get(&player_id) {
+                        if let Some(mut ship) = state.ships.get_mut(&session.ship_id) {
+                            use bw_core::models::ShipStatus;
+
+                            if !ship.can_move() {
+                                let _ = tx.send(ServerMessage::Error {
+                                    code: "CANNOT_MOVE".to_string(),
+                                    message: "Ship cannot move in current state".to_string(),
+                                }).await;
+                                return;
+                            }
+
+                            ship.status = ShipStatus::InTransit {
+                                destination,
+                                target_id: Some(location_id),
+                            };
+
+                            tracing::debug!("Player {} moving to location {}", player_id, location_id);
+                        }
+                    }
+                } else {
+                    let _ = tx.send(ServerMessage::Error {
+                        code: "LOCATION_NOT_FOUND".to_string(),
+                        message: "Location not found in this sector".to_string(),
+                    }).await;
                 }
             }
         }
@@ -473,9 +509,76 @@ async fn handle_game_message(
 
                     // Handle combat spawn
                     if let Some(ref combat_spawn) = result.spawn_combat {
-                        // Spawn enemy and start combat
                         tracing::info!("Mission spawned combat: {} x{}", combat_spawn.enemy_type, combat_spawn.enemy_count);
-                        // TODO: Implement enemy spawning for missions
+
+                        // Map enemy type to ship class
+                        let ship_class = match combat_spawn.enemy_type.to_lowercase().as_str() {
+                            "pirate" | "raider" | "pirate_raider" => ShipClass::PirateRaider,
+                            "frigate" | "pirate_frigate" => ShipClass::PirateFrigate,
+                            "terrorist" | "bomber" | "terrorist_bomber" => ShipClass::TerroristBomber,
+                            "drone" | "drone_swarm" => ShipClass::DroneSwarm,
+                            "sera" | "sera_swarm" => ShipClass::SeraSwarm,
+                            "sera_hunter" => ShipClass::SeraHunter,
+                            _ => ShipClass::PirateRaider,
+                        };
+
+                        // Get player ship position for spawning nearby
+                        if let Some(session) = state.players.get(&player_id) {
+                            let player_ship_id = session.ship_id;
+                            drop(session);
+
+                            if let Some(player_ship) = state.ships.get(&player_ship_id) {
+                                let player_pos = player_ship.position;
+                                drop(player_ship);
+
+                                // Spawn enemies
+                                for i in 0..combat_spawn.enemy_count {
+                                    // Offset spawn position slightly from player
+                                    let offset_x = 50.0 + (i as f64 * 20.0);
+                                    let offset_y = 50.0;
+                                    let spawn_pos = Position::new(
+                                        player_pos.x + offset_x,
+                                        player_pos.y + offset_y,
+                                        player_pos.z,
+                                    );
+
+                                    // Generate enemy name
+                                    let enemy_name = format!("{} #{}", combat_spawn.enemy_name, i + 1);
+
+                                    // Create enemy ship
+                                    let enemy_ship = Ship::new_npc_ship(
+                                        enemy_name,
+                                        ship_class,
+                                        sector_id,
+                                        spawn_pos,
+                                        None, // No faction for mission enemies
+                                    );
+                                    let enemy_ship_id = enemy_ship.id;
+
+                                    // Add to state
+                                    state.ships.insert(enemy_ship_id, enemy_ship);
+
+                                    // Add to sector
+                                    if let Some(sector) = state.sectors.get(&sector_id) {
+                                        sector.ship_ids.insert(enemy_ship_id, ());
+
+                                        // Start combat with first enemy
+                                        if i == 0 {
+                                            if let Some(engagement) = start_combat(state, &sector, player_ship_id, enemy_ship_id) {
+                                                let _ = tx.send(ServerMessage::CombatUpdate {
+                                                    engagement_id: engagement.id,
+                                                    round: 0,
+                                                    events: vec![],
+                                                    is_resolved: false,
+                                                    winner: None,
+                                                }).await;
+                                                tracing::info!("Mission combat started: engagement {}", engagement.id);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     if result.is_complete {
@@ -572,6 +675,73 @@ async fn handle_game_message(
             }
         }
 
+        ClientMessage::FireWeapon { weapon_index, target_id } => {
+            use bw_core::models::ShipStatus;
+
+            if let Some(session) = state.players.get(&player_id) {
+                let ship_id = session.ship_id;
+                drop(session);
+
+                // Check if player is in combat
+                let ship = state.ships.get(&ship_id);
+                let engagement_id = match ship.as_ref().and_then(|s| {
+                    if let ShipStatus::InCombat { engagement_id } = s.status {
+                        Some(engagement_id)
+                    } else {
+                        None
+                    }
+                }) {
+                    Some(id) => id,
+                    None => {
+                        let _ = tx.send(ServerMessage::Error {
+                            code: "NOT_IN_COMBAT".to_string(),
+                            message: "Must be in combat to fire weapons".to_string(),
+                        }).await;
+                        return;
+                    }
+                };
+                drop(ship);
+
+                // Check weapon index is valid
+                let weapon_count = state.ships.get(&ship_id)
+                    .map(|s| s.weapons.len())
+                    .unwrap_or(0);
+
+                if weapon_index >= weapon_count {
+                    let _ = tx.send(ServerMessage::Error {
+                        code: "INVALID_WEAPON".to_string(),
+                        message: "Invalid weapon index".to_string(),
+                    }).await;
+                    return;
+                }
+
+                // Verify target is in combat with us
+                if let Some(sector) = state.sectors.get(&sector_id) {
+                    if let Some(combat) = sector.combats.get(&engagement_id) {
+                        if !combat.all_participants().contains(&target_id) {
+                            let _ = tx.send(ServerMessage::Error {
+                                code: "INVALID_TARGET".to_string(),
+                                message: "Target is not in this combat".to_string(),
+                            }).await;
+                            return;
+                        }
+                    }
+                }
+
+                // Fire weapon is handled by combat system automatically
+                // For manual fire, just log it (combat processor handles actual attacks)
+                tracing::debug!("Player {} fired weapon {} at target {}", player_id, weapon_index, target_id);
+            }
+        }
+
+        ClientMessage::JoinSector { .. } | ClientMessage::LeaveSector | ClientMessage::MoveToSector { .. } => {
+            tracing::warn!("Multi-sector travel not yet implemented for player {}", player_id);
+            let _ = tx.send(ServerMessage::Error {
+                code: "NOT_IMPLEMENTED".to_string(),
+                message: "Sector travel coming soon".to_string(),
+            }).await;
+        }
+
         ClientMessage::SendChat { message, channel } => {
             use bw_shared::ChatChannel;
 
@@ -630,24 +800,98 @@ async fn handle_game_message(
             let result = invite_to_squadron(state, player_id, target_id);
 
             if result.success {
-                // Notify both players
+                // Notify inviter
                 let _ = tx.send(ServerMessage::SquadronUpdate {
                     squadron: get_squadron_info(state, player_id),
                     message: result.message.clone(),
                 }).await;
 
-                // Notify the invited player if they're online
-                if let Some(session) = state.players.get(&target_id) {
-                    if let Some(ref conn) = session.connection {
-                        let _ = conn.send(ServerMessage::SquadronUpdate {
-                            squadron: get_squadron_info(state, target_id),
-                            message: "You have been added to a squadron!".to_string(),
-                        }).await;
+                // Send invitation to the target player if they're online
+                if let Some(invite) = result.invite {
+                    if let Some(session) = state.players.get(&target_id) {
+                        if let Some(ref conn) = session.connection {
+                            // Get squadron tag
+                            let squadron_tag = state.squadrons.get(&invite.squadron_id)
+                                .map(|s| s.tag.clone())
+                                .unwrap_or_default();
+
+                            let _ = conn.send(ServerMessage::SquadronInvite {
+                                invite_id: invite.id,
+                                squadron_id: invite.squadron_id,
+                                squadron_name: invite.squadron_name.clone(),
+                                squadron_tag,
+                                inviter_name: invite.inviter_name.clone(),
+                            }).await;
+                        }
                     }
                 }
             } else {
                 let _ = tx.send(ServerMessage::Error {
                     code: "SQUADRON_INVITE_FAILED".to_string(),
+                    message: result.message,
+                }).await;
+            }
+        }
+
+        ClientMessage::AcceptSquadronInvite { invite_id } => {
+            let result = accept_squadron_invite(state, player_id, invite_id);
+
+            if result.success {
+                let _ = tx.send(ServerMessage::SquadronUpdate {
+                    squadron: get_squadron_info(state, player_id),
+                    message: result.message,
+                }).await;
+            } else {
+                let _ = tx.send(ServerMessage::Error {
+                    code: "INVITE_ACCEPT_FAILED".to_string(),
+                    message: result.message,
+                }).await;
+            }
+        }
+
+        ClientMessage::DeclineSquadronInvite { invite_id } => {
+            let result = decline_squadron_invite(state, player_id, invite_id);
+
+            if result.success {
+                let _ = tx.send(ServerMessage::SquadronUpdate {
+                    squadron: None,
+                    message: result.message,
+                }).await;
+            } else {
+                let _ = tx.send(ServerMessage::Error {
+                    code: "INVITE_DECLINE_FAILED".to_string(),
+                    message: result.message,
+                }).await;
+            }
+        }
+
+        ClientMessage::AcceptAlliance { proposal_id } => {
+            let result = accept_alliance(state, player_id, proposal_id);
+
+            if result.success {
+                let _ = tx.send(ServerMessage::SquadronUpdate {
+                    squadron: get_squadron_info(state, player_id),
+                    message: result.message,
+                }).await;
+            } else {
+                let _ = tx.send(ServerMessage::Error {
+                    code: "ALLIANCE_ACCEPT_FAILED".to_string(),
+                    message: result.message,
+                }).await;
+            }
+        }
+
+        ClientMessage::DeclineAlliance { proposal_id } => {
+            let result = decline_alliance(state, player_id, proposal_id);
+
+            if result.success {
+                let _ = tx.send(ServerMessage::SquadronUpdate {
+                    squadron: get_squadron_info(state, player_id),
+                    message: result.message,
+                }).await;
+            } else {
+                let _ = tx.send(ServerMessage::Error {
+                    code: "ALLIANCE_DECLINE_FAILED".to_string(),
                     message: result.message,
                 }).await;
             }

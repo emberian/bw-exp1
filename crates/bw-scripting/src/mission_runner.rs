@@ -388,7 +388,10 @@ impl ChoiceRequirement {
             Self::MinAmmo(v) => ctx.ship_ammo >= *v,
             Self::MinFuel(v) => ctx.ship_fuel >= *v,
             Self::MinMorale(v) => ctx.crew_morale >= *v,
-            Self::HasItem(_) => false, // TODO: inventory system
+            Self::HasItem(item) => {
+                tracing::warn!("Inventory system not implemented, assuming player has item: {}", item);
+                true // Allow missions to proceed until inventory is implemented
+            }
             Self::Custom(_, _) => true, // Custom logic in script
         }
     }

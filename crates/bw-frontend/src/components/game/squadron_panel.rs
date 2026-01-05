@@ -3,6 +3,8 @@
 //! Displays squadron info and provides management actions.
 
 use leptos::prelude::*;
+
+use crate::api::WsService;
 use crate::state::GameState;
 
 #[component]
@@ -31,6 +33,7 @@ pub fn SquadronPanel() -> impl IntoView {
 #[component]
 fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
     let game_state = expect_context::<GameState>();
+    let ws = expect_context::<WsService>();
 
     let role_text = if squadron.is_leader {
         "Leader"
@@ -46,6 +49,11 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
         "text-blue-400"
     } else {
         "text-slate-400"
+    };
+
+    let ws_clone = ws;
+    let handle_leave = move |_| {
+        ws_clone.leave_squadron();
     };
 
     view! {
@@ -71,8 +79,8 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
             <div class="grid grid-cols-2 gap-3 text-sm">
                 <StatCard label="Members" value=format!("{}", squadron.member_count) />
                 <StatCard label="Leader" value=squadron.leader_name.clone() />
-                <StatCard label="Rep Bonus" value=format!("+{:.0}%", squadron.reputation_bonus) />
-                <StatCard label="Fame Bonus" value=format!("+{:.0}%", squadron.fame_bonus) />
+                <StatCard label="Rep Bonus" value=format!("+{:.0}%", squadron.reputation_bonus * 100.0) />
+                <StatCard label="Fame Bonus" value=format!("+{:.0}%", squadron.fame_bonus * 100.0) />
             </div>
 
             // War status
@@ -91,7 +99,6 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
                 <button
                     class="w-full px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm text-slate-200 transition-colors"
                     on:click=move |_| {
-                        // TODO: Open squadron details dialog
                         game_state.show_squadron_dialog.set(true);
                     }
                 >
@@ -100,10 +107,7 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
 
                 <button
                     class="w-full px-3 py-2 bg-red-900/50 hover:bg-red-800/50 rounded text-sm text-red-400 transition-colors"
-                    on:click=move |_| {
-                        // TODO: Send leave squadron message via WebSocket
-                        leptos::logging::log!("Leave squadron clicked");
-                    }
+                    on:click=handle_leave
                 >
                     "Leave Squadron"
                 </button>
@@ -115,9 +119,27 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
 /// Display when player is not in a squadron.
 #[component]
 fn NoSquadron() -> impl IntoView {
+    let ws = expect_context::<WsService>();
+    let game_state = expect_context::<GameState>();
+
     let create_name = RwSignal::new(String::new());
     let create_tag = RwSignal::new(String::new());
     let show_create = RwSignal::new(false);
+
+    // Check if player has enough reputation
+    let can_afford = move || game_state.reputation.get() >= 50;
+
+    let ws_clone = ws;
+    let handle_create = move |_| {
+        let name = create_name.get();
+        let tag = create_tag.get();
+        if name.len() >= 3 && tag.len() >= 2 && can_afford() {
+            ws_clone.create_squadron(name, tag);
+            show_create.set(false);
+            create_name.set(String::new());
+            create_tag.set(String::new());
+        }
+    };
 
     view! {
         <div class="space-y-4">
@@ -158,20 +180,30 @@ fn NoSquadron() -> impl IntoView {
                                 />
                             </div>
 
-                            <p class="text-xs text-slate-500">
-                                "Creating a squadron costs 50 reputation."
+                            <p class=move || {
+                                let base = "text-xs";
+                                if can_afford() {
+                                    format!("{} text-slate-500", base)
+                                } else {
+                                    format!("{} text-red-400", base)
+                                }
+                            }>
+                                {move || {
+                                    if can_afford() {
+                                        "Creating a squadron costs 50 reputation.".to_string()
+                                    } else {
+                                        format!("Creating a squadron costs 50 reputation. You have {}.", game_state.reputation.get())
+                                    }
+                                }}
                             </p>
 
                             <div class="flex gap-2">
                                 <button
                                     class="flex-1 px-3 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-sm transition-colors"
                                     disabled=move || {
-                                        create_name.get().len() < 3 || create_tag.get().len() < 2
+                                        create_name.get().len() < 3 || create_tag.get().len() < 2 || !can_afford()
                                     }
-                                    on:click=move |_| {
-                                        // TODO: Send create squadron message via WebSocket
-                                        leptos::logging::log!("Create squadron: {} [{}]", create_name.get(), create_tag.get());
-                                    }
+                                    on:click=handle_create
                                 >
                                     "Create"
                                 </button>

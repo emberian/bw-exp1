@@ -4,11 +4,11 @@
 
 use uuid::Uuid;
 
-use bw_core::models::{Squadron, SquadronBuildingType, SquadronRank};
+use bw_core::models::{Squadron, SquadronBuildingType, SquadronRank, Location, LocationType, StationService, Ship, ShipClass};
 use bw_core::systems::spend_reputation;
 use bw_shared::dto::SquadronDto;
 
-use crate::GameState;
+use crate::{GameState, SquadronInvite, AllianceProposal, ContestedSector};
 
 /// Result of a squadron operation.
 #[derive(Debug)]
@@ -120,14 +120,151 @@ pub fn create_squadron(
     }
 }
 
-/// Invite a player to the squadron.
+/// Result of an invitation that includes invite details for notification.
+#[derive(Debug)]
+pub struct InviteResult {
+    pub success: bool,
+    pub message: String,
+    pub invite: Option<SquadronInvite>,
+}
+
+/// Invite a player to the squadron (creates pending invite).
 pub fn invite_to_squadron(
     state: &GameState,
     inviter_id: Uuid,
     invitee_id: Uuid,
-) -> SquadronResult {
+) -> InviteResult {
     // Get inviter's squadron
     let inviter = match state.player_data.get(&inviter_id) {
+        Some(p) => p,
+        None => {
+            return InviteResult {
+                success: false,
+                message: "Player not found".to_string(),
+                invite: None,
+            }
+        }
+    };
+
+    let squadron_id = match inviter.squadron_id {
+        Some(id) => id,
+        None => {
+            return InviteResult {
+                success: false,
+                message: "You are not in a squadron".to_string(),
+                invite: None,
+            }
+        }
+    };
+
+    let inviter_name = inviter.username.clone();
+    drop(inviter);
+
+    // Get squadron
+    let squadron = match state.squadrons.get(&squadron_id) {
+        Some(s) => s,
+        None => {
+            return InviteResult {
+                success: false,
+                message: "Squadron not found".to_string(),
+                invite: None,
+            }
+        }
+    };
+
+    // Check if inviter can invite (leader, officer, or members_can_invite)
+    let can_invite = squadron.can_manage(inviter_id) || squadron.settings.members_can_invite;
+    if !can_invite {
+        return InviteResult {
+            success: false,
+            message: "You don't have permission to invite".to_string(),
+            invite: None,
+        };
+    }
+
+    let squadron_name = squadron.name.clone();
+    drop(squadron);
+
+    // Check invitee
+    let invitee = match state.player_data.get(&invitee_id) {
+        Some(p) => p,
+        None => {
+            return InviteResult {
+                success: false,
+                message: "Target player not found".to_string(),
+                invite: None,
+            }
+        }
+    };
+
+    if invitee.squadron_id.is_some() {
+        return InviteResult {
+            success: false,
+            message: "Target player is already in a squadron".to_string(),
+            invite: None,
+        };
+    }
+
+    // Check if player already has a pending invite from this squadron
+    if state.pending_squadron_invites.contains_key(&invitee_id) {
+        return InviteResult {
+            success: false,
+            message: "Player already has a pending invitation".to_string(),
+            invite: None,
+        };
+    }
+
+    let invitee_name = invitee.username.clone();
+    drop(invitee);
+
+    // Create pending invite
+    let invite = SquadronInvite {
+        id: Uuid::new_v4(),
+        squadron_id,
+        squadron_name: squadron_name.clone(),
+        inviter_id,
+        inviter_name: inviter_name.clone(),
+        invitee_id,
+        created_at: state.get_tick(),
+    };
+
+    let invite_clone = invite.clone();
+    state.pending_squadron_invites.insert(invitee_id, invite);
+
+    tracing::info!(
+        "Player {} invited {} to squadron '{}'",
+        inviter_name,
+        invitee_name,
+        squadron_name
+    );
+
+    InviteResult {
+        success: true,
+        message: format!("Invitation sent to {}", invitee_name),
+        invite: Some(invite_clone),
+    }
+}
+
+/// Accept a pending squadron invite.
+pub fn accept_squadron_invite(
+    state: &GameState,
+    player_id: Uuid,
+    invite_id: Uuid,
+) -> SquadronResult {
+    // Get and remove invite
+    let invite = match state.pending_squadron_invites.remove(&player_id) {
+        Some((_, invite)) if invite.id == invite_id => invite,
+        _ => {
+            return SquadronResult {
+                success: false,
+                message: "Invitation not found or expired".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    // Verify player still can join
+    let mut player = match state.player_data.get_mut(&player_id) {
         Some(p) => p,
         None => {
             return SquadronResult {
@@ -138,93 +275,76 @@ pub fn invite_to_squadron(
         }
     };
 
-    let squadron_id = match inviter.squadron_id {
-        Some(id) => id,
-        None => {
-            return SquadronResult {
-                success: false,
-                message: "You are not in a squadron".to_string(),
-                squadron: None,
-            }
-        }
-    };
-
-    drop(inviter);
-
-    // Get squadron
-    let squadron = match state.squadrons.get(&squadron_id) {
-        Some(s) => s,
-        None => {
-            return SquadronResult {
-                success: false,
-                message: "Squadron not found".to_string(),
-                squadron: None,
-            }
-        }
-    };
-
-    // Check if inviter can invite (leader, officer, or members_can_invite)
-    let can_invite = squadron.can_manage(inviter_id) || squadron.settings.members_can_invite;
-    if !can_invite {
+    if player.squadron_id.is_some() {
         return SquadronResult {
             success: false,
-            message: "You don't have permission to invite".to_string(),
+            message: "You are already in a squadron".to_string(),
             squadron: None,
         };
     }
 
-    drop(squadron);
-
-    // Check invitee
-    let mut invitee = match state.player_data.get_mut(&invitee_id) {
-        Some(p) => p,
-        None => {
-            return SquadronResult {
-                success: false,
-                message: "Target player not found".to_string(),
-                squadron: None,
-            }
-        }
-    };
-
-    if invitee.squadron_id.is_some() {
-        return SquadronResult {
-            success: false,
-            message: "Target player is already in a squadron".to_string(),
-            squadron: None,
-        };
-    }
-
-    // For now, auto-accept (TODO: implement invitation system)
-    invitee.squadron_id = Some(squadron_id);
-    invitee.squadron_rank = Some(SquadronRank::Member);
-    let invitee_name = invitee.username.clone();
-    drop(invitee);
+    // Update player
+    player.squadron_id = Some(invite.squadron_id);
+    player.squadron_rank = Some(SquadronRank::Member);
+    let player_name = player.username.clone();
+    drop(player);
 
     // Add to squadron
-    let mut squadron = match state.squadrons.get_mut(&squadron_id) {
+    let mut squadron = match state.squadrons.get_mut(&invite.squadron_id) {
         Some(s) => s,
         None => {
             return SquadronResult {
                 success: false,
-                message: "Squadron not found".to_string(),
+                message: "Squadron no longer exists".to_string(),
                 squadron: None,
             }
         }
     };
 
-    squadron.add_member(invitee_id);
+    squadron.add_member(player_id);
     let squadron_name = squadron.name.clone();
+    drop(squadron);
 
     tracing::info!(
         "Player {} joined squadron '{}'",
-        invitee_name,
+        player_name,
         squadron_name
     );
 
     SquadronResult {
         success: true,
-        message: format!("{} has joined the squadron!", invitee_name),
+        message: format!("Welcome to {}!", squadron_name),
+        squadron: None,
+    }
+}
+
+/// Decline a pending squadron invite.
+pub fn decline_squadron_invite(
+    state: &GameState,
+    player_id: Uuid,
+    invite_id: Uuid,
+) -> SquadronResult {
+    // Get and remove invite
+    let invite = match state.pending_squadron_invites.remove(&player_id) {
+        Some((_, invite)) if invite.id == invite_id => invite,
+        _ => {
+            return SquadronResult {
+                success: false,
+                message: "Invitation not found or expired".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    tracing::info!(
+        "Player {} declined invitation to squadron '{}'",
+        player_id,
+        invite.squadron_name
+    );
+
+    SquadronResult {
+        success: true,
+        message: "Invitation declined".to_string(),
         squadron: None,
     }
 }
@@ -790,6 +910,15 @@ fn make_peace(
     }
 }
 
+/// Result of an alliance proposal.
+#[derive(Debug)]
+pub struct AllianceProposalResult {
+    pub success: bool,
+    pub message: String,
+    pub proposal: Option<AllianceProposal>,
+    pub target_leader_id: Option<Uuid>,
+}
+
 fn form_alliance(
     state: &GameState,
     actor_id: Uuid,
@@ -804,7 +933,7 @@ fn form_alliance(
         };
     }
 
-    let mut squadron = match state.squadrons.get_mut(&squadron_id) {
+    let squadron = match state.squadrons.get(&squadron_id) {
         Some(s) => s,
         None => {
             return SquadronResult {
@@ -823,26 +952,225 @@ fn form_alliance(
         };
     }
 
-    if !state.squadrons.contains_key(&target_squadron_id) {
+    let from_squadron_name = squadron.name.clone();
+    drop(squadron);
+
+    let target = match state.squadrons.get(&target_squadron_id) {
+        Some(s) => s,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "Target squadron not found".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    let target_name = target.name.clone();
+    let _target_leader_id = target.leader_id;
+    drop(target);
+
+    // Check if already allied
+    if let Some(s) = state.squadrons.get(&squadron_id) {
+        if s.allied_squadrons.contains(&target_squadron_id) {
+            return SquadronResult {
+                success: false,
+                message: "Already allied with this squadron".to_string(),
+                squadron: None,
+            };
+        }
+    }
+
+    // Check if there's already a pending proposal
+    if state.pending_alliances.contains_key(&target_squadron_id) {
         return SquadronResult {
             success: false,
-            message: "Target squadron not found".to_string(),
+            message: "Target squadron already has a pending alliance proposal".to_string(),
             squadron: None,
         };
     }
 
-    // For now, one-sided alliance offer (TODO: implement acceptance)
-    squadron.form_alliance(target_squadron_id);
+    // Create pending proposal
+    let proposal = AllianceProposal {
+        id: Uuid::new_v4(),
+        from_squadron_id: squadron_id,
+        from_squadron_name: from_squadron_name.clone(),
+        to_squadron_id: target_squadron_id,
+        created_at: state.get_tick(),
+    };
+
+    state.pending_alliances.insert(target_squadron_id, proposal);
 
     tracing::info!(
-        "Squadron {} formed alliance with {}",
-        squadron_id,
-        target_squadron_id
+        "Squadron '{}' proposed alliance to '{}'",
+        from_squadron_name,
+        target_name
     );
 
     SquadronResult {
         success: true,
-        message: "Alliance formed! Allied squadrons share sector bonuses.".to_string(),
+        message: format!("Alliance proposal sent to {}!", target_name),
+        squadron: None,
+    }
+}
+
+/// Accept a pending alliance proposal.
+pub fn accept_alliance(
+    state: &GameState,
+    player_id: Uuid,
+    proposal_id: Uuid,
+) -> SquadronResult {
+    // Get player's squadron
+    let player = match state.player_data.get(&player_id) {
+        Some(p) => p,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "Player not found".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    let squadron_id = match player.squadron_id {
+        Some(id) => id,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "You are not in a squadron".to_string(),
+                squadron: None,
+            }
+        }
+    };
+    drop(player);
+
+    // Check if player is leader
+    let squadron = match state.squadrons.get(&squadron_id) {
+        Some(s) => s,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "Squadron not found".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    if !squadron.is_leader(player_id) {
+        return SquadronResult {
+            success: false,
+            message: "Only the squadron leader can accept alliances".to_string(),
+            squadron: None,
+        };
+    }
+    drop(squadron);
+
+    // Get and remove proposal
+    let proposal = match state.pending_alliances.remove(&squadron_id) {
+        Some((_, proposal)) if proposal.id == proposal_id => proposal,
+        _ => {
+            return SquadronResult {
+                success: false,
+                message: "Alliance proposal not found or expired".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    // Form the alliance (both ways)
+    if let Some(mut from_squadron) = state.squadrons.get_mut(&proposal.from_squadron_id) {
+        from_squadron.form_alliance(squadron_id);
+    }
+
+    if let Some(mut to_squadron) = state.squadrons.get_mut(&squadron_id) {
+        to_squadron.form_alliance(proposal.from_squadron_id);
+    }
+
+    tracing::info!(
+        "Alliance formed between squadrons {} and {}",
+        proposal.from_squadron_id,
+        squadron_id
+    );
+
+    SquadronResult {
+        success: true,
+        message: format!("Alliance formed with {}!", proposal.from_squadron_name),
+        squadron: None,
+    }
+}
+
+/// Decline a pending alliance proposal.
+pub fn decline_alliance(
+    state: &GameState,
+    player_id: Uuid,
+    proposal_id: Uuid,
+) -> SquadronResult {
+    // Get player's squadron
+    let player = match state.player_data.get(&player_id) {
+        Some(p) => p,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "Player not found".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    let squadron_id = match player.squadron_id {
+        Some(id) => id,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "You are not in a squadron".to_string(),
+                squadron: None,
+            }
+        }
+    };
+    drop(player);
+
+    // Check if player is leader
+    let squadron = match state.squadrons.get(&squadron_id) {
+        Some(s) => s,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "Squadron not found".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    if !squadron.is_leader(player_id) {
+        return SquadronResult {
+            success: false,
+            message: "Only the squadron leader can decline alliances".to_string(),
+            squadron: None,
+        };
+    }
+    drop(squadron);
+
+    // Get and remove proposal
+    let proposal = match state.pending_alliances.remove(&squadron_id) {
+        Some((_, proposal)) if proposal.id == proposal_id => proposal,
+        _ => {
+            return SquadronResult {
+                success: false,
+                message: "Alliance proposal not found or expired".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    tracing::info!(
+        "Squadron {} declined alliance from {}",
+        squadron_id,
+        proposal.from_squadron_name
+    );
+
+    SquadronResult {
+        success: true,
+        message: "Alliance proposal declined".to_string(),
         squadron: None,
     }
 }
@@ -938,10 +1266,88 @@ pub fn claim_sector_control(
             };
         }
 
-        // TODO: Implement contested sector mechanics
+        drop(sector);
+
+        // Check if already contested
+        if let Some(mut contest) = state.contested_sectors.get_mut(&sector_id) {
+            // Already contested - add influence based on presence
+            let attacker_ships = count_squadron_ships_in_sector(state, squadron_id, sector_id);
+            contest.attacker_influence += attacker_ships;
+
+            // Check if contest resolved
+            if contest.attacker_influence >= 100 {
+                // Attacker wins!
+                let defender_id = contest.defending_squadron_id;
+                drop(contest);
+
+                // Transfer control
+                if let Some(mut sector) = state.sectors.get_mut(&sector_id) {
+                    sector.sector.controlling_squadron = Some(squadron_id);
+                }
+
+                // Update squadron stats
+                if let Some(mut defender) = state.squadrons.get_mut(&defender_id) {
+                    defender.patrol_sectors.retain(|&id| id != sector_id);
+                    defender.stats.sectors_controlled = defender.patrol_sectors.len() as i32;
+                }
+
+                if let Some(mut attacker) = state.squadrons.get_mut(&squadron_id) {
+                    if !attacker.patrol_sectors.contains(&sector_id) {
+                        attacker.patrol_sectors.push(sector_id);
+                        attacker.stats.sectors_controlled = attacker.patrol_sectors.len() as i32;
+                    }
+                }
+
+                state.contested_sectors.remove(&sector_id);
+
+                tracing::info!("Squadron {} captured sector {} from {}", squadron_id, sector_id, defender_id);
+
+                return SquadronResult {
+                    success: true,
+                    message: "Victory! Your squadron has captured this sector!".to_string(),
+                    squadron: None,
+                };
+            }
+
+            return SquadronResult {
+                success: true,
+                message: format!(
+                    "Contest continues! Your influence: {}/100. Keep fighting for control!",
+                    contest.attacker_influence
+                ),
+                squadron: None,
+            };
+        }
+
+        // Start new contest
+        let contest = ContestedSector {
+            sector_id,
+            defending_squadron_id: controller_id,
+            attacking_squadron_id: squadron_id,
+            defender_influence: 50, // Defender starts with advantage
+            attacker_influence: 10, // Attacker starts with initial claim
+            started_at: state.get_tick(),
+        };
+
+        state.contested_sectors.insert(sector_id, contest);
+
+        let sector_name = state.sectors.get(&sector_id)
+            .map(|s| s.sector.name.clone())
+            .unwrap_or_default();
+
+        tracing::info!(
+            "Squadron {} initiated contest for sector '{}' against {}",
+            squadron_id,
+            sector_name,
+            controller_id
+        );
+
         return SquadronResult {
-            success: false,
-            message: "Contested sector claim not yet implemented".to_string(),
+            success: true,
+            message: format!(
+                "Contest initiated for sector '{}'! Fight for control to claim it.",
+                sector_name
+            ),
             squadron: None,
         };
     }
@@ -1160,23 +1566,109 @@ pub fn build_structure(
 
     drop(player);
 
-    // TODO: Actually create the station/ship entity
-    // For now, just log and track in squadron
+    // Get squadron name for naming buildings
+    let squadron_name = state.squadrons.get(&squadron_id)
+        .map(|s| s.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
 
+    // Get sector for position and adding the entity
+    let mut sector = match state.sectors.get_mut(&sector_id) {
+        Some(s) => s,
+        None => {
+            return SquadronResult {
+                success: false,
+                message: "Sector not found".to_string(),
+                squadron: None,
+            }
+        }
+    };
+
+    // Generate random position within sector
+    let position = sector.sector.random_position();
     let building_name = format!("{:?}", building_type);
+
+    match building_type {
+        SquadronBuildingType::Outpost => {
+            // Create a small outpost location
+            let mut location = Location::new(
+                format!("{} Outpost", squadron_name),
+                LocationType::CivilianStation,
+                position,
+            );
+            location.description = format!("A small outpost operated by {}", squadron_name);
+            location.services = vec![StationService::Refuel, StationService::Repair];
+            sector.sector.locations.push(location);
+        }
+        SquadronBuildingType::Station => {
+            // Create a full station with services
+            let mut location = Location::new(
+                format!("{} Station", squadron_name),
+                LocationType::CivilianStation,
+                position,
+            );
+            location.description = format!("A station operated by {}", squadron_name);
+            location.services = vec![
+                StationService::Refuel,
+                StationService::Rearm,
+                StationService::Repair,
+                StationService::Trade,
+            ];
+            sector.sector.locations.push(location);
+        }
+        SquadronBuildingType::Shipyard => {
+            // Create a shipyard
+            let mut location = Location::new(
+                format!("{} Shipyard", squadron_name),
+                LocationType::Shipyard,
+                position,
+            );
+            location.description = format!("A shipyard operated by {}", squadron_name);
+            sector.sector.locations.push(location);
+        }
+        SquadronBuildingType::PatrolShip | SquadronBuildingType::DefenseShip => {
+            // Create an NPC ship for the squadron
+            let ship_class = if building_type == SquadronBuildingType::PatrolShip {
+                ShipClass::PatrolCorvette
+            } else {
+                ShipClass::Frigate
+            };
+
+            let ship_name = format!("{} {}", squadron_name,
+                if building_type == SquadronBuildingType::PatrolShip { "Patrol" } else { "Defense" }
+            );
+
+            let ship = Ship::new_npc_ship(
+                ship_name,
+                ship_class,
+                sector_id,
+                position,
+                None, // No faction for squadron-owned ships
+            );
+            let ship_id = ship.id;
+
+            // Store in state
+            state.ships.insert(ship_id, ship);
+            sector.ship_ids.insert(ship_id, ());
+        }
+    }
+
+    let sector_name = sector.sector.name.clone();
+    drop(sector);
+
     tracing::info!(
-        "Player {} built {:?} in sector {} for {} rep",
+        "Player {} built {:?} in sector '{}' for {} rep (squadron: {})",
         player_id,
         building_type,
-        sector_id,
-        cost
+        sector_name,
+        cost,
+        squadron_name
     );
 
     SquadronResult {
         success: true,
         message: format!(
-            "Construction of {} initiated! Cost: {} reputation.",
-            building_name, cost
+            "{} constructed in {}! Cost: {} reputation.",
+            building_name, sector_name, cost
         ),
         squadron: None,
     }
@@ -1347,4 +1839,27 @@ pub fn get_squadron_info(state: &GameState, player_id: Uuid) -> Option<SquadronD
         .unwrap_or_else(|| "Unknown".to_string());
 
     Some(build_squadron_dto(&squadron, &leader_name))
+}
+
+/// Count the number of ships owned by a squadron in a given sector.
+fn count_squadron_ships_in_sector(state: &GameState, squadron_id: Uuid, sector_id: Uuid) -> u32 {
+    let sector = match state.sectors.get(&sector_id) {
+        Some(s) => s,
+        None => return 0,
+    };
+
+    let mut count = 0;
+    for ship_id in sector.ship_ids.iter() {
+        if let Some(ship) = state.ships.get(ship_id.key()) {
+            if let Some(owner_id) = ship.owner_id {
+                if let Some(player) = state.player_data.get(&owner_id) {
+                    if player.squadron_id == Some(squadron_id) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    count
 }

@@ -1,61 +1,223 @@
 //! Mission panel component
+//!
+//! Displays available and active missions from GameState.
 
 use leptos::prelude::*;
+use uuid::Uuid;
+
+use crate::api::WsService;
+use crate::state::{GameState, MissionInfo};
 
 #[component]
 pub fn MissionPanel() -> impl IntoView {
+    let game_state = expect_context::<GameState>();
+    let ws = expect_context::<WsService>();
+
+    let available_missions = move || game_state.available_missions.get();
+    let active_mission = move || game_state.active_mission.get();
+
     view! {
         <div class="p-4">
             <h2 class="text-lg font-semibold text-amber-500 mb-4">"Available Missions"</h2>
 
-            // Sample missions
             <div class="space-y-3">
-                <MissionCard
-                    title="Pirate Activity"
-                    description="A civilian freighter reports hostile contacts nearby."
-                    mission_type="PirateIntercept"
-                    reputation_reward=20
-                    fame_reward=5
-                    expires_in="4:32"
-                />
-                <MissionCard
-                    title="Distress Signal"
-                    description="An automated beacon is broadcasting. Situation unclear."
-                    mission_type="DistressSignal"
-                    reputation_reward=25
-                    fame_reward=10
-                    expires_in="2:15"
+                <For
+                    each=available_missions
+                    key=|m| m.id
+                    children=move |mission| {
+                        let ws = ws;
+                        view! {
+                            <MissionCard
+                                mission=mission
+                                on_accept=move |id| {
+                                    ws.accept_mission(id);
+                                }
+                            />
+                        }
+                    }
                 />
             </div>
 
+            // Show empty state if no missions
+            <Show when=move || available_missions().is_empty()>
+                <div class="text-sm text-slate-400 italic py-4">
+                    "No missions available. Check back later or patrol the sector."
+                </div>
+            </Show>
+
             <h2 class="text-lg font-semibold text-amber-500 mt-8 mb-4">"Active Mission"</h2>
-            <div class="text-sm text-slate-400 italic">
-                "No active mission. Accept a mission to begin."
+
+            <Show
+                when=move || active_mission().is_some()
+                fallback=|| view! {
+                    <div class="text-sm text-slate-400 italic">
+                        "No active mission. Accept a mission to begin."
+                    </div>
+                }
+            >
+                {move || {
+                    if let Some(mission) = active_mission() {
+                        let ws = ws;
+                        view! {
+                            <ActiveMissionCard
+                                mission=mission
+                                on_abandon=move |id| {
+                                    ws.abandon_mission(id);
+                                }
+                            />
+                        }.into_any()
+                    } else {
+                        view! { <div /> }.into_any()
+                    }
+                }}
+            </Show>
+        </div>
+    }
+}
+
+#[component]
+fn MissionCard<F>(mission: MissionInfo, on_accept: F) -> impl IntoView
+where
+    F: Fn(Uuid) + 'static + Clone,
+{
+    let id = mission.id;
+    let title = mission.title.clone();
+    let description = mission.description.clone();
+    let reputation_reward = mission.reputation_reward;
+    let fame_reward = mission.fame_reward;
+    let expires_in = mission.expires_in_seconds;
+    let can_accept = mission.can_accept;
+    let is_high_profile = mission.is_high_profile;
+    let mission_type = mission.mission_type.clone();
+
+    let on_accept = on_accept.clone();
+    let handle_click = move |_| {
+        if can_accept {
+            on_accept(id);
+        }
+    };
+
+    // Format expiry time
+    let expiry_text = expires_in.map(|secs| {
+        let mins = secs / 60;
+        let remaining_secs = secs % 60;
+        format!("{}:{:02}", mins, remaining_secs)
+    });
+
+    // Type indicator color
+    let type_color = match mission_type.as_str() {
+        "PirateIntercept" => "text-red-400",
+        "DistressSignal" => "text-yellow-400",
+        "AsteroidThreat" => "text-orange-400",
+        "TerroristPlot" => "text-purple-400",
+        "Investigation" => "text-blue-400",
+        _ => "text-slate-400",
+    };
+
+    view! {
+        <div
+            class=move || {
+                let base = "bg-slate-700/50 rounded-lg p-3 border transition-colors";
+                let border = if can_accept {
+                    "border-slate-600 hover:border-amber-500/50 cursor-pointer"
+                } else {
+                    "border-slate-600/50 opacity-60"
+                };
+                let high_profile = if is_high_profile {
+                    " ring-1 ring-amber-500/30"
+                } else {
+                    ""
+                };
+                format!("{} {}{}", base, border, high_profile)
+            }
+            on:click=handle_click
+        >
+            <div class="flex justify-between items-start mb-2">
+                <div class="flex items-center gap-2">
+                    <h3 class="font-semibold text-slate-200">{title}</h3>
+                    <Show when=move || is_high_profile>
+                        <span class="text-xs text-amber-500 font-bold">"HIGH PROFILE"</span>
+                    </Show>
+                </div>
+                {expiry_text.map(|text| view! {
+                    <span class="text-xs text-slate-400">{text}</span>
+                })}
+            </div>
+            <p class="text-sm text-slate-400 mb-3">{description}</p>
+            <div class="flex justify-between items-center">
+                <div class="flex gap-4 text-xs">
+                    <span class="text-green-400">"+"{reputation_reward}" Rep"</span>
+                    <span class="text-amber-400">"+"{fame_reward}" Fame"</span>
+                </div>
+                <span class={format!("text-xs {}", type_color)}>{mission_type}</span>
             </div>
         </div>
     }
 }
 
 #[component]
-fn MissionCard(
-    title: &'static str,
-    description: &'static str,
-    mission_type: &'static str,
-    reputation_reward: i32,
-    fame_reward: i32,
-    expires_in: &'static str,
-) -> impl IntoView {
+fn ActiveMissionCard<F>(mission: MissionInfo, on_abandon: F) -> impl IntoView
+where
+    F: Fn(Uuid) + 'static + Clone,
+{
+    let id = mission.id;
+    let title = mission.title.clone();
+    let description = mission.description.clone();
+    let reputation_reward = mission.reputation_reward;
+    let fame_reward = mission.fame_reward;
+    let progress = mission.progress;
+    let status = mission.status.clone();
+
+    let on_abandon = on_abandon.clone();
+    let handle_abandon = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
+        on_abandon(id);
+    };
+
+    // Progress bar width
+    let progress_width = format!("{}%", (progress * 100.0) as i32);
+
+    // Status text color
+    let status_color = match status.as_str() {
+        "InProgress" => "text-blue-400",
+        "AwaitingChoice" => "text-yellow-400",
+        "InCombat" => "text-red-400",
+        _ => "text-slate-400",
+    };
+
     view! {
-        <div class="bg-slate-700/50 rounded-lg p-3 border border-slate-600 hover:border-amber-500/50
-                    transition-colors cursor-pointer">
+        <div class="bg-slate-700/70 rounded-lg p-4 border border-amber-500/50">
             <div class="flex justify-between items-start mb-2">
-                <h3 class="font-semibold text-slate-200">{title}</h3>
-                <span class="text-xs text-slate-400">{expires_in}</span>
+                <h3 class="font-semibold text-amber-400">{title}</h3>
+                <span class={format!("text-xs {}", status_color)}>{status}</span>
             </div>
             <p class="text-sm text-slate-400 mb-3">{description}</p>
-            <div class="flex gap-4 text-xs">
-                <span class="text-green-400">"+"{reputation_reward}" Rep"</span>
-                <span class="text-amber-400">"+"{fame_reward}" Fame"</span>
+
+            // Progress bar
+            <div class="mb-3">
+                <div class="flex justify-between text-xs text-slate-500 mb-1">
+                    <span>"Progress"</span>
+                    <span>{format!("{:.0}%", progress * 100.0)}</span>
+                </div>
+                <div class="h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                        class="h-full bg-amber-500 transition-all duration-300"
+                        style=format!("width: {}", progress_width)
+                    />
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center">
+                <div class="flex gap-4 text-xs">
+                    <span class="text-green-400">"+"{reputation_reward}" Rep"</span>
+                    <span class="text-amber-400">"+"{fame_reward}" Fame"</span>
+                </div>
+                <button
+                    class="text-xs text-red-400 hover:text-red-300 hover:underline"
+                    on:click=handle_abandon
+                >
+                    "Abandon"
+                </button>
             </div>
         </div>
     }

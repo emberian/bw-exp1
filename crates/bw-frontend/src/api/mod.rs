@@ -1,4 +1,7 @@
 //! API client
+//!
+//! WebSocket and HTTP communication with the game server.
 
-// API client code will go here
-// For connecting to the server HTTP and WebSocket endpoints
+pub mod ws;
+
+pub use ws::{ConnectionState, WsService};

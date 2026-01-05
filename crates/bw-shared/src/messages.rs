@@ -46,8 +46,14 @@ pub enum ClientMessage {
     /// Squadron commands
     CreateSquadron { name: String, tag: String },
     InviteToSquadron { player_id: Uuid },
+    AcceptSquadronInvite { invite_id: Uuid },
+    DeclineSquadronInvite { invite_id: Uuid },
     LeaveSquadron,
     SquadronAction { action: SquadronAction },
+
+    /// Alliance commands
+    AcceptAlliance { proposal_id: Uuid },
+    DeclineAlliance { proposal_id: Uuid },
 
     /// Heartbeat
     Ping { timestamp: u64 },
@@ -139,10 +145,19 @@ pub enum ServerMessage {
 
     /// Squadron invitation received
     SquadronInvite {
+        invite_id: Uuid,
         squadron_id: Uuid,
         squadron_name: String,
         squadron_tag: String,
         inviter_name: String,
+    },
+
+    /// Alliance proposal received (for squadron leaders)
+    AllianceProposal {
+        proposal_id: Uuid,
+        from_squadron_id: Uuid,
+        from_squadron_name: String,
+        from_squadron_tag: String,
     },
 }
 

@@ -9,6 +9,39 @@ use bw_core::models::*;
 use bw_scripting::ScriptEngine;
 use bw_shared::ServerMessage;
 
+/// A pending squadron invitation.
+#[derive(Clone, Debug)]
+pub struct SquadronInvite {
+    pub id: Uuid,
+    pub squadron_id: Uuid,
+    pub squadron_name: String,
+    pub inviter_id: Uuid,
+    pub inviter_name: String,
+    pub invitee_id: Uuid,
+    pub created_at: u64, // Tick when created
+}
+
+/// A pending alliance proposal.
+#[derive(Clone, Debug)]
+pub struct AllianceProposal {
+    pub id: Uuid,
+    pub from_squadron_id: Uuid,
+    pub from_squadron_name: String,
+    pub to_squadron_id: Uuid,
+    pub created_at: u64,
+}
+
+/// A contested sector status.
+#[derive(Clone, Debug)]
+pub struct ContestedSector {
+    pub sector_id: Uuid,
+    pub defending_squadron_id: Uuid,
+    pub attacking_squadron_id: Uuid,
+    pub defender_influence: u32,
+    pub attacker_influence: u32,
+    pub started_at: u64,
+}
+
 /// Global game state.
 pub struct GameState {
     /// Script engine
@@ -34,6 +67,15 @@ pub struct GameState {
     /// Squadrons (squadron_id -> Squadron)
     pub squadrons: DashMap<Uuid, Squadron>,
 
+    /// Pending squadron invitations (invitee_id -> SquadronInvite)
+    pub pending_squadron_invites: DashMap<Uuid, SquadronInvite>,
+
+    /// Pending alliance proposals (to_squadron_id -> AllianceProposal)
+    pub pending_alliances: DashMap<Uuid, AllianceProposal>,
+
+    /// Contested sectors (sector_id -> ContestedSector)
+    pub contested_sectors: DashMap<Uuid, ContestedSector>,
+
     /// Broadcast channel for server-wide messages
     pub broadcaster: broadcast::Sender<ServerMessage>,
 
@@ -54,6 +96,9 @@ impl GameState {
             ships: DashMap::new(),
             factions: DashMap::new(),
             squadrons: DashMap::new(),
+            pending_squadron_invites: DashMap::new(),
+            pending_alliances: DashMap::new(),
+            contested_sectors: DashMap::new(),
             broadcaster,
             tick: std::sync::atomic::AtomicU64::new(0),
         };
