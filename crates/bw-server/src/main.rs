@@ -8,7 +8,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use bw_server::{GameState, routes, ws, simulation};
+use bw_server::{GameState, Database, routes, ws, simulation};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,8 +26,15 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting BLACKWING server...");
 
+    // Initialize database
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:./blackwing.db".to_string());
+    tracing::info!("Connecting to database: {}", database_url);
+    let db = Database::new(&database_url).await?;
+    tracing::info!("Database connected and migrations applied");
+
     // Initialize game state
-    let state = Arc::new(GameState::new().await?);
+    let state = Arc::new(GameState::new(db).await?);
 
     // Load scripts
     tracing::info!("Loading game scripts...");
@@ -35,6 +42,24 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("Failed to load some scripts: {}", e);
     }
     tracing::info!("Loaded {} scripts", state.scripts.loaded_scripts().len());
+
+    // Initialize scripting systems (must be after Arc<GameState> is created)
+    state.initialize_scripting();
+
+    // Start hot-reload watcher (debug builds only)
+    #[cfg(debug_assertions)]
+    let _script_watcher = {
+        match bw_server::scripting::ScriptWatcher::new("scripts", state.clone()) {
+            Ok(watcher) => {
+                tracing::info!("Script hot-reload enabled");
+                Some(watcher)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to start script hot-reload: {}", e);
+                None
+            }
+        }
+    };
 
     // Start game loop
     let game_state = state.clone();

@@ -1,14 +1,17 @@
 //! Integration tests for the squadron system
 
+use std::sync::Arc;
 use uuid::Uuid;
 
-use bw_core::models::{Player, Squadron, SquadronRank};
+use bw_core::models::{Player, SquadronRank};
+use bw_scripting::{BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher};
 use bw_server::simulation::{
-    create_squadron, invite_to_squadron, leave_squadron, process_squadron_action,
+    create_squadron, invite_to_squadron, accept_squadron_invite, leave_squadron, process_squadron_action,
     can_engage_pvp, get_pvp_engagement_type, PvpEngagementType,
     get_squadron_bonuses, apply_squadron_rep_bonus, apply_squadron_fame_bonus,
 };
 use bw_server::GameState;
+use bw_server::scripting::ScriptLogBuffer;
 use bw_shared::SquadronAction;
 
 /// Helper to create a test player with sufficient resources.
@@ -23,22 +26,50 @@ fn create_test_player(username: &str, reputation: i32) -> Player {
     player
 }
 
+/// Helper to add a member to squadron (invite + accept).
+fn add_member_to_squadron(state: &GameState, inviter_id: Uuid, invitee_id: Uuid) -> bool {
+    let invite_result = invite_to_squadron(state, inviter_id, invitee_id);
+    if !invite_result.success {
+        return false;
+    }
+    let invite = invite_result.invite.unwrap();
+    let accept_result = accept_squadron_invite(state, invitee_id, invite.id);
+    accept_result.success
+}
+
 /// Helper to set up game state with test data.
 async fn setup_test_state() -> GameState {
-    // Create state without async database initialization
+    // Create in-memory database for tests
+    let db = bw_server::Database::new_in_memory().await.unwrap();
+    let db = std::sync::Arc::new(db);
     let scripts = std::sync::Arc::new(bw_scripting::ScriptEngine::new("../../scripts"));
     let (broadcaster, _) = tokio::sync::broadcast::channel(1000);
 
+    // Create scripting systems
+    let event_registry = Arc::new(EventRegistry::new());
+    let event_dispatcher = EventDispatcher::new(event_registry.clone(), scripts.clone());
+
     GameState {
-        scripts,
+        db,
+        scripts: scripts.clone(),
         sectors: dashmap::DashMap::new(),
         player_data: dashmap::DashMap::new(),
         players: dashmap::DashMap::new(),
         ships: dashmap::DashMap::new(),
         factions: dashmap::DashMap::new(),
         squadrons: dashmap::DashMap::new(),
+        pending_squadron_invites: dashmap::DashMap::new(),
+        pending_alliances: dashmap::DashMap::new(),
+        contested_sectors: dashmap::DashMap::new(),
         broadcaster,
         tick: std::sync::atomic::AtomicU64::new(0),
+        // Scripting systems
+        behavior_manager: parking_lot::RwLock::new(BehaviorManager::new(scripts.clone())),
+        coroutine_scheduler: parking_lot::RwLock::new(CoroutineScheduler::new(scripts.clone())),
+        event_registry,
+        event_dispatcher: parking_lot::RwLock::new(event_dispatcher),
+        state_accessor: parking_lot::RwLock::new(None),
+        script_logs: parking_lot::RwLock::new(ScriptLogBuffer::new(100)),
     }
 }
 
@@ -184,12 +215,22 @@ async fn test_invite_to_squadron() {
     let invitee_id = invitee.id;
     state.player_data.insert(invitee_id, invitee);
 
-    // Invite
+    // Invite creates pending invite
     let result = invite_to_squadron(&state, leader_id, invitee_id);
-
     assert!(result.success, "Invite should succeed: {}", result.message);
+    assert!(result.invite.is_some());
+    let invite = result.invite.unwrap();
 
-    // Check invitee was added
+    // Invitee should NOT be added yet (pending invite)
+    let invitee = state.player_data.get(&invitee_id).unwrap();
+    assert!(invitee.squadron_id.is_none(), "Should not be added until invite accepted");
+    drop(invitee);
+
+    // Accept the invite
+    let accept_result = accept_squadron_invite(&state, invitee_id, invite.id);
+    assert!(accept_result.success, "Accept should succeed: {}", accept_result.message);
+
+    // Now invitee should be added
     let invitee = state.player_data.get(&invitee_id).unwrap();
     assert!(invitee.squadron_id.is_some());
     assert_eq!(invitee.squadron_rank, Some(SquadronRank::Member));
@@ -233,7 +274,8 @@ async fn test_leave_squadron_member() {
     let member_id = member.id;
     state.player_data.insert(member_id, member);
 
-    invite_to_squadron(&state, leader_id, member_id);
+    // Use helper to invite + accept
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // Member leaves
     let result = leave_squadron(&state, member_id);
@@ -260,7 +302,8 @@ async fn test_leave_squadron_leader_with_members() {
     let member_id = member.id;
     state.player_data.insert(member_id, member);
 
-    invite_to_squadron(&state, leader_id, member_id);
+    // Use helper to invite + accept
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // Leader tries to leave
     let result = leave_squadron(&state, leader_id);
@@ -308,7 +351,8 @@ async fn test_promote_member_to_officer() {
     let member_id = member.id;
     state.player_data.insert(member_id, member);
 
-    invite_to_squadron(&state, leader_id, member_id);
+    // Use helper to invite + accept
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // Promote
     let action = SquadronAction::PromoteToOfficer { player_id: member_id };
@@ -335,7 +379,8 @@ async fn test_demote_officer() {
     let member_id = member.id;
     state.player_data.insert(member_id, member);
 
-    invite_to_squadron(&state, leader_id, member_id);
+    // Use helper to invite + accept
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
     process_squadron_action(&state, leader_id, SquadronAction::PromoteToOfficer { player_id: member_id });
 
     // Demote
@@ -363,7 +408,8 @@ async fn test_kick_member() {
     let member_id = member.id;
     state.player_data.insert(member_id, member);
 
-    invite_to_squadron(&state, leader_id, member_id);
+    // Use helper to invite + accept
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // Kick
     let action = SquadronAction::KickMember { player_id: member_id };
@@ -390,7 +436,8 @@ async fn test_transfer_leadership() {
     let member_id = member.id;
     state.player_data.insert(member_id, member);
 
-    invite_to_squadron(&state, leader_id, member_id);
+    // Use helper to invite + accept
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // Transfer
     let action = SquadronAction::TransferLeadership { player_id: member_id };
@@ -437,16 +484,16 @@ async fn test_pvp_wargames_same_squadron() {
     state.player_data.insert(leader_id, leader);
 
     let result = create_squadron(&state, leader_id, "Test Squadron".to_string(), "TST".to_string());
-    let squadron_id = result.squadron.unwrap().id;
+    let _squadron_id = result.squadron.unwrap().id;
 
     // Enable wargames
     process_squadron_action(&state, leader_id, SquadronAction::EnableWargames { enabled: true });
 
-    // Add second member
+    // Add second member using helper
     let member = create_test_player("Member", 50);
     let member_id = member.id;
     state.player_data.insert(member_id, member);
-    invite_to_squadron(&state, leader_id, member_id);
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // Should be able to engage in PvP
     assert!(can_engage_pvp(&state, leader_id, member_id));
@@ -470,7 +517,7 @@ async fn test_pvp_no_wargames() {
     let member = create_test_player("Member", 50);
     let member_id = member.id;
     state.player_data.insert(member_id, member);
-    invite_to_squadron(&state, leader_id, member_id);
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // Should NOT be able to engage in PvP
     assert!(!can_engage_pvp(&state, leader_id, member_id));
@@ -554,7 +601,7 @@ async fn test_squadron_bonuses() {
     let member = create_test_player("Member", 50);
     let member_id = member.id;
     state.player_data.insert(member_id, member);
-    invite_to_squadron(&state, leader_id, member_id);
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     let (rep_bonus, fame_bonus) = get_squadron_bonuses(&state, leader_id);
 
@@ -577,7 +624,7 @@ async fn test_apply_squadron_bonus() {
     let member = create_test_player("Member", 50);
     let member_id = member.id;
     state.player_data.insert(member_id, member);
-    invite_to_squadron(&state, leader_id, member_id);
+    assert!(add_member_to_squadron(&state, leader_id, member_id));
 
     // With 2 members: sqrt(2) * 2 ≈ 2.83% bonus
     // Base 100 rep with ~2.83% bonus ≈ 103

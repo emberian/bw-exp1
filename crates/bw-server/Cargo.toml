@@ -35,6 +35,7 @@ serde_json.workspace = true
 rmp-serde.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+rhai.workspace = true
 
 # Logging
 tracing.workspace = true
@@ -45,3 +46,12 @@ thiserror.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
 rand.workspace = true
+toml.workspace = true
+
+# Authentication
+argon2.workspace = true
+sha2.workspace = true
+base64.workspace = true
+
+# File watching (hot-reload, debug only)
+notify = "7.0"

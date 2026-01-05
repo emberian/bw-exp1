@@ -8,6 +8,7 @@ use wasm_bindgen_futures::spawn_local;
 #[derive(Serialize)]
 struct RegisterRequest {
     username: String,
+    password: String,
     faction: String,
 }
 
@@ -21,6 +22,8 @@ struct AuthResponse {
 #[component]
 pub fn RegisterPage() -> impl IntoView {
     let username = RwSignal::new(String::new());
+    let password = RwSignal::new(String::new());
+    let password_confirm = RwSignal::new(String::new());
     let faction = RwSignal::new("COMPACT".to_string());
     let error = RwSignal::new(Option::<String>::None);
     let loading = RwSignal::new(false);
@@ -29,10 +32,22 @@ pub fn RegisterPage() -> impl IntoView {
         ev.prevent_default();
 
         let username_val = username.get();
+        let password_val = password.get();
+        let password_confirm_val = password_confirm.get();
         let faction_val = faction.get();
 
         if username_val.len() < 3 {
             error.set(Some("Username must be at least 3 characters".to_string()));
+            return;
+        }
+
+        if password_val.len() < 8 {
+            error.set(Some("Password must be at least 8 characters".to_string()));
+            return;
+        }
+
+        if password_val != password_confirm_val {
+            error.set(Some("Passwords do not match".to_string()));
             return;
         }
 
@@ -41,7 +56,7 @@ pub fn RegisterPage() -> impl IntoView {
 
         // Call registration API asynchronously
         spawn_local(async move {
-            let result = register_player(username_val, faction_val).await;
+            let result = register_player(username_val, password_val, faction_val).await;
 
             match result {
                 Ok(response) => {
@@ -96,6 +111,36 @@ pub fn RegisterPage() -> impl IntoView {
                     />
                 </div>
 
+                // Password field
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                        "Password"
+                    </label>
+                    <input
+                        type="password"
+                        prop:value=move || password.get()
+                        on:input=move |ev| password.set(event_target_value(&ev))
+                        class="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg
+                               text-white focus:outline-none focus:border-amber-500"
+                        placeholder="Enter password (min 8 characters)..."
+                    />
+                </div>
+
+                // Password confirmation field
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                        "Confirm Password"
+                    </label>
+                    <input
+                        type="password"
+                        prop:value=move || password_confirm.get()
+                        on:input=move |ev| password_confirm.set(event_target_value(&ev))
+                        class="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg
+                               text-white focus:outline-none focus:border-amber-500"
+                        placeholder="Confirm your password..."
+                    />
+                </div>
+
                 // Faction selection
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-slate-300 mb-2">
@@ -141,16 +186,21 @@ pub fn RegisterPage() -> impl IntoView {
                 </button>
             </form>
 
-            <a href="/" class="mt-6 text-slate-400 hover:text-slate-300">
-                "← Back to Home"
-            </a>
+            <div class="mt-6 flex flex-col items-center gap-2">
+                <a href="/login" class="text-amber-400 hover:text-amber-300">
+                    "Already have an account? Log in"
+                </a>
+                <a href="/" class="text-slate-400 hover:text-slate-300">
+                    "← Back to Home"
+                </a>
+            </div>
         </div>
     }
 }
 
 /// Call the registration API.
-async fn register_player(username: String, faction: String) -> Result<AuthResponse, String> {
-    let request = RegisterRequest { username, faction };
+async fn register_player(username: String, password: String, faction: String) -> Result<AuthResponse, String> {
+    let request = RegisterRequest { username, password, faction };
 
     let response = Request::post("/api/auth/register")
         .header("Content-Type", "application/json")

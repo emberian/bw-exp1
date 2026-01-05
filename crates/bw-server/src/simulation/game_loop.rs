@@ -17,12 +17,35 @@ use super::combat_processor::process_sector_combats;
 pub async fn run_game_loop(state: Arc<GameState>) {
     let tick_duration = Duration::from_millis(TICK_DURATION_MS);
     let npc_config = NpcSpawnConfig::default();
+    let delta_time = TICK_DURATION_MS as f64 / 1000.0; // 0.1 seconds
 
     tracing::info!("Game loop started at {} TPS", TICK_RATE);
 
     loop {
         let tick_start = Instant::now();
         let tick = state.increment_tick();
+
+        // === Scripting: Process coroutines ===
+        {
+            let result = state.coroutine_scheduler.write().tick(tick);
+            for (id, error) in result.failed {
+                state.log_script_error(format!("Coroutine {} failed: {}", id, error));
+            }
+        }
+
+        // === Scripting: Update all behaviors ===
+        {
+            let results = state.behavior_manager.write().update_all(tick, delta_time);
+            for result in results {
+                if !result.success {
+                    if let Some(error) = result.error {
+                        state.log_script_error(format!(
+                            "Behavior {} error: {}", result.behavior_id, error
+                        ));
+                    }
+                }
+            }
+        }
 
         // Process each sector
         for sector_ref in state.sectors.iter() {

@@ -6,6 +6,9 @@ mod ship_api;
 mod mission_api;
 mod combat_api;
 mod world_api;
+pub mod state_api;
+pub mod coroutine_api;
+pub mod event_api;
 
 use rhai::Engine;
 
@@ -16,6 +19,9 @@ pub fn register_all(engine: &mut Engine) {
     mission_api::register(engine);
     combat_api::register(engine);
     world_api::register(engine);
+    state_api::register(engine);
+    coroutine_api::register(engine);
+    event_api::register(engine);
 
     // Register common utility functions
     register_utils(engine);

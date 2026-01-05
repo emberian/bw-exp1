@@ -734,12 +734,19 @@ async fn handle_game_message(
             }
         }
 
-        ClientMessage::JoinSector { .. } | ClientMessage::LeaveSector | ClientMessage::MoveToSector { .. } => {
-            tracing::warn!("Multi-sector travel not yet implemented for player {}", player_id);
-            let _ = tx.send(ServerMessage::Error {
-                code: "NOT_IMPLEMENTED".to_string(),
-                message: "Sector travel coming soon".to_string(),
-            }).await;
+        ClientMessage::JoinSector { sector_id: target_sector_id } => {
+            // Direct sector join (usually after travel completes or for initial join)
+            handle_join_sector(state, tx, player_id, sector_id, target_sector_id).await;
+        }
+
+        ClientMessage::LeaveSector => {
+            // Leave current sector (disconnect from sector broadcast)
+            handle_leave_sector(state, tx, player_id, sector_id).await;
+        }
+
+        ClientMessage::MoveToSector { sector_id: target_sector_id } => {
+            // Initiate travel to another sector via jumpgate
+            handle_move_to_sector(state, tx, player_id, sector_id, target_sector_id).await;
         }
 
         ClientMessage::SendChat { message, channel } => {
@@ -934,5 +941,449 @@ async fn handle_game_message(
         _ => {
             tracing::debug!("Unhandled message from player {}: {:?}", player_id, msg);
         }
+    }
+}
+
+// ============================================================================
+// Sector Travel Handlers
+// ============================================================================
+
+/// Handle joining a new sector (transfers player/ship to target sector).
+async fn handle_join_sector(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    current_sector_id: Uuid,
+    target_sector_id: Uuid,
+) {
+    use bw_shared::dto::{PlayerDto, ShipDto, SectorDto, LocationDto, PositionDto, MissionDto, AdjacentSectorDto};
+
+    // Don't allow joining the same sector
+    if current_sector_id == target_sector_id {
+        let _ = tx.send(ServerMessage::Error {
+            code: "ALREADY_IN_SECTOR".to_string(),
+            message: "You are already in this sector".to_string(),
+        }).await;
+        return;
+    }
+
+    // Get player session
+    let (ship_id, _current_sector) = match state.players.get(&player_id) {
+        Some(s) => (s.ship_id, s.sector_id),
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SESSION_NOT_FOUND".to_string(),
+                message: "Session not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    // Verify target sector exists
+    let target_sector = match state.sectors.get(&target_sector_id) {
+        Some(s) => s,
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SECTOR_NOT_FOUND".to_string(),
+                message: "Target sector not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    // Get ship
+    let mut ship = match state.ships.get_mut(&ship_id) {
+        Some(s) => s,
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SHIP_NOT_FOUND".to_string(),
+                message: "Ship not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    // Remove ship from current sector
+    if let Some(current_sector) = state.sectors.get(&current_sector_id) {
+        current_sector.ship_ids.remove(&ship_id);
+        current_sector.connections.remove(&player_id);
+
+        // Notify other players in current sector of departure
+        let despawn_msg = ServerMessage::StateUpdate {
+            tick: state.get_tick(),
+            ship_updates: vec![],
+            ship_spawns: vec![],
+            ship_despawns: vec![ship_id],
+            mission_updates: vec![],
+            events: vec![],
+        };
+        current_sector.broadcast(despawn_msg).await;
+    }
+
+    // Update ship sector and position (spawn at center of new sector)
+    ship.sector_id = target_sector_id;
+    ship.position = bw_core::models::Position::new(0.0, 0.0, 0.0);
+    drop(ship);
+
+    // Add ship to target sector
+    target_sector.ship_ids.insert(ship_id, ());
+    target_sector.connections.insert(player_id, tx.clone());
+
+    // Update player session
+    if let Some(mut session) = state.players.get_mut(&player_id) {
+        session.sector_id = target_sector_id;
+    }
+
+    // Build DTOs for new sector
+    let player = match state.player_data.get(&player_id) {
+        Some(p) => p.clone(),
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "PLAYER_NOT_FOUND".to_string(),
+                message: "Player data not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    let ship = match state.ships.get(&ship_id) {
+        Some(s) => s.clone(),
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SHIP_NOT_FOUND".to_string(),
+                message: "Ship not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    let player_dto = PlayerDto {
+        id: player.id,
+        username: player.username.clone(),
+        reputation: player.resources.reputation,
+        fame: player.resources.fame,
+        faction_tag: state.factions.get(&player.faction_id)
+            .map(|f| f.tag.clone())
+            .unwrap_or_default(),
+        squadron_tag: player.squadron_id.and_then(|sq_id| {
+            state.squadrons.get(&sq_id).map(|sq| sq.tag.clone())
+        }),
+        is_online: player.is_online,
+    };
+
+    let ship_dto = ShipDto {
+        id: ship.id,
+        name: ship.name.clone(),
+        owner_id: ship.owner_id,
+        ship_class: format!("{:?}", ship.ship_class),
+        position: PositionDto {
+            x: ship.position.x,
+            y: ship.position.y,
+            z: ship.position.z,
+        },
+        hull_percent: ship.hull_integrity,
+        shield_percent: ship.shield_strength,
+        status: format!("{:?}", ship.status),
+        faction_tag: ship.faction_id.and_then(|fid| {
+            state.factions.get(&fid).map(|f| f.tag.clone())
+        }),
+        is_player: true,
+        is_hostile: false,
+    };
+
+    let sector_dto = SectorDto {
+        id: target_sector.sector.id,
+        name: target_sector.sector.name.clone(),
+        danger_level: format!("{:?}", target_sector.sector.danger_level),
+        controlling_faction: None,
+        locations: target_sector.sector.locations.iter().map(|loc| LocationDto {
+            id: loc.id,
+            name: loc.name.clone(),
+            location_type: format!("{:?}", loc.location_type),
+            position: PositionDto {
+                x: loc.position.x,
+                y: loc.position.y,
+                z: loc.position.z,
+            },
+            faction_tag: None,
+            services: loc.services.iter().map(|s| format!("{:?}", s)).collect(),
+        }).collect(),
+        // Build adjacent sector DTOs
+        adjacent_sectors: target_sector.sector.adjacent_sectors.iter()
+            .filter_map(|&adj_id| {
+                state.sectors.get(&adj_id).map(|adj| AdjacentSectorDto {
+                    id: adj.sector.id,
+                    name: adj.sector.name.clone(),
+                    danger_level: format!("{:?}", adj.sector.danger_level),
+                })
+            })
+            .collect(),
+    };
+
+    // Get other ships in new sector
+    let ships: Vec<ShipDto> = target_sector.ship_ids.iter()
+        .filter_map(|entry| {
+            let other_ship_id = *entry.key();
+            if other_ship_id == ship_id {
+                return None;
+            }
+            state.ships.get(&other_ship_id).map(|s| ShipDto {
+                id: s.id,
+                name: s.name.clone(),
+                owner_id: s.owner_id,
+                ship_class: format!("{:?}", s.ship_class),
+                position: PositionDto {
+                    x: s.position.x,
+                    y: s.position.y,
+                    z: s.position.z,
+                },
+                hull_percent: s.hull_integrity,
+                shield_percent: s.shield_strength,
+                status: format!("{:?}", s.status),
+                faction_tag: s.faction_id.and_then(|fid| {
+                    state.factions.get(&fid).map(|f| f.tag.clone())
+                }),
+                is_player: s.is_player_ship,
+                is_hostile: s.ship_class.is_hostile(),
+            })
+        })
+        .collect();
+
+    // Get missions in new sector
+    let missions: Vec<MissionDto> = target_sector.missions.iter()
+        .map(|m| MissionDto {
+            id: m.id,
+            title: m.title.clone(),
+            description: m.description.clone(),
+            mission_type: format!("{:?}", m.mission_type),
+            status: format!("{:?}", m.status),
+            priority: format!("{:?}", m.priority),
+            reputation_reward: m.reputation_reward,
+            fame_reward: m.fame_reward,
+            is_high_profile: m.is_high_profile,
+            expires_in_seconds: m.expires_at.map(|e| {
+                let now = chrono::Utc::now();
+                if e > now { (e - now).num_seconds() as u32 } else { 0 }
+            }),
+            progress: m.progress,
+            can_accept: m.can_accept(player_id, None),
+        })
+        .collect();
+
+    drop(target_sector);
+
+    // Send initial state for new sector
+    let _ = tx.send(ServerMessage::InitialState {
+        player: player_dto,
+        ship: ship_dto,
+        sector: sector_dto,
+        ships,
+        missions,
+    }).await;
+
+    // Notify other players in new sector of new ship spawn
+    if let Some(new_sector) = state.sectors.get(&target_sector_id) {
+        let ship = state.ships.get(&ship_id);
+        if let Some(ship) = ship {
+            let spawn_dto = ShipDto {
+                id: ship.id,
+                name: ship.name.clone(),
+                owner_id: ship.owner_id,
+                ship_class: format!("{:?}", ship.ship_class),
+                position: PositionDto {
+                    x: ship.position.x,
+                    y: ship.position.y,
+                    z: ship.position.z,
+                },
+                hull_percent: ship.hull_integrity,
+                shield_percent: ship.shield_strength,
+                status: format!("{:?}", ship.status),
+                faction_tag: ship.faction_id.and_then(|fid| {
+                    state.factions.get(&fid).map(|f| f.tag.clone())
+                }),
+                is_player: true,
+                is_hostile: false,
+            };
+
+            let spawn_msg = ServerMessage::StateUpdate {
+                tick: state.get_tick(),
+                ship_updates: vec![],
+                ship_spawns: vec![spawn_dto],
+                ship_despawns: vec![],
+                mission_updates: vec![],
+                events: vec![],
+            };
+
+            // Broadcast to all except the joining player
+            for conn in new_sector.connections.iter() {
+                if *conn.key() != player_id {
+                    let _ = conn.value().send(spawn_msg.clone()).await;
+                }
+            }
+        }
+    }
+
+    tracing::info!("Player {} joined sector {}", player_id, target_sector_id);
+}
+
+/// Handle leaving the current sector.
+async fn handle_leave_sector(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    sector_id: Uuid,
+) {
+    // Get player session
+    let ship_id = match state.players.get(&player_id) {
+        Some(s) => s.ship_id,
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SESSION_NOT_FOUND".to_string(),
+                message: "Session not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    // Remove from sector connections and ship list
+    if let Some(sector) = state.sectors.get(&sector_id) {
+        sector.connections.remove(&player_id);
+        sector.ship_ids.remove(&ship_id);
+
+        // Notify other players of departure
+        let despawn_msg = ServerMessage::StateUpdate {
+            tick: state.get_tick(),
+            ship_updates: vec![],
+            ship_spawns: vec![],
+            ship_despawns: vec![ship_id],
+            mission_updates: vec![],
+            events: vec![],
+        };
+        sector.broadcast(despawn_msg).await;
+    }
+
+    tracing::info!("Player {} left sector {}", player_id, sector_id);
+}
+
+/// Handle initiating travel to another sector.
+async fn handle_move_to_sector(
+    state: &GameState,
+    tx: &mpsc::Sender<ServerMessage>,
+    player_id: Uuid,
+    current_sector_id: Uuid,
+    target_sector_id: Uuid,
+) {
+    use bw_core::models::{ShipStatus, LocationType, Position};
+
+    // Don't allow traveling to the same sector
+    if current_sector_id == target_sector_id {
+        let _ = tx.send(ServerMessage::Error {
+            code: "ALREADY_IN_SECTOR".to_string(),
+            message: "You are already in this sector".to_string(),
+        }).await;
+        return;
+    }
+
+    // Get player session
+    let ship_id = match state.players.get(&player_id) {
+        Some(s) => s.ship_id,
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SESSION_NOT_FOUND".to_string(),
+                message: "Session not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    // Verify target sector exists
+    if !state.sectors.contains_key(&target_sector_id) {
+        let _ = tx.send(ServerMessage::Error {
+            code: "SECTOR_NOT_FOUND".to_string(),
+            message: "Target sector not found".to_string(),
+        }).await;
+        return;
+    }
+
+    // Get current sector to check for jumpgate
+    let current_sector = match state.sectors.get(&current_sector_id) {
+        Some(s) => s,
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SECTOR_NOT_FOUND".to_string(),
+                message: "Current sector not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    // Find jumpgate in current sector
+    let jumpgate = current_sector.sector.locations.iter()
+        .find(|loc| matches!(loc.location_type, LocationType::Jumpgate));
+
+    if jumpgate.is_none() {
+        let _ = tx.send(ServerMessage::Error {
+            code: "NO_JUMPGATE".to_string(),
+            message: "No jumpgate found in this sector".to_string(),
+        }).await;
+        return;
+    }
+
+    drop(current_sector);
+
+    // Get and update ship status
+    let mut ship = match state.ships.get_mut(&ship_id) {
+        Some(s) => s,
+        None => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "SHIP_NOT_FOUND".to_string(),
+                message: "Ship not found".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    // Check ship is not in combat or docked
+    match &ship.status {
+        ShipStatus::InCombat { .. } => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "IN_COMBAT".to_string(),
+                message: "Cannot travel while in combat".to_string(),
+            }).await;
+            return;
+        }
+        ShipStatus::Docked { .. } => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "DOCKED".to_string(),
+                message: "Undock before traveling to another sector".to_string(),
+            }).await;
+            return;
+        }
+        ShipStatus::InTransit { .. } => {
+            let _ = tx.send(ServerMessage::Error {
+                code: "ALREADY_TRAVELING".to_string(),
+                message: "Already traveling".to_string(),
+            }).await;
+            return;
+        }
+        _ => {}
+    }
+
+    // Set ship status to in transit
+    ship.status = ShipStatus::InTransit {
+        destination: Position::new(0.0, 0.0, 0.0),
+        target_id: Some(target_sector_id),
+    };
+    drop(ship);
+
+    tracing::info!("Player {} initiating travel from {} to {}", player_id, current_sector_id, target_sector_id);
+
+    // For now, travel is instant - just join the target sector
+    // In the future, could add travel time based on distance
+    handle_join_sector(state, tx, player_id, current_sector_id, target_sector_id).await;
+
+    // Reset ship status after arrival
+    if let Some(mut ship) = state.ships.get_mut(&ship_id) {
+        ship.status = ShipStatus::Idle;
     }
 }

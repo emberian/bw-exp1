@@ -13,7 +13,15 @@ pub mod bindings;
 pub mod loader;
 pub mod mission_runner;
 pub mod mission_generator;
+pub mod state;
+pub mod coroutines;
+pub mod events;
+pub mod behaviors;
 
 pub use engine::*;
 pub use mission_runner::*;
 pub use mission_generator::*;
+pub use state::*;
+pub use coroutines::*;
+pub use events::*;
+pub use behaviors::*;
