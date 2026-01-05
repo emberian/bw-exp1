@@ -18,6 +18,7 @@ pub mod coroutines;
 pub mod events;
 pub mod behaviors;
 pub mod validation;
+pub mod views;
 
 pub use engine::*;
 pub use mission_runner::*;
@@ -27,3 +28,4 @@ pub use coroutines::*;
 pub use events::*;
 pub use behaviors::*;
 pub use validation::*;
+pub use views::*;

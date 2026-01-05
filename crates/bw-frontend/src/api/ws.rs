@@ -645,5 +645,23 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
         ServerMessage::Admin(_) => {
             // Admin messages not handled in regular client
         }
+
+        ServerMessage::Notification {
+            message,
+            notification_type: _,
+        } => {
+            // Display notification from scripts
+            game_state.notification.set(Some(message));
+        }
+
+        ServerMessage::ChoiceRequired {
+            choice_id: _,
+            description,
+            choices: _,
+        } => {
+            // TODO: Implement generic choice dialog UI
+            // For now, show as notification
+            game_state.notification.set(Some(format!("Choice required: {}", description)));
+        }
     }
 }

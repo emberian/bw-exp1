@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use bw_core::models::{
     DangerLevel, Position, Ship, ShipStatus, Player, Sector, Location,
-    LocationType, TrafficDensity, CombatStance, CargoItem, GameMode,
+    LocationType, TrafficDensity, CombatStance, CargoItem, GameMode, InstalledUpgrade,
 };
 
 /// Read-only snapshot of a ship's state.
@@ -43,6 +43,31 @@ pub struct ShipSnapshot {
     pub cargo: Vec<CargoSnapshot>,
     pub cargo_capacity: u32,
     pub cargo_used: u32,
+    // Upgrades
+    pub upgrades: Vec<UpgradeSnapshot>,
+}
+
+/// Read-only snapshot of an installed upgrade.
+#[derive(Debug, Clone)]
+pub struct UpgradeSnapshot {
+    pub upgrade_id: String,
+    pub slot: String,
+}
+
+impl UpgradeSnapshot {
+    pub fn from_upgrade(upgrade: &InstalledUpgrade) -> Self {
+        Self {
+            upgrade_id: upgrade.upgrade_id.clone(),
+            slot: upgrade.slot.clone(),
+        }
+    }
+
+    pub fn to_dynamic(&self) -> Dynamic {
+        let mut map = Map::new();
+        map.insert("upgrade_id".into(), self.upgrade_id.clone().into());
+        map.insert("slot".into(), self.slot.clone().into());
+        Dynamic::from(map)
+    }
 }
 
 /// Read-only snapshot of a cargo item.
@@ -103,6 +128,7 @@ impl ShipSnapshot {
             cargo: ship.cargo.iter().map(CargoSnapshot::from_cargo).collect(),
             cargo_capacity: ship.cargo_capacity(),
             cargo_used: ship.cargo_used(),
+            upgrades: ship.upgrades.iter().map(UpgradeSnapshot::from_upgrade).collect(),
         }
     }
 
@@ -136,6 +162,8 @@ impl ShipSnapshot {
         map.insert("cargo".into(), Dynamic::from(cargo_arr));
         map.insert("cargo_capacity".into(), (self.cargo_capacity as i64).into());
         map.insert("cargo_used".into(), (self.cargo_used as i64).into());
+        let upgrades_arr: Vec<Dynamic> = self.upgrades.iter().map(|u| u.to_dynamic()).collect();
+        map.insert("upgrades".into(), Dynamic::from(upgrades_arr));
         Dynamic::from(map)
     }
 }

@@ -217,6 +217,8 @@ impl ShipChanges {
             && self.locked_target.is_none()
             && self.add_cargo.is_none()
             && self.remove_cargo.is_none()
+            && self.install_upgrade.is_none()
+            && self.remove_upgrade_slot.is_none()
     }
 }
 

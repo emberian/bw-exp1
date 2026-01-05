@@ -27,6 +27,9 @@ pub fn register_all(engine: &mut Engine) {
     data_api::register(engine);
     message_api::register(engine);
 
+    // Register facade views for fluent script API
+    crate::views::register(engine);
+
     // Register common utility functions
     register_utils(engine);
 }

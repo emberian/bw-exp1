@@ -662,4 +662,83 @@ pub fn register(engine: &mut Engine) {
                 .unwrap_or_default()
         }).unwrap_or_default()
     });
+
+    // === Upgrade management functions ===
+
+    // install_upgrade(ship_id: String, upgrade_id: String, slot: String) -> bool
+    engine.register_fn("install_upgrade", |ship_id: String, upgrade_id: String, slot: String| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = ShipChanges {
+            install_upgrade: Some(crate::state::UpgradeInstall {
+                upgrade_id,
+                slot,
+            }),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_ship(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // remove_upgrade(ship_id: String, slot: String) -> bool
+    engine.register_fn("remove_upgrade", |ship_id: String, slot: String| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = ShipChanges {
+            remove_upgrade_slot: Some(slot),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_ship(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // get_upgrades(ship_id: String) -> Array
+    // Returns array of maps with { upgrade_id: String, slot: String }
+    engine.register_fn("get_upgrades", |ship_id: String| -> Array {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return Array::new(),
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_ship(id)
+                .ok()
+                .flatten()
+                .map(|ship| {
+                    ship.upgrades.iter().map(|u| {
+                        let mut map = Map::new();
+                        map.insert("upgrade_id".into(), Dynamic::from(u.upgrade_id.clone()));
+                        map.insert("slot".into(), Dynamic::from(u.slot.clone()));
+                        Dynamic::from(map)
+                    }).collect()
+                })
+                .unwrap_or_default()
+        }).unwrap_or_default()
+    });
+
+    // has_upgrade(ship_id: String, upgrade_id: String) -> bool
+    engine.register_fn("has_upgrade", |ship_id: String, upgrade_id: String| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_ship(id)
+                .ok()
+                .flatten()
+                .map(|ship| ship.upgrades.iter().any(|u| u.upgrade_id == upgrade_id))
+                .unwrap_or(false)
+        }).unwrap_or(false)
+    });
 }

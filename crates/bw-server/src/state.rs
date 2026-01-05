@@ -314,6 +314,12 @@ impl GameState {
                     if let Some(ref cargo_remove) = changes.remove_cargo {
                         ship.remove_cargo(&cargo_remove.cargo_type, cargo_remove.quantity);
                     }
+                    if let Some(ref upgrade_install) = changes.install_upgrade {
+                        ship.install_upgrade(upgrade_install.upgrade_id.clone(), upgrade_install.slot.clone());
+                    }
+                    if let Some(ref slot) = changes.remove_upgrade_slot {
+                        ship.remove_upgrade(slot);
+                    }
                     // Persistence is automatic via TrackedDashMap dirty tracking
                     MutationResult::success(mutation)
                 } else {
