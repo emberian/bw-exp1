@@ -104,20 +104,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
 
                         // Other messages require authentication
                         _ => {
-                            if player_id.is_none() {
+                            let (Some(pid), Some(sid)) = (player_id, sector_id) else {
                                 let _ = tx.send(ServerMessage::Error {
                                     code: "UNAUTHORIZED".to_string(),
                                     message: "Not authenticated".to_string(),
                                 }).await;
                                 continue;
-                            }
+                            };
 
                             // Handle game messages
                             handle_game_message(
                                 &state,
                                 &tx,
-                                player_id.unwrap(),
-                                sector_id.unwrap(),
+                                pid,
+                                sid,
                                 client_msg,
                             ).await;
                         }
@@ -322,10 +322,25 @@ async fn handle_game_message(
 
     match msg {
         ClientMessage::MoveToPosition { x, y, z } => {
+            use bw_core::models::{Position, ShipStatus};
+
+            let destination = Position::new(x, y, z);
+
+            // Validate position is within sector bounds
+            let bounds_valid = state.sectors.get(&sector_id)
+                .map(|s| s.sector.contains(&destination))
+                .unwrap_or(false);
+
+            if !bounds_valid {
+                let _ = tx.send(ServerMessage::Error {
+                    code: "INVALID_POSITION".to_string(),
+                    message: "Destination is outside sector bounds".to_string(),
+                }).await;
+                return;
+            }
+
             if let Some(session) = state.players.get(&player_id) {
                 if let Some(mut ship) = state.ships.get_mut(&session.ship_id) {
-                    use bw_core::models::{Position, ShipStatus};
-
                     // Check if can move
                     if !ship.can_move() {
                         let _ = tx.send(ServerMessage::Error {
@@ -335,7 +350,6 @@ async fn handle_game_message(
                         return;
                     }
 
-                    let destination = Position::new(x, y, z);
                     ship.status = ShipStatus::InTransit {
                         destination,
                         target_id: None,
@@ -949,10 +963,12 @@ async fn handle_game_message(
                 if let Some(owner_id) = ship.owner_id {
                     // Find the owner's connection and send the hail notification
                     if let Some(session) = state.players.get(&owner_id) {
-                        let _ = session.tx.send(ServerMessage::HailReceived {
-                            from_id: player_id,
-                            from_name,
-                        }).await;
+                        if let Some(ref conn) = session.connection {
+                            let _ = conn.send(ServerMessage::HailReceived {
+                                from_id: player_id,
+                                from_name,
+                            }).await;
+                        }
                     }
                 }
             }

@@ -31,7 +31,6 @@ pub fn SectorMap() -> impl IntoView {
 
     // State for jumpgate/travel panel
     let show_jump_panel = RwSignal::new(false);
-    let selected_jumpgate = RwSignal::new(Option::<Uuid>::None);
 
     // Click handler for map movement
     let on_click = move |ev: web_sys::MouseEvent| {
@@ -84,15 +83,28 @@ pub fn SectorMap() -> impl IntoView {
                 children=move |location| {
                     let ws = ws;
                     let is_jumpgate = location.location_type == "jumpgate";
-                    let location_id = location.id;
+                    let loc_x = location.x;
+                    let loc_y = location.y;
+                    let loc_name = location.name.clone();
                     view! {
                         <LocationMarker
                             location=location.clone()
                             on_click=move |id| {
                                 if is_jumpgate {
-                                    // Show jump panel for jumpgates
-                                    selected_jumpgate.set(Some(location_id));
-                                    show_jump_panel.set(true);
+                                    // Check proximity before showing jump panel
+                                    const JUMP_RANGE: f64 = 75.0;
+                                    let px = player_x();
+                                    let py = player_y();
+                                    let dist = distance(px, py, loc_x, loc_y);
+
+                                    if dist <= JUMP_RANGE {
+                                        show_jump_panel.set(true);
+                                    } else {
+                                        game_state.set_error(format!(
+                                            "Navigate to {} first ({:.0} units away)",
+                                            loc_name, dist
+                                        ));
+                                    }
                                 } else {
                                     ws.move_to_location(id);
                                 }
@@ -244,8 +256,8 @@ where
 fn ShipMarker<F, S, H>(ship: ShipInfo, is_selected: S, on_select: F, has_hail: H) -> impl IntoView
 where
     F: Fn(Uuid) + 'static + Clone + Send,
-    S: Fn() -> bool + 'static + Clone + Send,
-    H: Fn() -> bool + 'static + Clone + Send,
+    S: Fn() -> bool + 'static + Clone + Send + Sync,
+    H: Fn() -> bool + 'static + Clone + Send + Sync,
 {
     let id = ship.id;
     let name = ship.name.clone();
@@ -263,6 +275,23 @@ where
         }
     };
 
+    // Pre-compute static class parts to avoid allocation in hot path
+    let base_class = if is_player {
+        "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-20 text-green-400"
+    } else if is_hostile {
+        "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-20 text-red-400"
+    } else {
+        "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-20 text-slate-400"
+    };
+
+    let selected_class = if is_player {
+        "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-20 text-green-400 ring-2 ring-amber-400 rounded-full"
+    } else if is_hostile {
+        "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-20 text-red-400 ring-2 ring-amber-400 rounded-full"
+    } else {
+        "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-20 text-slate-400 ring-2 ring-amber-400 rounded-full"
+    };
+
     let color = if is_player {
         "text-green-400"
     } else if is_hostile {
@@ -271,24 +300,13 @@ where
         "text-slate-400"
     };
 
-    let has_hail = has_hail.clone();
-
-    let is_selected = is_selected.clone();
+    // Pre-compute position style
+    let position_style = format!("left: {}%; top: {}%", x_percent, y_percent);
 
     view! {
         <div
-            class=move || {
-                let base = format!(
-                    "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-20 {}",
-                    color
-                );
-                if is_selected() {
-                    format!("{} ring-2 ring-amber-400 rounded-full", base)
-                } else {
-                    base
-                }
-            }
-            style=format!("left: {}%; top: {}%", x_percent, y_percent)
+            class=move || if is_selected() { selected_class } else { base_class }
+            style=position_style
             on:click=handle_click
         >
             // Ship icon (triangle pointing up)
@@ -330,9 +348,6 @@ where
     X: Fn() -> f64 + 'static + Clone + Send,
     Y: Fn() -> f64 + 'static + Clone + Send,
 {
-    let x = x.clone();
-    let y = y.clone();
-
     view! {
         <div
             class="absolute transform -translate-x-1/2 -translate-y-1/2 text-green-400 z-30"
@@ -563,4 +578,9 @@ where
             </div>
         </div>
     }
+}
+
+/// Calculate distance between two points.
+fn distance(x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
+    ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt()
 }

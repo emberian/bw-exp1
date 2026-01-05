@@ -79,10 +79,13 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Start game loop
+    // Create shutdown channel for graceful termination
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Start game loop with shutdown receiver
     let game_state = state.clone();
-    tokio::spawn(async move {
-        simulation::run_game_loop(game_state).await;
+    let game_loop_handle = tokio::spawn(async move {
+        simulation::run_game_loop(game_state, shutdown_rx).await;
     });
 
     // Build router
@@ -128,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(TraceLayer::new_for_http());
 
-    // Start server
+    // Start server with graceful shutdown
     let addr = SocketAddr::from((
         server_config.server.host.parse::<std::net::IpAddr>().unwrap_or([0, 0, 0, 0].into()),
         server_config.server.port,
@@ -136,7 +139,24 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+
+    // Run server with graceful shutdown on Ctrl+C
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Failed to install Ctrl+C handler");
+            tracing::info!("Received shutdown signal, initiating graceful shutdown...");
+
+            // Signal game loop to stop
+            let _ = shutdown_tx.send(true);
+        })
+        .await?;
+
+    // Wait for game loop to finish
+    tracing::info!("Waiting for game loop to finish...");
+    let _ = game_loop_handle.await;
+    tracing::info!("Server shutdown complete");
 
     Ok(())
 }

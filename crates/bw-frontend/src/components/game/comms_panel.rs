@@ -4,7 +4,6 @@
 
 use leptos::prelude::*;
 use leptos::html::Div;
-use wasm_bindgen::JsCast;
 
 use bw_shared::ChatChannel;
 
@@ -50,7 +49,6 @@ pub fn CommsPanel() -> impl IntoView {
     };
 
     // Send message handler
-    let ws_clone = ws;
     let send_message = move |_| {
         let msg = input.get();
         if msg.is_empty() {
@@ -58,7 +56,7 @@ pub fn CommsPanel() -> impl IntoView {
         }
 
         let channel = selected_channel.get();
-        ws_clone.send_chat(msg, channel);
+        ws.send_chat(msg, channel);
         input.set(String::new());
     };
 
@@ -95,40 +93,44 @@ pub fn CommsPanel() -> impl IntoView {
                         each=messages
                         key=|msg| msg.id
                         children=move |msg| {
-                            let channel_color = match msg.channel {
-                                ChatChannel::System => "text-amber-400",
-                                ChatChannel::Sector => "text-blue-400",
-                                ChatChannel::Squadron => "text-purple-400",
-                                ChatChannel::Direct => "text-green-400",
+                            // Pre-compute channel display info (computed once per message)
+                            let (channel_color, channel_prefix) = match msg.channel {
+                                ChatChannel::System => ("text-amber-400", "[SYS]"),
+                                ChatChannel::Sector => ("text-blue-400", "[SEC]"),
+                                ChatChannel::Squadron => ("text-purple-400", "[SQD]"),
+                                ChatChannel::Direct => ("text-green-400", "[DM]"),
                             };
 
-                            let channel_prefix = match msg.channel {
-                                ChatChannel::System => "[SYS]",
-                                ChatChannel::Sector => "[SEC]",
-                                ChatChannel::Squadron => "[SQD]",
-                                ChatChannel::Direct => "[DM]",
-                            };
+                            // Pre-compute class string to avoid format! on each render
+                            let prefix_class = format!("flex-shrink-0 {}", channel_color);
 
                             let is_system = msg.is_system;
                             let sender_name = msg.sender_name.clone();
                             let message = msg.message.clone();
 
+                            // Format timestamp as HH:MM
+                            let timestamp = msg.timestamp;
+                            let time_str = {
+                                let secs = (timestamp / 1000) % 86400; // seconds since midnight
+                                let hours = (secs / 3600) % 24;
+                                let mins = (secs / 60) % 60;
+                                format!("{:02}:{:02}", hours, mins)
+                            };
+
                             // Use if/else to avoid Show closure issues
                             if is_system {
                                 view! {
                                     <div class="flex gap-1 leading-relaxed">
-                                        <span class={format!("flex-shrink-0 {}", channel_color)}>
-                                            {channel_prefix}
-                                        </span>
+                                        <span class="text-slate-600 text-[10px] flex-shrink-0">{time_str}</span>
+                                        <span class=prefix_class.clone()>{channel_prefix}</span>
                                         <span class="text-amber-400 italic">{message}</span>
                                     </div>
                                 }.into_any()
                             } else {
                                 view! {
                                     <div class="flex gap-1 leading-relaxed">
-                                        <span class={format!("flex-shrink-0 {}", channel_color)}>
-                                            {channel_prefix}
-                                        </span>
+                                        <span class="text-slate-600 text-[10px] flex-shrink-0">{time_str}</span>
+                                        <span class=prefix_class>{channel_prefix}</span>
                                         <span class="text-slate-400">{sender_name}":"</span>
                                         <span class="text-slate-200">{message}</span>
                                     </div>

@@ -9,12 +9,14 @@ use uuid::Uuid;
 use bw_core::models::{ShipStatus, MissionType, Mission, MissionStatus};
 use bw_shared::{ServerMessage, dto::*, TICK_RATE, TICK_DURATION_MS, FAME_DECAY_INTERVAL, FAME_DECAY_RATE};
 use crate::GameState;
+use tokio::sync::watch;
 
 use super::npc_spawner::{try_spawn_npcs, cleanup_npcs, NpcSpawnConfig};
+use bw_scripting::EntityType;
 use super::combat_processor::process_sector_combats;
 
-/// Run the main game loop.
-pub async fn run_game_loop(state: Arc<GameState>) {
+/// Run the main game loop with graceful shutdown support.
+pub async fn run_game_loop(state: Arc<GameState>, shutdown: watch::Receiver<bool>) {
     let tick_duration = Duration::from_millis(TICK_DURATION_MS);
     let npc_config = NpcSpawnConfig::default();
     let delta_time = TICK_DURATION_MS as f64 / 1000.0; // 0.1 seconds
@@ -22,6 +24,11 @@ pub async fn run_game_loop(state: Arc<GameState>) {
     tracing::info!("Game loop started at {} TPS", TICK_RATE);
 
     loop {
+        // Check for shutdown signal
+        if *shutdown.borrow() {
+            tracing::info!("Game loop received shutdown signal, stopping...");
+            break;
+        }
         let tick_start = Instant::now();
         let tick = state.increment_tick();
 
@@ -60,7 +67,7 @@ pub async fn run_game_loop(state: Arc<GameState>) {
         let elapsed = tick_start.elapsed();
         if elapsed < tick_duration {
             tokio::time::sleep(tick_duration - elapsed).await;
-        } else if tick % 100 == 0 {
+        } else {
             tracing::warn!("Tick {} took {:?} (over budget)", tick, elapsed);
         }
     }
@@ -70,18 +77,39 @@ pub async fn run_game_loop(state: Arc<GameState>) {
 async fn process_global_tick(state: &GameState, tick: u64) {
     // Fame decay every FAME_DECAY_INTERVAL ticks
     if tick % FAME_DECAY_INTERVAL as u64 == 0 {
-        // Decay fame for all players
-        for mut player in state.player_data.iter_mut() {
-            if player.resources.fame > 0 {
-                player.resources.decay_fame(FAME_DECAY_RATE);
+        // Only process online players with fame > 0
+        // First collect player IDs that need processing to avoid holding locks
+        let online_players_with_fame: Vec<(Uuid, Uuid)> = state.players.iter()
+            .filter_map(|session| {
+                // Only process if player has fame and is connected
+                if session.connection.is_some() {
+                    state.player_data.get(&session.player_id)
+                        .filter(|p| p.resources.fame > 0)
+                        .map(|_| (session.player_id, session.ship_id))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-                // If player is online, notify them of the fame change
-                if let Some(session) = state.players.get(&player.id) {
+        // Now process each player
+        for (player_id, ship_id) in online_players_with_fame {
+            // Decay fame
+            let updated_resources = if let Some(mut player) = state.player_data.get_mut(&player_id) {
+                player.resources.decay_fame(FAME_DECAY_RATE);
+                Some((player.resources.reputation, player.resources.fame))
+            } else {
+                None
+            };
+
+            // Send update if we decayed fame
+            if let Some((reputation, fame)) = updated_resources {
+                if let Some(session) = state.players.get(&player_id) {
                     if let Some(ref conn) = session.connection {
-                        if let Some(ship) = state.ships.get(&session.ship_id) {
+                        if let Some(ship) = state.ships.get(&ship_id) {
                             let _ = conn.send(bw_shared::ServerMessage::ResourceUpdate {
-                                reputation: player.resources.reputation,
-                                fame: player.resources.fame,
+                                reputation,
+                                fame,
                                 ammunition: ship.resources.ammunition,
                                 fuel: ship.resources.fuel,
                                 morale: ship.crew.morale,
@@ -104,6 +132,7 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
     let mut ship_updates = Vec::new();
     let mut ship_spawns = Vec::new();
     let mut ship_despawns = Vec::new();
+    let mut mission_updates = Vec::new();
     let mut events = Vec::new();
 
     // Process ship movement
@@ -168,12 +197,51 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
 
     // Spawn NPCs (every 50 ticks = 5 seconds)
     if tick % 50 == 0 {
-        let spawned = try_spawn_npcs(state, &sector, tick, npc_config);
-        ship_spawns.extend(spawned);
+        let spawn_result = try_spawn_npcs(state, &sector, tick, npc_config);
+        ship_spawns.extend(spawn_result.ship_dtos);
+
+        // Attach behaviors to newly spawned NPCs
+        for (ship_id, sector_id, ship_class) in spawn_result.spawned_ships {
+            // Select behavior script based on ship class
+            let script_path = match ship_class {
+                bw_core::models::ShipClass::PirateRaider |
+                bw_core::models::ShipClass::PirateFrigate |
+                bw_core::models::ShipClass::TerroristBomber |
+                bw_core::models::ShipClass::SeraSwarm |
+                bw_core::models::ShipClass::SeraHunter |
+                bw_core::models::ShipClass::DroneSwarm |
+                bw_core::models::ShipClass::DroneHarvester => "behaviors/npc_idle.rhai",
+                _ => "behaviors/npc_idle.rhai", // Civilians also use idle behavior
+            };
+
+            // Try to load the script if not already loaded
+            if !state.scripts.has_script(script_path) {
+                if let Err(e) = state.scripts.load_script(script_path) {
+                    tracing::warn!("Failed to load NPC behavior script {}: {}", script_path, e);
+                    continue;
+                }
+            }
+
+            // Attach behavior
+            let result = state.behavior_manager.write().attach(
+                ship_id,
+                EntityType::Ship,
+                script_path,
+                Some(sector_id),
+            );
+
+            if let Err(e) = result {
+                tracing::warn!("Failed to attach behavior to NPC {}: {}", ship_id, e);
+            }
+        }
     }
 
     // Cleanup destroyed NPCs
     let despawned = cleanup_npcs(state, &sector);
+    for &ship_id in &despawned {
+        // Detach any behaviors attached to this ship
+        state.behavior_manager.write().detach_for_entity(ship_id);
+    }
     ship_despawns.extend(despawned);
 
     // Spawn random missions (occasionally)
@@ -190,6 +258,12 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
     for mission_id in expired_missions {
         if let Some(mut mission) = sector.missions.get_mut(&mission_id) {
             mission.status = MissionStatus::Expired;
+            // Broadcast mission status change
+            mission_updates.push(MissionUpdateDto {
+                id: mission_id,
+                status: Some("Expired".to_string()),
+                progress: None,
+            });
             events.push(GameEventDto {
                 event_type: "mission_expired".to_string(),
                 message: format!("Mission '{}' has expired", mission.title),
@@ -200,13 +274,13 @@ async fn process_sector_tick(state: &GameState, sector_id: Uuid, tick: u64, npc_
     }
 
     // Broadcast state update if there are any changes
-    if !ship_updates.is_empty() || !events.is_empty() || !ship_spawns.is_empty() || !ship_despawns.is_empty() {
+    if !ship_updates.is_empty() || !events.is_empty() || !ship_spawns.is_empty() || !ship_despawns.is_empty() || !mission_updates.is_empty() {
         let update = ServerMessage::StateUpdate {
             tick,
             ship_updates,
             ship_spawns,
             ship_despawns,
-            mission_updates: vec![],
+            mission_updates,
             events,
         };
 

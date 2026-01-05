@@ -83,17 +83,6 @@ where
 {
     let on_confirm_clone = on_confirm.clone();
 
-    let handle_confirm = move |_| {
-        if let Some(id) = state.get_callback_id() {
-            on_confirm_clone(id);
-        }
-        state.hide();
-    };
-
-    let handle_cancel = move |_| {
-        state.hide();
-    };
-
     view! {
         <Show when=move || state.visible.get()>
             <div class="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
@@ -112,13 +101,21 @@ where
                     <div class="p-4 pt-0 flex gap-3 justify-end">
                         <button
                             class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm text-slate-200 transition-colors"
-                            on:click=handle_cancel
+                            on:click=move |_| state.hide()
                         >
                             "Cancel"
                         </button>
                         <button
                             class="px-4 py-2 bg-red-900 hover:bg-red-800 rounded text-sm text-red-100 transition-colors"
-                            on:click=handle_confirm
+                            on:click={
+                                let on_confirm = on_confirm_clone.clone();
+                                move |_| {
+                                    if let Some(id) = state.get_callback_id() {
+                                        on_confirm(id);
+                                    }
+                                    state.hide();
+                                }
+                            }
                         >
                             "Confirm"
                         </button>

@@ -59,10 +59,7 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
 
     let ws_for_confirm = ws;
     let handle_confirm = move |id: u32| {
-        match id {
-            CONFIRM_LEAVE => ws_for_confirm.leave_squadron(),
-            _ => {}
-        }
+        if id == CONFIRM_LEAVE { ws_for_confirm.leave_squadron() }
     };
 
     let handle_leave_click = move |_| {
@@ -101,27 +98,14 @@ fn SquadronInfo(squadron: crate::state::SquadronInfo) -> impl IntoView {
             </div>
 
             // War status
-            {if squadron.is_at_war {
-                view! {
-                    <div class="bg-red-900/30 border border-red-600/50 rounded-lg p-2 text-center">
-                        <span class="text-red-400 text-sm font-semibold">"AT WAR"</span>
-                    </div>
-                }.into_any()
-            } else {
-                view! { <div></div> }.into_any()
-            }}
+            <Show when=move || squadron.is_at_war>
+                <div class="bg-red-900/30 border border-red-600/50 rounded-lg p-2 text-center">
+                    <span class="text-red-400 text-sm font-semibold">"AT WAR"</span>
+                </div>
+            </Show>
 
             // Actions
             <div class="space-y-2">
-                <button
-                    class="w-full px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm text-slate-200 transition-colors"
-                    on:click=move |_| {
-                        game_state.show_squadron_dialog.set(true);
-                    }
-                >
-                    "View Details"
-                </button>
-
                 <button
                     class="w-full px-3 py-2 bg-red-900/50 hover:bg-red-800/50 rounded text-sm text-red-400 transition-colors"
                     on:click=handle_leave_click

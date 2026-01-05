@@ -2,6 +2,16 @@
 //!
 //! Exposes state query and mutation functions to scripts.
 //! Uses thread-local accessor for state access during script execution.
+//!
+//! # Thread Safety
+//!
+//! The thread-local pattern is safe because:
+//! 1. Rhai script execution is synchronous (no await points during execution)
+//! 2. Callers must hold appropriate locks (e.g., BehaviorManager's RwLock)
+//! 3. A guard flag prevents re-entrant script execution on the same thread
+//!
+//! Callers MUST NOT call script execution concurrently from multiple async tasks
+//! that might run on the same thread without synchronization.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -13,11 +23,26 @@ use crate::state::{StateAccessor, ShipChanges, PlayerChanges, ShipSpawnConfig, E
 
 thread_local! {
     /// Thread-local state accessor for the currently executing script.
-    static CURRENT_ACCESSOR: RefCell<Option<Arc<StateAccessor>>> = RefCell::new(None);
+    static CURRENT_ACCESSOR: RefCell<Option<Arc<StateAccessor>>> = const { RefCell::new(None) };
+    /// Guard to detect re-entrant script execution
+    static SCRIPT_EXECUTING: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Set the state accessor for the current thread during script execution.
+///
+/// # Panics
+///
+/// Panics if called while another script is already executing on this thread,
+/// which would indicate incorrect usage (potential data race).
 pub fn set_current_accessor(accessor: Arc<StateAccessor>) {
+    SCRIPT_EXECUTING.with(|guard| {
+        let mut executing = guard.borrow_mut();
+        if *executing {
+            panic!("Re-entrant script execution detected! This indicates a bug - scripts should not be executed concurrently on the same thread.");
+        }
+        *executing = true;
+    });
+
     CURRENT_ACCESSOR.with(|cell| {
         *cell.borrow_mut() = Some(accessor);
     });
@@ -27,6 +52,10 @@ pub fn set_current_accessor(accessor: Arc<StateAccessor>) {
 pub fn clear_current_accessor() {
     CURRENT_ACCESSOR.with(|cell| {
         *cell.borrow_mut() = None;
+    });
+
+    SCRIPT_EXECUTING.with(|guard| {
+        *guard.borrow_mut() = false;
     });
 }
 

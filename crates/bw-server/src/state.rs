@@ -75,6 +75,9 @@ pub struct GameState {
     /// Factions (faction_id -> Faction)
     pub factions: DashMap<Uuid, Faction>,
 
+    /// Faction tag index for O(1) lookup (tag -> faction_id)
+    pub faction_tags: DashMap<String, Uuid>,
+
     /// Squadrons (squadron_id -> Squadron)
     pub squadrons: DashMap<Uuid, Squadron>,
 
@@ -137,6 +140,7 @@ impl GameState {
             players: DashMap::new(),
             ships: DashMap::new(),
             factions: DashMap::new(),
+            faction_tags: DashMap::new(),
             squadrons: DashMap::new(),
             pending_squadron_invites: DashMap::new(),
             pending_alliances: DashMap::new(),
@@ -198,6 +202,8 @@ impl GameState {
     async fn load_factions(&self) -> anyhow::Result<()> {
         let factions = self.db.factions().find_all().await?;
         for faction in factions {
+            // Index by tag for O(1) lookup
+            self.faction_tags.insert(faction.tag.clone(), faction.id);
             self.factions.insert(faction.id, faction);
         }
         tracing::info!("Loaded {} factions", self.factions.len());

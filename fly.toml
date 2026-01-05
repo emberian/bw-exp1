@@ -1,7 +1,7 @@
 # fly.toml - Fly.io deployment configuration
 # See https://fly.io/docs/reference/configuration/
 
-app = "blackwing"
+app = "bw-exp1"
 primary_region = "sjc"
 
 [build]

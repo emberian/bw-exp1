@@ -67,9 +67,19 @@ pub fn process_sector_combats(
         }
     }
 
-    // Remove resolved combats
+    // Remove resolved combats and reset surviving ship statuses
     for combat_id in &result.resolved {
-        sector.combats.remove(combat_id);
+        // Get surviving participants before removing combat
+        if let Some((_, combat)) = sector.combats.remove(combat_id) {
+            // Reset status of all surviving ships to Idle
+            for ship_id in combat.all_participants() {
+                if let Some(mut ship) = state.ships.get_mut(&ship_id) {
+                    if matches!(ship.status, ShipStatus::InCombat { .. }) {
+                        ship.status = ShipStatus::Idle;
+                    }
+                }
+            }
+        }
     }
 
     result
@@ -88,6 +98,7 @@ fn process_combat_round(
     combat: &mut CombatEngagement,
     _tick: u64,
 ) -> CombatRoundResult {
+    use rand::seq::SliceRandom;
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let mut events = Vec::new();
@@ -95,37 +106,44 @@ fn process_combat_round(
 
     combat.round += 1;
 
-    // Side A attacks Side B
-    let side_a_ships: Vec<Uuid> = combat.side_a.clone();
-    let side_b_ships: Vec<Uuid> = combat.side_b.clone();
+    // Build list of all attackers with their target pools
+    // Each ship attacks one random enemy from the opposing side
+    let mut attack_pairs: Vec<(Uuid, Uuid)> = Vec::new();
 
-    for attacker_id in &side_a_ships {
-        if side_b_ships.is_empty() {
-            break;
+    // Side A picks targets from Side B
+    for &attacker_id in &combat.side_a {
+        if combat.side_b.is_empty() {
+            continue;
         }
-
-        // Select random target from side B
-        let target_idx = rng.gen_range(0..side_b_ships.len());
-        let target_id = side_b_ships[target_idx];
-
-        if let Some(event) = resolve_attack(state, *attacker_id, target_id, combat, &mut destroyed) {
-            events.push(event);
-        }
+        let target_idx = rng.gen_range(0..combat.side_b.len());
+        attack_pairs.push((attacker_id, combat.side_b[target_idx]));
     }
 
-    // Side B attacks Side A
-    let side_a_remaining: Vec<Uuid> = combat.side_a.clone();
-    let side_b_remaining: Vec<Uuid> = combat.side_b.clone();
+    // Side B picks targets from Side A
+    for &attacker_id in &combat.side_b {
+        if combat.side_a.is_empty() {
+            continue;
+        }
+        let target_idx = rng.gen_range(0..combat.side_a.len());
+        attack_pairs.push((attacker_id, combat.side_a[target_idx]));
+    }
 
-    for attacker_id in &side_b_remaining {
-        if side_a_remaining.is_empty() {
-            break;
+    // Shuffle attack order for fairness (no side always goes first)
+    attack_pairs.shuffle(&mut rng);
+
+    // Execute attacks in shuffled order, skipping if target already destroyed this round
+    for (attacker_id, target_id) in attack_pairs {
+        // Skip if target was already destroyed this round
+        if destroyed.contains(&target_id) {
+            continue;
         }
 
-        let target_idx = rng.gen_range(0..side_a_remaining.len());
-        let target_id = side_a_remaining[target_idx];
+        // Skip if attacker was destroyed this round
+        if destroyed.contains(&attacker_id) {
+            continue;
+        }
 
-        if let Some(event) = resolve_attack(state, *attacker_id, target_id, combat, &mut destroyed) {
+        if let Some(event) = resolve_attack(state, attacker_id, target_id, combat, &mut destroyed) {
             events.push(event);
         }
     }
@@ -141,6 +159,11 @@ fn resolve_attack(
     combat: &mut CombatEngagement,
     destroyed: &mut Vec<Uuid>,
 ) -> Option<CombatEventDto> {
+    // Guard against self-attack (would cause double mutable borrow panic)
+    if attacker_id == target_id {
+        return None;
+    }
+
     let mut attacker = state.ships.get_mut(&attacker_id)?;
     let mut target = state.ships.get_mut(&target_id)?;
 
@@ -190,7 +213,7 @@ fn resolve_attack(
         } else {
             format!(
                 "{} hits {} for {:.1} damage.",
-                attacker.name, result.damage, target.name
+                attacker.name, target.name, result.damage
             )
         }
     } else {

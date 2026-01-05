@@ -2,6 +2,13 @@
 //!
 //! Exposes event subscription and emission functions to scripts.
 //! Uses thread-local context for the current script's information.
+//!
+//! # Thread Safety
+//!
+//! Similar to state_api, these thread-locals are safe because:
+//! 1. Rhai script execution is synchronous
+//! 2. The state_api guard prevents re-entrant execution
+//! 3. Callers must hold appropriate locks before executing scripts
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -13,9 +20,9 @@ use crate::events::{EventRegistry, EventSubscription, EventFilter, parse_event_t
 
 thread_local! {
     /// Current event registry for subscriptions
-    static CURRENT_REGISTRY: RefCell<Option<Arc<EventRegistry>>> = RefCell::new(None);
+    static CURRENT_REGISTRY: RefCell<Option<Arc<EventRegistry>>> = const { RefCell::new(None) };
     /// Current script context (script path, owner entity, sector)
-    static CURRENT_CONTEXT: RefCell<ScriptContext> = RefCell::new(ScriptContext::default());
+    static CURRENT_CONTEXT: RefCell<ScriptContext> = const { RefCell::new(ScriptContext::empty()) };
 }
 
 /// Context for the currently executing script.
@@ -24,6 +31,17 @@ pub struct ScriptContext {
     pub script_path: String,
     pub owner_entity_id: Option<Uuid>,
     pub sector_id: Option<Uuid>,
+}
+
+impl ScriptContext {
+    /// Create an empty context (for const initialization)
+    pub const fn empty() -> Self {
+        Self {
+            script_path: String::new(),
+            owner_entity_id: None,
+            sector_id: None,
+        }
+    }
 }
 
 /// Set the event registry for the current thread.

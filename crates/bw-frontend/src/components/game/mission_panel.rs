@@ -92,7 +92,6 @@ where
     let is_high_profile = mission.is_high_profile;
     let mission_type = mission.mission_type.clone();
 
-    let on_accept = on_accept.clone();
     let handle_click = move |_| {
         if can_accept {
             on_accept(id);
@@ -248,7 +247,7 @@ where
 fn CountdownTimer(initial_seconds: u32) -> impl IntoView {
     let remaining = RwSignal::new(initial_seconds);
 
-    // Store interval handle in a signal for cleanup
+    // Store interval handle in a signal for cleanup (Send+Sync compatible)
     let interval_handle = RwSignal::new(Option::<i32>::None);
 
     // Create the interval callback
@@ -261,24 +260,25 @@ fn CountdownTimer(initial_seconds: u32) -> impl IntoView {
     }) as Box<dyn FnMut()>);
 
     // Start the interval (1000ms = 1 second)
-    if let Some(window) = web_sys::window() {
-        if let Ok(handle) = window.set_interval_with_callback_and_timeout_and_arguments_0(
+    if let Some(window) = web_sys::window()
+        && let Ok(handle) = window.set_interval_with_callback_and_timeout_and_arguments_0(
             tick.as_ref().unchecked_ref(),
             1000,
-        ) {
-            interval_handle.set(Some(handle));
-        }
+        )
+    {
+        interval_handle.set(Some(handle));
     }
 
-    // Keep the closure alive
+    // Keep the closure alive - this is a known pattern in wasm-bindgen
+    // The memory "leak" is bounded since each countdown timer clears its interval on cleanup
     tick.forget();
 
-    // Clean up interval on unmount - use a signal which is Send+Sync
+    // Clean up interval on unmount
     on_cleanup(move || {
-        if let Some(handle) = interval_handle.get_untracked() {
-            if let Some(window) = web_sys::window() {
-                window.clear_interval_with_handle(handle);
-            }
+        if let Some(handle) = interval_handle.get_untracked()
+            && let Some(window) = web_sys::window()
+        {
+            window.clear_interval_with_handle(handle);
         }
     });
 

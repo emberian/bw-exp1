@@ -232,7 +232,6 @@ pub fn RegisterPage() -> impl IntoView {
                                             description=description
                                             philosophy=philosophy
                                             color=color
-                                            selected=faction
                                             on_select=move |_| faction.set(tag_for_click.clone())
                                             is_selected=move || faction.get() == tag_for_selected
                                         />
@@ -311,7 +310,6 @@ fn FactionOption<S, C>(
     description: String,
     philosophy: String,
     color: String,
-    selected: RwSignal<String>,
     on_select: C,
     is_selected: S,
 ) -> impl IntoView
@@ -320,14 +318,14 @@ where
     C: Fn(()) + 'static + Clone + Send + Sync,
 {
     let is_selected_class = is_selected.clone();
+    let is_selected_style = is_selected.clone();
     let on_select_click = on_select.clone();
 
-    // Parse color to use as accent (hex color from server)
-    let border_style = if is_selected() {
-        format!("border-color: {}; background-color: {}20", color, color)
-    } else {
-        String::new()
-    };
+    // Clone color for reactive style closure
+    let color_for_style = color.clone();
+
+    // Format philosophy with quotes
+    let philosophy_display = format!("\"{}\"", philosophy);
 
     view! {
         <button
@@ -341,7 +339,13 @@ where
                     "border-slate-600 bg-slate-700 hover:border-slate-500"
                 }
             )
-            style=border_style
+            style=move || {
+                if is_selected_style() {
+                    format!("border-color: {}; background-color: {}20", color_for_style, color_for_style)
+                } else {
+                    String::new()
+                }
+            }
         >
             <div class="flex items-center gap-2 mb-1">
                 <span
@@ -352,7 +356,7 @@ where
                 <span class="text-xs text-slate-500">"["{tag}"]"</span>
             </div>
             <div class="text-sm text-slate-400 mb-2">{description}</div>
-            <div class="text-xs text-slate-500 italic">"\"{philosophy}\""</div>
+            <div class="text-xs text-slate-500 italic">{philosophy_display}</div>
         </button>
     }
 }

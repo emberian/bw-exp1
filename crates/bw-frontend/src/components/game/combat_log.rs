@@ -57,37 +57,43 @@ pub fn CombatLog() -> impl IntoView {
                 // Weapon controls (only show when in active combat)
                 {move || {
                     if in_combat() && !combat_resolved() {
-                        let has_target_1 = move || selected_target().is_some();
-                        let has_target_2 = move || selected_target().is_some();
-                        let has_ammo_railgun = move || ammunition() >= 5.0;
-                        let has_ammo_pd = move || ammunition() >= 2.0;
+                        let has_target = move || selected_target().is_some();
                         let no_target = move || selected_target().is_none();
+                        let weapons = game_state.ship_weapons.get();
+                        let has_weapons = !weapons.is_empty();
 
                         view! {
                             <div class="p-2 border-b border-slate-700 bg-slate-800/50">
                                 <div class="text-xs text-slate-400 mb-2">"Weapons"</div>
-                                <div class="grid grid-cols-2 gap-1">
-                                    <WeaponButton
-                                        name="Railgun"
-                                        weapon_index=0
-                                        ammo_cost=5.0
-                                        damage=20
-                                        has_target=has_target_1
-                                        has_ammo=has_ammo_railgun
-                                        ws=ws
-                                        selected_target=selected_target
-                                    />
-                                    <WeaponButton
-                                        name="Point Def"
-                                        weapon_index=1
-                                        ammo_cost=2.0
-                                        damage=5
-                                        has_target=has_target_2
-                                        has_ammo=has_ammo_pd
-                                        ws=ws
-                                        selected_target=selected_target
-                                    />
-                                </div>
+                                <Show
+                                    when=move || has_weapons
+                                    fallback=|| view! {
+                                        <div class="text-xs text-slate-500 italic">
+                                            "No weapons equipped"
+                                        </div>
+                                    }
+                                >
+                                    <div class="grid grid-cols-2 gap-1">
+                                        {weapons.iter().enumerate().map(|(idx, weapon)| {
+                                            let weapon_name = weapon.name.clone();
+                                            let ammo_cost = weapon.ammo_cost;
+                                            let damage = weapon.damage;
+                                            let has_ammo = move || ammunition() >= ammo_cost;
+                                            view! {
+                                                <WeaponButton
+                                                    name=weapon_name.clone()
+                                                    weapon_index=idx
+                                                    ammo_cost=ammo_cost
+                                                    damage=damage as u32
+                                                    has_target=has_target
+                                                    has_ammo=has_ammo
+                                                    ws=ws
+                                                    selected_target=selected_target
+                                                />
+                                            }
+                                        }).collect_view()}
+                                    </div>
+                                </Show>
                                 <Show when=no_target>
                                     <div class="text-xs text-amber-400 mt-1 italic">
                                         "Select a target to fire"
@@ -103,9 +109,12 @@ pub fn CombatLog() -> impl IntoView {
                 // Event log
                 <div class="flex-1 overflow-y-auto p-2 space-y-1 text-xs">
                     <For
-                        each=combat_events
-                        key=|e| e.message.clone()
-                        children=move |event| {
+                        each=move || {
+                            // Add index to each event for unique keys
+                            combat_events().into_iter().enumerate().collect::<Vec<_>>()
+                        }
+                        key=|(idx, _)| *idx
+                        children=move |(_, event)| {
                             let event_color = match event.event_type.as_str() {
                                 "hit" => "text-red-400",
                                 "miss" => "text-slate-500",
@@ -113,9 +122,12 @@ pub fn CombatLog() -> impl IntoView {
                                 "shield" => "text-blue-400",
                                 _ => "text-slate-400",
                             };
+                            // Use the round stored with the event, not the current round
+                            let event_round = event.round;
 
                             view! {
                                 <div class="leading-relaxed">
+                                    <span class="text-slate-600 mr-1">"[R"{event_round}"]"</span>
                                     <span class=event_color>
                                         {if event.hit { "HIT" } else { "MISS" }}
                                     </span>
@@ -157,7 +169,7 @@ pub fn CombatLog() -> impl IntoView {
 /// Weapon button for manual firing.
 #[component]
 fn WeaponButton<HT, HA, ST>(
-    name: &'static str,
+    name: String,
     weapon_index: usize,
     ammo_cost: f32,
     damage: u32,
@@ -181,11 +193,10 @@ where
     let selected_target_click = selected_target;
 
     let handle_click = move |_| {
-        if has_target_click() && has_ammo_click() {
-            if let Some(target_id) = selected_target_click() {
+        if has_target_click() && has_ammo_click()
+            && let Some(target_id) = selected_target_click() {
                 ws.fire_weapon(weapon_index, target_id);
             }
-        }
     };
 
     view! {

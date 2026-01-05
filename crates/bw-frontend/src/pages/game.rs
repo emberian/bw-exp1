@@ -48,16 +48,38 @@ pub fn GamePage() -> impl IntoView {
     let ws_alert = ws;
 
     let handle_dock = move |_| {
-        // Find nearest station and dock
+        // Maximum distance to dock at a station
+        const DOCK_RANGE: f64 = 50.0;
+
+        // Find nearest station and check proximity
         let locations = game_state.locations.get();
-        if let Some(station) = locations.iter().find(|l| l.location_type == "station") {
-            // Set docked station info before docking
-            game_state.docked_station_id.set(Some(station.id));
-            game_state.docked_station_name.set(station.name.clone());
-            game_state.docked_station_services.set(station.services.clone());
-            ws_dock.dock(station.id);
+        let player_x = game_state.position_x.get();
+        let player_y = game_state.position_y.get();
+
+        // Find the nearest station
+        if let Some(station) = locations.iter()
+            .filter(|l| l.location_type == "station")
+            .min_by(|a, b| {
+                let dist_a = distance(player_x, player_y, a.x, a.y);
+                let dist_b = distance(player_x, player_y, b.x, b.y);
+                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+            })
+        {
+            let dist = distance(player_x, player_y, station.x, station.y);
+            if dist <= DOCK_RANGE {
+                // Set docked station info before docking
+                game_state.docked_station_id.set(Some(station.id));
+                game_state.docked_station_name.set(station.name.clone());
+                game_state.docked_station_services.set(station.services.clone());
+                ws_dock.dock(station.id);
+            } else {
+                game_state.set_error(format!(
+                    "Too far from {} ({:.0} units). Move closer to dock.",
+                    station.name, dist
+                ));
+            }
         } else {
-            game_state.set_error("No station nearby to dock at".to_string());
+            game_state.set_error("No station in this sector".to_string());
         }
     };
 
@@ -411,4 +433,9 @@ fn get_auth_token() -> Option<String> {
         .flatten()
         .and_then(|s| s.get_item("auth_token").ok())
         .flatten()
+}
+
+/// Calculate distance between two points.
+fn distance(x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
+    ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt()
 }

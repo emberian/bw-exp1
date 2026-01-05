@@ -188,6 +188,7 @@ pub struct SquadronInfo {
 /// Combat event info for display.
 #[derive(Clone, Debug)]
 pub struct CombatEventInfo {
+    pub round: u32,
     pub event_type: String,
     pub attacker_name: String,
     pub target_name: String,
@@ -436,7 +437,7 @@ impl GameState {
             // Find the station we're docked at by finding the nearest station to ship position
             let ship_pos = (ship.position.x, ship.position.y);
             if let Some(station) = locs.iter()
-                .filter(|l| l.location_type == "Station" || l.location_type == "station")
+                .filter(|l| l.location_type.eq_ignore_ascii_case("station"))
                 .min_by(|a, b| {
                     let dist_a = (a.x - ship_pos.0).powi(2) + (a.y - ship_pos.1).powi(2);
                     let dist_b = (b.x - ship_pos.0).powi(2) + (b.y - ship_pos.1).powi(2);
@@ -496,11 +497,14 @@ impl GameState {
     ) {
         self.server_tick.set(tick);
 
+        // Get our ship ID once outside the loop
+        let our_ship_id = self.ship_id.get_untracked();
+
         // Update existing ships
         self.ships.update(|ships| {
             for update in ship_updates {
                 // Check if it's our ship
-                if Some(update.id) == self.ship_id.get_untracked() {
+                if Some(update.id) == our_ship_id {
                     if let Some(pos) = &update.position {
                         self.position_x.set(pos.x);
                         self.position_y.set(pos.y);
@@ -577,8 +581,8 @@ impl GameState {
 
             // Also update active mission if it matches
             self.active_mission.update(|active| {
-                if let Some(mission) = active {
-                    if mission.id == update_id {
+                if let Some(mission) = active
+                    && mission.id == update_id {
                         if let Some(status) = status_for_active {
                             mission.status = status;
                         }
@@ -586,7 +590,6 @@ impl GameState {
                             mission.progress = progress;
                         }
                     }
-                }
             });
         }
 
@@ -654,8 +657,9 @@ impl GameState {
         self.combat_resolved.set(is_resolved);
         self.combat_winner.set(winner.clone());
 
-        // Convert DTOs to display info
+        // Convert DTOs to display info, storing the round when each event occurred
         let event_infos: Vec<CombatEventInfo> = events.into_iter().map(|e| CombatEventInfo {
+            round,
             event_type: e.event_type,
             attacker_name: e.attacker_name,
             target_name: e.target_name,
