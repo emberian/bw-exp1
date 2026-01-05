@@ -1,0 +1,148 @@
+# Cargo Types
+#
+# Defines tradeable goods, their base prices, and properties.
+# Scripts use get_cargo_def(cargo_type) to load these.
+
+# ============================================================================
+# Common Goods - Low value, low risk
+# ============================================================================
+
+[fuel_cells]
+name = "Fuel Cells"
+description = "Standard ship fuel. Always in demand."
+base_price = 10
+weight = 1
+legal = true
+volatility = 0.1
+
+[water]
+name = "Purified Water"
+description = "Essential for life support and industrial processes."
+base_price = 5
+weight = 2
+legal = true
+volatility = 0.05
+
+[food_supplies]
+name = "Food Supplies"
+description = "Preserved rations for long voyages."
+base_price = 15
+weight = 1
+legal = true
+volatility = 0.15
+
+[medical_supplies]
+name = "Medical Supplies"
+description = "First aid kits and basic pharmaceuticals."
+base_price = 50
+weight = 1
+legal = true
+volatility = 0.2
+
+# ============================================================================
+# Industrial Goods - Medium value
+# ============================================================================
+
+[raw_ore]
+name = "Raw Ore"
+description = "Unprocessed mineral ore from asteroid mining."
+base_price = 25
+weight = 3
+legal = true
+volatility = 0.25
+
+[refined_metals]
+name = "Refined Metals"
+description = "Processed alloys for construction."
+base_price = 75
+weight = 2
+legal = true
+volatility = 0.2
+
+[electronics]
+name = "Electronics"
+description = "Ship components and computer parts."
+base_price = 150
+weight = 1
+legal = true
+volatility = 0.3
+
+[machine_parts]
+name = "Machine Parts"
+description = "Replacement parts for industrial equipment."
+base_price = 100
+weight = 2
+legal = true
+volatility = 0.2
+
+# ============================================================================
+# High Value Goods - High profit potential
+# ============================================================================
+
+[rare_earths]
+name = "Rare Earth Elements"
+description = "Essential for advanced electronics. Very valuable."
+base_price = 500
+weight = 1
+legal = true
+volatility = 0.4
+
+[luxury_goods]
+name = "Luxury Goods"
+description = "High-end consumer products for wealthy stations."
+base_price = 300
+weight = 1
+legal = true
+volatility = 0.35
+
+[prototype_tech]
+name = "Prototype Technology"
+description = "Cutting-edge research samples. Extremely valuable."
+base_price = 1000
+weight = 1
+legal = true
+volatility = 0.5
+
+[alien_artifacts]
+name = "Alien Artifacts"
+description = "Sera relics. Highly sought by researchers."
+base_price = 2000
+weight = 1
+legal = true
+volatility = 0.6
+
+# ============================================================================
+# Contraband - Illegal, high risk/reward
+# ============================================================================
+
+[stolen_goods]
+name = "Stolen Goods"
+description = "Hot merchandise. High profit if you don't get caught."
+base_price = 200
+weight = 1
+legal = false
+contraband_penalty = 50
+
+[weapons_cache]
+name = "Weapons Cache"
+description = "Military-grade arms. Strictly regulated."
+base_price = 500
+weight = 2
+legal = false
+contraband_penalty = 100
+
+[narcotics]
+name = "Narcotics"
+description = "Controlled substances. Severe penalties if caught."
+base_price = 400
+weight = 1
+legal = false
+contraband_penalty = 150
+
+[classified_data]
+name = "Classified Data"
+description = "Encrypted intelligence. Treason if caught."
+base_price = 1500
+weight = 0
+legal = false
+contraband_penalty = 200

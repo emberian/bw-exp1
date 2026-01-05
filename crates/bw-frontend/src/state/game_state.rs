@@ -8,6 +8,18 @@ use uuid::Uuid;
 use bw_shared::dto::*;
 use bw_shared::ChatChannel;
 
+/// Active panel for mobile navigation.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum MobilePanel {
+    #[default]
+    Map,
+    Missions,
+    Squadron,
+    Ship,
+    Comms,
+    Combat,
+}
+
 /// Global game state, provided at app root.
 #[derive(Clone, Copy)]
 pub struct GameState {
@@ -82,6 +94,7 @@ pub struct GameState {
     pub selected_target: RwSignal<Option<Uuid>>,
     pub show_squadron_dialog: RwSignal<bool>,
     pub show_mission_dialog: RwSignal<bool>,
+    pub active_mobile_panel: RwSignal<MobilePanel>,
 
     // Pending invitations/proposals
     pub pending_squadron_invites: RwSignal<Vec<SquadronInviteInfo>>,
@@ -356,6 +369,7 @@ impl GameState {
             selected_target: RwSignal::new(None),
             show_squadron_dialog: RwSignal::new(false),
             show_mission_dialog: RwSignal::new(false),
+            active_mobile_panel: RwSignal::new(MobilePanel::Map),
 
             pending_squadron_invites: RwSignal::new(vec![]),
             pending_alliance_proposals: RwSignal::new(vec![]),

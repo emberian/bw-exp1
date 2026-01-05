@@ -1,0 +1,36 @@
+# Combat Stances
+#
+# Stances affect combat modifiers and flee chances.
+# These values are loaded by scripts via get_data("combat_stances", stance_name)
+
+[aggressive]
+name = "Aggressive"
+description = "All-out attack. Higher damage, lower defense, hard to flee."
+attack_modifier = 1.15
+defense_modifier = 0.90
+flee_modifier = 0.5
+speed_modifier = 1.0
+
+[balanced]
+name = "Balanced"
+description = "Standard combat posture. No modifiers."
+attack_modifier = 1.0
+defense_modifier = 1.0
+flee_modifier = 1.0
+speed_modifier = 1.0
+
+[defensive]
+name = "Defensive"
+description = "Focus on survival. Lower damage, higher defense."
+attack_modifier = 0.90
+defense_modifier = 1.15
+flee_modifier = 1.0
+speed_modifier = 1.0
+
+[evasive]
+name = "Evasive"
+description = "Maximize mobility. Lower damage, easier to disengage."
+attack_modifier = 0.75
+defense_modifier = 1.0
+flee_modifier = 1.5
+speed_modifier = 1.2

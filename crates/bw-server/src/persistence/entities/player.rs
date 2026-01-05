@@ -24,6 +24,9 @@ pub struct Model {
     pub offline_attacks_remaining: i32,
     pub missions_completed: i32,
     pub missions_failed: i32,
+    pub credits: Option<i64>,
+    pub game_mode: Option<String>,
+    pub owned_ships: Option<String>, // JSON array of UUIDs
     pub created_at: String,
     pub updated_at: String,
 }

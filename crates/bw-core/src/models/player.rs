@@ -60,6 +60,15 @@ pub struct Player {
 
     /// Career statistics
     pub stats: PlayerStats,
+
+    /// Credits (spendable currency for purchases)
+    pub credits: i64,
+
+    /// Game mode (Standard or Hardcore)
+    pub game_mode: GameMode,
+
+    /// Ships owned by this player (for hardcore backup ships)
+    pub owned_ships: Vec<Uuid>,
 }
 
 impl Player {
@@ -87,6 +96,9 @@ impl Player {
             missions_completed: 0,
             missions_failed: 0,
             stats: PlayerStats::default(),
+            credits: 0,
+            game_mode: GameMode::Standard,
+            owned_ships: vec![ship_id], // Starting ship is owned
         }
     }
 
@@ -145,6 +157,38 @@ impl Player {
             self.offline_attacks_remaining = 5; // Reset protection on login
         }
         self.last_seen = Utc::now();
+    }
+
+    /// Add credits to player account.
+    pub fn add_credits(&mut self, amount: i64) {
+        self.credits = self.credits.saturating_add(amount);
+    }
+
+    /// Spend credits if player has enough. Returns true if successful.
+    pub fn spend_credits(&mut self, amount: i64) -> bool {
+        if self.credits >= amount {
+            self.credits -= amount;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if player is in hardcore mode.
+    pub fn is_hardcore(&self) -> bool {
+        self.game_mode == GameMode::Hardcore
+    }
+
+    /// Add a ship to owned ships list.
+    pub fn add_owned_ship(&mut self, ship_id: Uuid) {
+        if !self.owned_ships.contains(&ship_id) {
+            self.owned_ships.push(ship_id);
+        }
+    }
+
+    /// Remove a ship from owned ships (when destroyed in hardcore).
+    pub fn remove_owned_ship(&mut self, ship_id: Uuid) {
+        self.owned_ships.retain(|&id| id != ship_id);
     }
 }
 
@@ -220,6 +264,16 @@ pub enum SquadronRank {
     Officer,
     /// Full control over squadron
     Leader,
+}
+
+/// Game mode determines death penalties and progression rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum GameMode {
+    /// Standard mode - soft death penalties, ship recovered
+    #[default]
+    Standard,
+    /// Hardcore mode - permadeath, ship lost on destruction
+    Hardcore,
 }
 
 /// Player career statistics.

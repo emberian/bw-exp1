@@ -287,6 +287,8 @@ async fn upsert_player(
     use entities::player;
     use sea_orm::EntityTrait;
 
+    let owned_ships_json: Vec<String> = player.owned_ships.iter().map(|id| id.to_string()).collect();
+
     let model = player::ActiveModel {
         id: Set(player.id.to_string()),
         username: Set(player.username.clone()),
@@ -309,6 +311,9 @@ async fn upsert_player(
         offline_attacks_remaining: Set(player.offline_attacks_remaining),
         missions_completed: Set(player.missions_completed),
         missions_failed: Set(player.missions_failed),
+        credits: Set(Some(player.credits)),
+        game_mode: Set(Some(format!("{:?}", player.game_mode))),
+        owned_ships: Set(Some(serde_json::to_string(&owned_ships_json).unwrap_or_default())),
         created_at: Set(player.created_at.to_rfc3339()),
         updated_at: Set(chrono::Utc::now().to_rfc3339()),
     };
@@ -332,6 +337,9 @@ async fn upsert_player(
                     player::Column::OfflineAttacksRemaining,
                     player::Column::MissionsCompleted,
                     player::Column::MissionsFailed,
+                    player::Column::Credits,
+                    player::Column::GameMode,
+                    player::Column::OwnedShips,
                     player::Column::UpdatedAt,
                 ])
                 .to_owned(),
@@ -369,6 +377,10 @@ async fn upsert_ship(db: &DatabaseConnection, ship: &Ship) -> Result<(), sea_orm
         is_player_ship: Set(if ship.is_player_ship { 1 } else { 0 }),
         faction_id: Set(ship.faction_id.map(|id| id.to_string())),
         squadron_id: Set(ship.squadron_id.map(|id| id.to_string())),
+        combat_stance: Set(Some(format!("{:?}", ship.combat_stance))),
+        locked_target: Set(ship.locked_target.map(|id| id.to_string())),
+        cargo: Set(Some(serde_json::to_string(&ship.cargo).unwrap_or_else(|_| "[]".to_string()))),
+        upgrades: Set(Some(serde_json::to_string(&ship.upgrades).unwrap_or_else(|_| "[]".to_string()))),
         created_at: Set(chrono::Utc::now().to_rfc3339()),
         updated_at: Set(chrono::Utc::now().to_rfc3339()),
     };
@@ -396,6 +408,10 @@ async fn upsert_ship(db: &DatabaseConnection, ship: &Ship) -> Result<(), sea_orm
                     ship::Column::IsPlayerShip,
                     ship::Column::FactionId,
                     ship::Column::SquadronId,
+                    ship::Column::CombatStance,
+                    ship::Column::LockedTarget,
+                    ship::Column::Cargo,
+                    ship::Column::Upgrades,
                     ship::Column::UpdatedAt,
                 ])
                 .to_owned(),

@@ -19,8 +19,7 @@ port = 3000
 # Usernames with admin/GM privileges (case-insensitive)
 # These users can access /api/admin/* endpoints
 usernames = [
-    # "admin",
-    # "gm",
+    "admin",
 ]
 
 [scripting]

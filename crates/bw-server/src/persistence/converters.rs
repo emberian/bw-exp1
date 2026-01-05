@@ -52,6 +52,14 @@ pub fn player_from_model(model: player::Model) -> Player {
     let faction_standings: Vec<FactionStanding> =
         serde_json::from_str(&model.faction_standings).unwrap_or_default();
     let stats: PlayerStats = serde_json::from_str(&model.stats).unwrap_or_default();
+    let owned_ships: Vec<Uuid> = model.owned_ships
+        .as_ref()
+        .map(|s| parse_uuid_vec(s))
+        .unwrap_or_default();
+    let game_mode = model.game_mode
+        .as_ref()
+        .map(|s| parse_game_mode(s))
+        .unwrap_or(GameMode::Standard);
 
     Player {
         id: parse_uuid(&model.id),
@@ -73,10 +81,22 @@ pub fn player_from_model(model: player::Model) -> Player {
         missions_completed: model.missions_completed,
         missions_failed: model.missions_failed,
         stats,
+        credits: model.credits.unwrap_or(0),
+        game_mode,
+        owned_ships,
+    }
+}
+
+fn parse_game_mode(s: &str) -> GameMode {
+    match s.to_lowercase().as_str() {
+        "hardcore" => GameMode::Hardcore,
+        _ => GameMode::Standard,
     }
 }
 
 pub fn player_to_active_model(p: &Player, password_hash: &str) -> player::ActiveModel {
+    let owned_ships_json: Vec<String> = p.owned_ships.iter().map(|id| id.to_string()).collect();
+
     player::ActiveModel {
         id: Set(p.id.to_string()),
         username: Set(p.username.clone()),
@@ -95,6 +115,9 @@ pub fn player_to_active_model(p: &Player, password_hash: &str) -> player::Active
         offline_attacks_remaining: Set(p.offline_attacks_remaining),
         missions_completed: Set(p.missions_completed),
         missions_failed: Set(p.missions_failed),
+        credits: Set(Some(p.credits)),
+        game_mode: Set(Some(format!("{:?}", p.game_mode))),
+        owned_ships: Set(Some(serde_json::to_string(&owned_ships_json).unwrap_or_default())),
         created_at: Set(p.created_at.to_rfc3339()),
         updated_at: Set(Utc::now().to_rfc3339()),
     }
@@ -116,6 +139,21 @@ fn parse_squadron_rank(s: &str) -> Option<SquadronRank> {
 pub fn ship_from_model(model: ship::Model) -> Ship {
     let weapons: Vec<WeaponMount> = serde_json::from_str(&model.weapons).unwrap_or_default();
     let status = parse_ship_status(&model.status, &model.status_data);
+    let cargo: Vec<CargoItem> = model.cargo
+        .as_ref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    let upgrades: Vec<InstalledUpgrade> = model.upgrades
+        .as_ref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    let combat_stance = model.combat_stance
+        .as_ref()
+        .map(|s| parse_combat_stance(s))
+        .unwrap_or_default();
+    let locked_target = model.locked_target
+        .as_ref()
+        .and_then(|s| Uuid::parse_str(s).ok());
 
     Ship {
         id: parse_uuid(&model.id),
@@ -139,6 +177,19 @@ pub fn ship_from_model(model: ship::Model) -> Ship {
         is_player_ship: model.is_player_ship != 0,
         faction_id: parse_uuid_opt(&model.faction_id),
         squadron_id: parse_uuid_opt(&model.squadron_id),
+        combat_stance,
+        locked_target,
+        cargo,
+        upgrades,
+    }
+}
+
+fn parse_combat_stance(s: &str) -> CombatStance {
+    match s.to_lowercase().as_str() {
+        "aggressive" => CombatStance::Aggressive,
+        "defensive" => CombatStance::Defensive,
+        "evasive" => CombatStance::Evasive,
+        _ => CombatStance::Balanced,
     }
 }
 
@@ -166,6 +217,10 @@ pub fn ship_to_active_model(s: &Ship) -> ship::ActiveModel {
         is_player_ship: Set(if s.is_player_ship { 1 } else { 0 }),
         faction_id: Set(s.faction_id.map(|id| id.to_string())),
         squadron_id: Set(s.squadron_id.map(|id| id.to_string())),
+        combat_stance: Set(Some(format!("{:?}", s.combat_stance))),
+        locked_target: Set(s.locked_target.map(|id| id.to_string())),
+        cargo: Set(Some(serde_json::to_string(&s.cargo).unwrap_or_else(|_| "[]".to_string()))),
+        upgrades: Set(Some(serde_json::to_string(&s.upgrades).unwrap_or_else(|_| "[]".to_string()))),
         created_at: Set(Utc::now().to_rfc3339()),
         updated_at: Set(Utc::now().to_rfc3339()),
     }

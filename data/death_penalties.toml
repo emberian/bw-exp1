@@ -1,0 +1,26 @@
+# Death Penalties by Game Mode
+#
+# Defines what happens when a player's ship is destroyed.
+# Scripts use get_data("death_penalties", game_mode) to load these.
+
+[standard]
+name = "Standard Mode"
+description = "Forgiving penalties. Ship recovered, partial losses."
+reputation_loss = 50
+fame_loss_percent = 50
+crew_xp_loss_percent = 50
+ship_lost = false
+cargo_lost = true
+respawn_hull_percent = 50
+respawn_at = "nearest_friendly_station"
+
+[hardcore]
+name = "Hardcore Mode"
+description = "Permanent consequences. Ship destroyed, crew lost."
+reputation_loss = 100
+fame_loss_percent = 100
+crew_xp_loss_percent = 100
+ship_lost = true
+cargo_lost = true
+respawn_at = "shipyard"
+must_purchase_ship = true

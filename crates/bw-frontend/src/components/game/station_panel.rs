@@ -23,15 +23,16 @@ pub fn StationPanel() -> impl IntoView {
 
     view! {
         <Show when=is_docked>
-            <div class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-4 w-80 shadow-lg z-40">
+            // Responsive positioning: above mobile nav on small screens, full-width on mobile
+            <div class="absolute bottom-20 md:bottom-4 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-slate-900/95 border border-amber-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40">
                 // Header
-                <div class="flex justify-between items-center mb-4">
+                <div class="flex justify-between items-center mb-3 md:mb-4">
                     <div>
                         <div class="text-xs text-slate-400">"Docked at"</div>
                         <h3 class="font-semibold text-amber-400">{station_name}</h3>
                     </div>
                     <button
-                        class="px-3 py-1 bg-red-900 hover:bg-red-800 rounded text-xs text-red-100 transition-colors"
+                        class="px-3 py-2 md:py-1 bg-red-900 hover:bg-red-800 rounded text-xs text-red-100 transition-colors min-h-[44px] md:min-h-0"
                         on:click=handle_undock
                     >
                         "Undock"
@@ -135,7 +136,8 @@ fn StationServiceButton(
                 view! {
                     <button
                         class=move || {
-                            let base = "px-3 py-3 rounded text-center transition-colors flex flex-col items-center gap-1";
+                            // Touch-friendly size on mobile with min-h-[56px]
+                            let base = "px-3 py-3 rounded text-center transition-colors flex flex-col items-center gap-1 min-h-[56px] md:min-h-0";
                             if is_enabled_class() {
                                 format!("{} bg-slate-700 hover:bg-amber-600 cursor-pointer", base)
                             } else {
@@ -152,7 +154,7 @@ fn StationServiceButton(
                 }.into_any()
             } else {
                 view! {
-                    <div class="px-3 py-3 bg-slate-800/50 rounded text-center flex flex-col items-center gap-1">
+                    <div class="px-3 py-3 bg-slate-800/50 rounded text-center flex flex-col items-center gap-1 min-h-[56px] md:min-h-0">
                         <ServiceIcon service=service disabled=true />
                         <div class="text-xs text-slate-600">{name}</div>
                         <div class="text-[10px] text-slate-700">"Not available"</div>

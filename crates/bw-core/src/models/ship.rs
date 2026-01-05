@@ -60,6 +60,18 @@ pub struct Ship {
 
     /// Squadron membership (for player ships)
     pub squadron_id: Option<Uuid>,
+
+    /// Combat stance (affects attack/defense/flee)
+    pub combat_stance: CombatStance,
+
+    /// Currently locked target (for player combat control)
+    pub locked_target: Option<Uuid>,
+
+    /// Cargo in the hold
+    pub cargo: Vec<CargoItem>,
+
+    /// Installed upgrades
+    pub upgrades: Vec<InstalledUpgrade>,
 }
 
 impl Ship {
@@ -89,6 +101,10 @@ impl Ship {
             is_player_ship: true,
             faction_id: Some(faction_id),
             squadron_id: None,
+            combat_stance: CombatStance::Balanced,
+            locked_target: None,
+            cargo: Vec::new(),
+            upgrades: Vec::new(),
         }
     }
 
@@ -118,6 +134,10 @@ impl Ship {
             is_player_ship: false,
             faction_id,
             squadron_id: None,
+            combat_stance: CombatStance::Balanced,
+            locked_target: None,
+            cargo: Vec::new(),
+            upgrades: Vec::new(),
         }
     }
 
@@ -128,11 +148,12 @@ impl Ship {
         let morale_mod = 1.0 + self.crew.morale_combat_modifier();
         let xp_mods = self.crew.experience_modifiers();
         let hull_mod = self.hull_integrity / 100.0;
+        let stance = &self.combat_stance;
 
         CombatStats {
-            attack: base.attack * ammo_mod * morale_mod * xp_mods.attack * hull_mod,
-            defense: base.defense * morale_mod * xp_mods.defense * hull_mod,
-            speed: base.speed * self.resources.fuel_movement_modifier() * xp_mods.speed,
+            attack: base.attack * ammo_mod * morale_mod * xp_mods.attack * hull_mod * stance.attack_modifier(),
+            defense: base.defense * morale_mod * xp_mods.defense * hull_mod * stance.defense_modifier(),
+            speed: base.speed * self.resources.fuel_movement_modifier() * xp_mods.speed * stance.speed_modifier(),
             sensor_range: base.sensor_range,
         }
     }
@@ -184,6 +205,103 @@ impl Ship {
         if self.hull_integrity >= 25.0 && matches!(self.status, ShipStatus::Disabled) {
             self.status = ShipStatus::Idle;
         }
+    }
+
+    /// Get cargo capacity from ship class.
+    pub fn cargo_capacity(&self) -> u32 {
+        self.ship_class.base_stats().cargo_capacity
+    }
+
+    /// Get current cargo weight used.
+    pub fn cargo_used(&self) -> u32 {
+        self.cargo.iter().map(|c| c.quantity).sum()
+    }
+
+    /// Check if cargo fits.
+    pub fn can_add_cargo(&self, quantity: u32) -> bool {
+        self.cargo_used() + quantity <= self.cargo_capacity()
+    }
+
+    /// Add cargo to the hold. Returns false if no space.
+    pub fn add_cargo(&mut self, cargo_type: String, quantity: u32, purchase_price: i64) -> bool {
+        if !self.can_add_cargo(quantity) {
+            return false;
+        }
+
+        // Check if we already have this type
+        if let Some(existing) = self.cargo.iter_mut().find(|c| c.cargo_type == cargo_type) {
+            // Average the purchase price
+            let total_value = existing.purchase_price * existing.quantity as i64
+                + purchase_price * quantity as i64;
+            existing.quantity += quantity;
+            existing.purchase_price = total_value / existing.quantity as i64;
+        } else {
+            self.cargo.push(CargoItem::new(cargo_type, quantity, purchase_price));
+        }
+        true
+    }
+
+    /// Remove cargo from the hold. Returns false if not enough.
+    pub fn remove_cargo(&mut self, cargo_type: &str, quantity: u32) -> bool {
+        if let Some(existing) = self.cargo.iter_mut().find(|c| c.cargo_type == cargo_type) {
+            if existing.quantity >= quantity {
+                existing.quantity -= quantity;
+                if existing.quantity == 0 {
+                    self.cargo.retain(|c| c.cargo_type != cargo_type);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get quantity of a specific cargo type.
+    pub fn get_cargo_quantity(&self, cargo_type: &str) -> u32 {
+        self.cargo
+            .iter()
+            .find(|c| c.cargo_type == cargo_type)
+            .map(|c| c.quantity)
+            .unwrap_or(0)
+    }
+
+    /// Set combat stance.
+    pub fn set_combat_stance(&mut self, stance: CombatStance) {
+        self.combat_stance = stance;
+    }
+
+    /// Lock onto a target.
+    pub fn lock_target(&mut self, target_id: Uuid) {
+        self.locked_target = Some(target_id);
+    }
+
+    /// Clear target lock.
+    pub fn clear_target(&mut self) {
+        self.locked_target = None;
+    }
+
+    /// Install an upgrade in a slot. Returns false if slot occupied.
+    pub fn install_upgrade(&mut self, upgrade_id: String, slot: String) -> bool {
+        // Check if slot is already occupied
+        if self.upgrades.iter().any(|u| u.slot == slot) {
+            return false;
+        }
+        self.upgrades.push(InstalledUpgrade::new(upgrade_id, slot));
+        true
+    }
+
+    /// Remove an upgrade from a slot. Returns the upgrade ID if found.
+    pub fn remove_upgrade(&mut self, slot: &str) -> Option<String> {
+        if let Some(idx) = self.upgrades.iter().position(|u| u.slot == slot) {
+            let upgrade = self.upgrades.remove(idx);
+            Some(upgrade.upgrade_id)
+        } else {
+            None
+        }
+    }
+
+    /// Check if ship has a specific upgrade installed.
+    pub fn has_upgrade(&self, upgrade_id: &str) -> bool {
+        self.upgrades.iter().any(|u| u.upgrade_id == upgrade_id)
     }
 }
 
@@ -561,4 +679,94 @@ pub enum WeaponType {
 
     /// Anti-missile/fighter system. Low damage, very high accuracy.
     PointDefense,
+}
+
+/// Combat stance affects attack/defense/flee modifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum CombatStance {
+    /// Higher attack, lower defense, reduced flee chance
+    Aggressive,
+    /// Balanced modifiers (default)
+    #[default]
+    Balanced,
+    /// Lower attack, higher defense
+    Defensive,
+    /// Lower attack, faster movement, better flee chance
+    Evasive,
+}
+
+impl CombatStance {
+    /// Get attack modifier for this stance.
+    pub fn attack_modifier(&self) -> f32 {
+        match self {
+            Self::Aggressive => 1.15,
+            Self::Balanced => 1.0,
+            Self::Defensive => 0.90,
+            Self::Evasive => 0.75,
+        }
+    }
+
+    /// Get defense modifier for this stance.
+    pub fn defense_modifier(&self) -> f32 {
+        match self {
+            Self::Aggressive => 0.90,
+            Self::Balanced => 1.0,
+            Self::Defensive => 1.15,
+            Self::Evasive => 1.0,
+        }
+    }
+
+    /// Get flee chance modifier for this stance.
+    pub fn flee_modifier(&self) -> f32 {
+        match self {
+            Self::Aggressive => 0.5,
+            Self::Balanced => 1.0,
+            Self::Defensive => 1.0,
+            Self::Evasive => 1.5,
+        }
+    }
+
+    /// Get speed modifier for this stance.
+    pub fn speed_modifier(&self) -> f32 {
+        match self {
+            Self::Evasive => 1.2,
+            _ => 1.0,
+        }
+    }
+}
+
+/// A cargo item in the ship's hold.
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+pub struct CargoItem {
+    /// Type ID (matches cargo.toml definition)
+    pub cargo_type: String,
+    /// Quantity held
+    pub quantity: u32,
+    /// Price paid per unit (for profit tracking)
+    pub purchase_price: i64,
+}
+
+impl CargoItem {
+    pub fn new(cargo_type: String, quantity: u32, purchase_price: i64) -> Self {
+        Self {
+            cargo_type,
+            quantity,
+            purchase_price,
+        }
+    }
+}
+
+/// An upgrade installed on the ship.
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+pub struct InstalledUpgrade {
+    /// Upgrade ID (matches upgrades.toml definition)
+    pub upgrade_id: String,
+    /// Slot where it's installed
+    pub slot: String,
+}
+
+impl InstalledUpgrade {
+    pub fn new(upgrade_id: String, slot: String) -> Self {
+        Self { upgrade_id, slot }
+    }
 }

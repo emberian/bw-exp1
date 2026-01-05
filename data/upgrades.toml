@@ -1,0 +1,184 @@
+# Ship Upgrades
+#
+# Defines purchasable ship modifications.
+# Scripts use get_upgrade_def(upgrade_id) to load these.
+
+# ============================================================================
+# Weapon Upgrades
+# ============================================================================
+
+[railgun_mk2]
+name = "Railgun Mk2"
+description = "Enhanced railgun with improved accuracy and damage."
+slot_type = "weapon"
+tier = 2
+reputation_cost = 100
+credits_cost = 1000
+effects = { attack_bonus = 10, accuracy_bonus = 0.05 }
+requires = { min_ship_tier = 2 }
+
+[railgun_mk3]
+name = "Railgun Mk3"
+description = "Military-grade railgun with exceptional accuracy."
+slot_type = "weapon"
+tier = 3
+reputation_cost = 250
+credits_cost = 3000
+effects = { attack_bonus = 20, accuracy_bonus = 0.10 }
+requires = { min_ship_tier = 3 }
+
+[missile_pods]
+name = "Missile Pod Array"
+description = "Additional missile hardpoints for increased firepower."
+slot_type = "weapon"
+tier = 2
+reputation_cost = 150
+credits_cost = 2000
+effects = { attack_bonus = 25, ammo_per_attack = 1.5 }
+requires = { min_ship_tier = 2 }
+
+[point_defense_array]
+name = "Point Defense Array"
+description = "Enhanced anti-missile coverage."
+slot_type = "weapon"
+tier = 1
+reputation_cost = 50
+credits_cost = 500
+effects = { defense_bonus = 5, missile_defense = 0.2 }
+requires = { min_ship_tier = 1 }
+
+# ============================================================================
+# Shield Upgrades
+# ============================================================================
+
+[shield_capacitor]
+name = "Shield Capacitor"
+description = "Increased shield strength and regeneration."
+slot_type = "shield"
+tier = 1
+reputation_cost = 50
+credits_cost = 500
+effects = { shield_bonus = 20, shield_regen = 0.1 }
+requires = { min_ship_tier = 1 }
+
+[shield_harmonics]
+name = "Shield Harmonics"
+description = "Advanced shield tuning for better energy efficiency."
+slot_type = "shield"
+tier = 2
+reputation_cost = 100
+credits_cost = 1500
+effects = { shield_bonus = 35, defense_bonus = 5 }
+requires = { min_ship_tier = 2 }
+
+[ablative_armor]
+name = "Ablative Armor"
+description = "Layered armor that absorbs damage."
+slot_type = "shield"
+tier = 3
+reputation_cost = 200
+credits_cost = 2500
+effects = { hull_bonus = 15, defense_bonus = 10 }
+requires = { min_ship_tier = 2 }
+
+# ============================================================================
+# Engine Upgrades
+# ============================================================================
+
+[afterburner]
+name = "Afterburner"
+description = "Boost engine output at the cost of fuel efficiency."
+slot_type = "engine"
+tier = 1
+reputation_cost = 75
+credits_cost = 750
+effects = { speed_bonus = 15, fuel_modifier = 1.2 }
+requires = { min_ship_tier = 1 }
+
+[fuel_optimizer]
+name = "Fuel Optimizer"
+description = "Improved fuel efficiency for longer patrols."
+slot_type = "engine"
+tier = 2
+reputation_cost = 100
+credits_cost = 1200
+effects = { fuel_modifier = 0.75 }
+requires = { min_ship_tier = 1 }
+
+[maneuver_thrusters]
+name = "Maneuvering Thrusters"
+description = "Enhanced maneuverability in combat."
+slot_type = "engine"
+tier = 2
+reputation_cost = 125
+credits_cost = 1800
+effects = { speed_bonus = 10, flee_bonus = 0.15 }
+requires = { min_ship_tier = 2 }
+
+# ============================================================================
+# Sensor Upgrades
+# ============================================================================
+
+[targeting_computer]
+name = "Targeting Computer"
+description = "AI-assisted targeting for improved accuracy."
+slot_type = "sensor"
+tier = 2
+reputation_cost = 150
+credits_cost = 2000
+effects = { accuracy_bonus = 0.15, crit_bonus = 0.05 }
+requires = { min_ship_tier = 2 }
+
+[long_range_scanner]
+name = "Long Range Scanner"
+description = "Detect ships and threats from greater distances."
+slot_type = "sensor"
+tier = 1
+reputation_cost = 75
+credits_cost = 800
+effects = { sensor_range_bonus = 50 }
+requires = { min_ship_tier = 1 }
+
+[cargo_scanner]
+name = "Cargo Scanner"
+description = "Analyze ship cargo from a distance."
+slot_type = "sensor"
+tier = 2
+reputation_cost = 100
+credits_cost = 1500
+effects = { scan_quality = 0.25 }
+requires = { min_ship_tier = 1 }
+
+# ============================================================================
+# Utility Upgrades
+# ============================================================================
+
+[expanded_cargo]
+name = "Expanded Cargo Hold"
+description = "Additional cargo capacity for trading."
+slot_type = "utility"
+tier = 1
+reputation_cost = 50
+credits_cost = 600
+effects = { cargo_bonus = 50 }
+requires = { min_ship_tier = 1 }
+
+[crew_quarters]
+name = "Improved Crew Quarters"
+description = "Better living conditions boost morale recovery."
+slot_type = "utility"
+tier = 1
+reputation_cost = 75
+credits_cost = 900
+effects = { morale_recovery = 0.2, max_morale_bonus = 10 }
+requires = { min_ship_tier = 1 }
+
+[repair_drones]
+name = "Repair Drones"
+description = "Automated repair system for field repairs."
+slot_type = "utility"
+tier = 3
+reputation_cost = 300
+credits_cost = 5000
+effects = { hull_regen = 0.05 }
+requires = { min_ship_tier = 3 }

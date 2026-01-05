@@ -1,0 +1,115 @@
+# Ship Definitions
+#
+# Defines ship classes, their stats, and unlock requirements.
+# Scripts use get_ship_def(ship_class) to load these.
+# Note: Base stats are also defined in Rust (bw-core/models/ship.rs)
+# This file is for script access to progression requirements.
+
+# ============================================================================
+# Player Ships - Unlockable through reputation
+# ============================================================================
+
+[patrol_corvette]
+name = "Patrol Corvette"
+description = "Standard Space Guard patrol vessel. Fast and maneuverable."
+tier = 1
+unlock_reputation = 0
+purchase_reputation = 0
+purchase_credits = 0
+stats = { attack = 30, defense = 20, speed = 80, shields = 50, sensors = 100 }
+cargo_capacity = 50
+upgrade_slots = ["weapon_1", "shield", "engine", "sensor"]
+
+[frigate]
+name = "Frigate"
+description = "Well-rounded combat vessel with improved firepower."
+tier = 2
+unlock_reputation = 500
+purchase_reputation = 200
+purchase_credits = 5000
+stats = { attack = 50, defense = 40, speed = 60, shields = 80, sensors = 120 }
+cargo_capacity = 100
+upgrade_slots = ["weapon_1", "weapon_2", "shield", "engine", "sensor"]
+
+[destroyer]
+name = "Destroyer"
+description = "Heavy combat vessel designed for extended engagements."
+tier = 3
+unlock_reputation = 2000
+purchase_reputation = 500
+purchase_credits = 20000
+stats = { attack = 80, defense = 60, speed = 50, shields = 100, sensors = 150 }
+cargo_capacity = 150
+upgrade_slots = ["weapon_1", "weapon_2", "weapon_3", "shield", "engine", "sensor", "utility"]
+
+[cruiser]
+name = "Cruiser"
+description = "Capital ship class. Massive firepower and durability."
+tier = 4
+unlock_reputation = 5000
+purchase_reputation = 1500
+purchase_credits = 75000
+stats = { attack = 100, defense = 80, speed = 40, shields = 150, sensors = 200 }
+cargo_capacity = 300
+upgrade_slots = ["weapon_1", "weapon_2", "weapon_3", "weapon_4", "shield", "shield_2", "engine", "sensor", "utility", "utility_2"]
+
+[carrier]
+name = "Carrier"
+description = "Command vessel with fighter support capabilities."
+tier = 5
+unlock_reputation = 10000
+purchase_reputation = 3000
+purchase_credits = 200000
+stats = { attack = 40, defense = 100, speed = 30, shields = 200, sensors = 300 }
+cargo_capacity = 500
+upgrade_slots = ["weapon_1", "weapon_2", "shield", "shield_2", "engine", "sensor", "sensor_2", "utility", "utility_2", "hangar"]
+
+# ============================================================================
+# NPC Ships - Not purchasable, for reference
+# ============================================================================
+
+[freighter]
+name = "Freighter"
+tier = 0
+npc_only = true
+stats = { attack = 5, defense = 15, speed = 40, shields = 20, sensors = 50 }
+cargo_capacity = 1000
+
+[transport]
+name = "Transport"
+tier = 0
+npc_only = true
+stats = { attack = 10, defense = 20, speed = 50, shields = 30, sensors = 60 }
+cargo_capacity = 500
+
+[pirate_raider]
+name = "Pirate Raider"
+tier = 0
+npc_only = true
+hostile = true
+stats = { attack = 40, defense = 15, speed = 90, shields = 30, sensors = 80 }
+cargo_capacity = 100
+
+[pirate_frigate]
+name = "Pirate Frigate"
+tier = 0
+npc_only = true
+hostile = true
+stats = { attack = 60, defense = 35, speed = 55, shields = 60, sensors = 100 }
+cargo_capacity = 200
+
+[sera_swarm]
+name = "Sera Swarm"
+tier = 0
+npc_only = true
+hostile = true
+stats = { attack = 20, defense = 5, speed = 100, shields = 0, sensors = 150 }
+cargo_capacity = 0
+
+[sera_hunter]
+name = "Sera Hunter"
+tier = 0
+npc_only = true
+hostile = true
+stats = { attack = 120, defense = 70, speed = 60, shields = 50, sensors = 250 }
+cargo_capacity = 0

@@ -46,6 +46,13 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::new(&database_url).await?;
     tracing::info!("Database connected and migrations applied");
 
+    // Seed default admin user if it doesn't exist
+    match db.seed_default_admin().await {
+        Ok(true) => tracing::info!("Created default admin user (admin:hunter2)"),
+        Ok(false) => tracing::debug!("Default admin user already exists"),
+        Err(e) => tracing::warn!("Failed to seed default admin: {}", e),
+    }
+
     // Initialize game state
     let state = Arc::new(GameState::new(db).await?);
 

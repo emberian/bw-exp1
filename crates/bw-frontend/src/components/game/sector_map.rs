@@ -145,8 +145,8 @@ pub fn SectorMap() -> impl IntoView {
             // Legend
             <MapLegend />
 
-            // Sector info display
-            <div class="absolute top-4 right-4 bg-slate-900/80 rounded px-3 py-2 text-xs">
+            // Sector info display (responsive positioning)
+            <div class="absolute top-2 md:top-4 right-2 md:right-4 bg-slate-900/80 rounded px-2 md:px-3 py-1 md:py-2 text-[10px] md:text-xs">
                 <div class="text-slate-300 font-semibold">{sector_name}</div>
                 <div class="text-slate-400">
                     "Danger: "
@@ -378,7 +378,8 @@ where
 #[component]
 fn MapLegend() -> impl IntoView {
     view! {
-        <div class="absolute bottom-4 left-4 bg-slate-900/80 rounded p-3 text-xs pointer-events-none">
+        // Hidden on mobile (takes too much space), visible on desktop
+        <div class="hidden md:block absolute bottom-4 left-4 bg-slate-900/80 rounded p-3 text-xs pointer-events-none">
             <div class="font-semibold text-slate-300 mb-2">"Legend"</div>
             <div class="flex items-center gap-2 mb-1">
                 <div class="w-3 h-3 rounded-full bg-blue-500" />
@@ -430,20 +431,21 @@ where
     let on_hail_clone = on_hail.clone();
 
     view! {
-        <div class="absolute bottom-4 right-4 bg-slate-900/90 rounded-lg p-3 w-64 border border-slate-700">
+        // Responsive positioning: above mobile nav on small screens
+        <div class="absolute bottom-20 md:bottom-4 right-2 md:right-4 bg-slate-900/90 rounded-lg p-3 w-56 md:w-64 border border-slate-700">
             <div class="flex justify-between items-start mb-2">
                 <div>
                     <div class="font-semibold text-slate-200">{name}</div>
                     <div class="text-xs text-slate-400">{ship_class}</div>
                 </div>
                 <button
-                    class="text-slate-400 hover:text-slate-200"
+                    class="text-slate-400 hover:text-slate-200 p-1 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 -mr-1 -mt-1 flex items-center justify-center"
                     on:click={
                         let on_deselect = on_deselect_clone.clone();
                         move |_| on_deselect()
                     }
                 >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg class="w-5 h-5 md:w-4 md:h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M18 6L6 18M6 6l12 12" />
                     </svg>
                 </button>
@@ -474,7 +476,7 @@ where
                     let on_engage = on_engage_clone.clone();
                     view! {
                         <button
-                            class="flex-1 px-3 py-1 bg-red-900 hover:bg-red-800 rounded text-xs text-red-100"
+                            class="flex-1 px-3 py-2 md:py-1 bg-red-900 hover:bg-red-800 rounded text-xs text-red-100 min-h-[44px] md:min-h-0"
                             on:click=move |_| on_engage()
                         >
                             "Engage"
@@ -484,7 +486,7 @@ where
                     view! { <span /> }.into_any()
                 }}
                 <button
-                    class="flex-1 px-3 py-1 bg-amber-900 hover:bg-amber-800 rounded text-xs text-amber-100"
+                    class="flex-1 px-3 py-2 md:py-1 bg-amber-900 hover:bg-amber-800 rounded text-xs text-amber-100 min-h-[44px] md:min-h-0"
                     on:click={
                         let on_hail = on_hail_clone.clone();
                         move |_| on_hail()
@@ -519,15 +521,16 @@ where
     let on_close_clone = on_close.clone();
 
     view! {
-        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-900/95 border border-purple-500/50 rounded-lg p-4 w-80 shadow-lg z-40">
+        // Responsive: full-width on mobile with margins, centered on desktop
+        <div class="absolute top-1/2 left-2 right-2 md:left-1/2 md:right-auto -translate-y-1/2 md:-translate-x-1/2 bg-slate-900/95 border border-purple-500/50 rounded-lg p-3 md:p-4 md:w-80 shadow-lg z-40">
             // Header
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex justify-between items-center mb-3 md:mb-4">
                 <h3 class="font-semibold text-purple-400">"Jumpgate Navigation"</h3>
                 <button
-                    class="text-slate-400 hover:text-slate-200"
+                    class="text-slate-400 hover:text-slate-200 p-1 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 -mr-1 flex items-center justify-center"
                     on:click=move |_| on_close_clone()
                 >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg class="w-5 h-5 md:w-4 md:h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M18 6L6 18M6 6l12 12" />
                     </svg>
                 </button>
@@ -552,7 +555,7 @@ where
 
                                 view! {
                                     <button
-                                        class="w-full text-left px-3 py-2 bg-slate-800 hover:bg-purple-900/50 rounded-lg border border-slate-700 hover:border-purple-500/50 transition-colors"
+                                        class="w-full text-left px-3 py-3 md:py-2 bg-slate-800 hover:bg-purple-900/50 rounded-lg border border-slate-700 hover:border-purple-500/50 transition-colors min-h-[48px] md:min-h-0"
                                         on:click=move |_| on_jump(sector_id)
                                     >
                                         <div class="flex justify-between items-center">

@@ -26,6 +26,10 @@ pub struct Model {
     pub is_player_ship: i32,
     pub faction_id: Option<String>,
     pub squadron_id: Option<String>,
+    pub combat_stance: Option<String>,
+    pub locked_target: Option<String>,
+    pub cargo: Option<String>,    // JSON
+    pub upgrades: Option<String>, // JSON
     pub created_at: String,
     pub updated_at: String,
 }
