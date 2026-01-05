@@ -15,7 +15,7 @@ use crate::events::EventRegistry;
 use crate::context::{ScriptExecutionContext, ExecutionGuard};
 use crate::ai::{BehaviorTreeRunner, AiContext, BtNode};
 use crate::persistence::{ScriptStateStore, PersistenceError};
-use crate::debug::{DebugController, EntityContext};
+use crate::debug::{DebugController, DebugTarget, EntityContext};
 
 use super::{EntityBehavior, EntityType, BehaviorState, BehaviorContext, BehaviorExecResult};
 
@@ -37,6 +37,8 @@ pub struct BehaviorManager {
     state_store: Option<Arc<dyn ScriptStateStore>>,
     /// Debug controller for script debugging
     debug_controller: Option<Arc<DebugController>>,
+    /// Debug target context (Live or Playtest(id))
+    debug_target: DebugTarget,
     /// Current game tick
     current_tick: RwLock<u64>,
     /// Current game time in seconds
@@ -55,6 +57,7 @@ impl BehaviorManager {
             event_registry: None,
             state_store: None,
             debug_controller: None,
+            debug_target: DebugTarget::Live,
             current_tick: RwLock::new(0),
             current_game_time: RwLock::new(0.0),
         }
@@ -63,6 +66,14 @@ impl BehaviorManager {
     /// Set the debug controller for script debugging.
     pub fn set_debug_controller(&mut self, controller: Arc<DebugController>) {
         self.debug_controller = Some(controller);
+    }
+
+    /// Set the debug target context for this behavior manager.
+    ///
+    /// For the live server, this should be `DebugTarget::Live`.
+    /// For a playtest, this should be `DebugTarget::Playtest(playtest_id)`.
+    pub fn set_debug_target(&mut self, target: DebugTarget) {
+        self.debug_target = target;
     }
 
     /// Set the state store for persistent behavior data.
@@ -573,8 +584,8 @@ impl BehaviorManager {
 
         // Check if we should use a debug engine
         let debug_engine: Option<Engine> = self.debug_controller.as_ref().and_then(|dc| {
-            // Find any debug sessions that have breakpoints for this script
-            let sessions = dc.sessions_for_script(&behavior.script_path);
+            // Find debug sessions that have breakpoints for this script AND match our target
+            let sessions = dc.sessions_for_script_with_target(&behavior.script_path, &self.debug_target);
             if let Some(&session_id) = sessions.first() {
                 // Create entity context for the debugger
                 let entity_ctx = EntityContext {

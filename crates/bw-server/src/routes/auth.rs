@@ -269,6 +269,7 @@ async fn register(
             ship_id,
             sector_id,
             connection: None,
+            connection_id: None,
             playtest_id: None,
         },
     );
@@ -373,6 +374,7 @@ async fn login(
             ship_id,
             sector_id,
             connection: None,
+            connection_id: None,
             playtest_id: None,
         },
     );

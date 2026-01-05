@@ -13,6 +13,6 @@ use crate::GameState;
 pub fn api_router() -> Router<Arc<GameState>> {
     Router::new()
         .nest("/auth", auth::router())
-        .nest("/game", api::router())
         .nest("/admin", admin::router())
+        .merge(api::router())
 }

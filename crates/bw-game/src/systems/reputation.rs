@@ -4,7 +4,7 @@
 //! - Reputation: Standing with admiralty, spendable, 0 = game over
 //! - Fame: Public notoriety, decays, multiplies reputation changes
 
-use crate::models::{Player, PlayerResources};
+use bw_core::models::{Player, PlayerResources};
 
 /// Configuration for reputation system.
 pub struct ReputationConfig {

@@ -278,7 +278,7 @@ async fn process_sector_tick_with_metrics(
                 let speed = ship.ship_class.base_stats().speed * ship.resources.fuel_movement_modifier();
                 let distance_per_tick = speed as f64 * 0.1; // Adjust for tick rate
 
-                let arrived = bw_core::systems::move_ship_towards(
+                let arrived = bw_game::systems::move_ship_towards(
                     &mut ship,
                     dest,
                     distance_per_tick,

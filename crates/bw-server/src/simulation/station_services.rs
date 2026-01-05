@@ -5,7 +5,7 @@
 use uuid::Uuid;
 
 use bw_core::models::{LocationType, Ship, ShipStatus, StationService};
-use bw_core::systems::spend_reputation;
+use bw_game::systems::spend_reputation;
 use bw_shared::ServerMessage;
 
 use crate::GameState;

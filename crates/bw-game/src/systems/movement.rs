@@ -2,7 +2,7 @@
 //!
 //! Handles ship movement within and between sectors.
 
-use crate::models::{Position, Sector, Ship, ShipStatus};
+use bw_core::models::{Position, Sector, Ship, ShipStatus};
 
 /// Calculate fuel cost for in-sector movement.
 pub fn calculate_in_sector_fuel_cost(ship: &Ship, distance: f64, sector: &Sector) -> f32 {

@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 bw-core = { path = "../bw-core" }
+bw-game = { path = "../bw-game" }
 bw-shared = { path = "../bw-shared" }
 bw-scripting = { path = "../bw-scripting" }
 

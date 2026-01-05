@@ -33,6 +33,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
     let mut player_id: Option<Uuid> = None;
     let mut sector_id: Option<Uuid> = None;
     let mut username: Option<String> = None;
+    // Unique ID for this connection (used to prevent race conditions during reconnect cleanup)
+    let mut connection_id: Option<Uuid> = None;
 
     // Task to forward server messages to client
     let send_task = tokio::spawn(async move {
@@ -75,6 +77,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                                                 ship_id,
                                                 sector_id: sid,
                                                 connection: None,
+                                                connection_id: None,
                                                 playtest_id: None,
                                             });
 
@@ -98,9 +101,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
                                     username = Some(player.username.clone());
                                 }
 
-                                // Register connection
+                                // Register connection with unique ID for reconnect safety
+                                let conn_id = Uuid::new_v4();
+                                connection_id = Some(conn_id);
                                 if let Some(mut session) = state.players.get_mut(&pid) {
                                     session.connection = Some(tx.clone());
+                                    session.connection_id = Some(conn_id);
                                 }
 
                                 // Send success
@@ -160,21 +166,33 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
         }
     }
 
-    // Cleanup
+    // Cleanup - only clear connection if it's still ours (prevents race condition on reconnect)
     if let Some(pid) = player_id {
-        if let Some(mut session) = state.players.get_mut(&pid) {
-            session.connection = None;
-        }
-
-        // Remove from sector connections
-        if let Some(sid) = sector_id {
-            if let Some(sector) = state.sectors.get(&sid) {
-                sector.connections.remove(&pid);
+        let should_cleanup = if let Some(mut session) = state.players.get_mut(&pid) {
+            // Only clear if this connection owns the session (connection_id matches)
+            if session.connection_id == connection_id {
+                session.connection = None;
+                session.connection_id = None;
+                true
+            } else {
+                // A new connection has taken over - don't clean up their state
+                false
             }
-        }
+        } else {
+            false
+        };
 
-        // Unsubscribe from metrics
-        state.metrics.unsubscribe(pid);
+        if should_cleanup {
+            // Remove from sector connections
+            if let Some(sid) = sector_id {
+                if let Some(sector) = state.sectors.get(&sid) {
+                    sector.connections.remove(&pid);
+                }
+            }
+
+            // Unsubscribe from metrics
+            state.metrics.unsubscribe(pid);
+        }
     }
 
     send_task.abort();
@@ -392,9 +410,22 @@ async fn handle_game_message(
 
             match channel {
                 ChatChannel::Sector => {
-                    if let Some(sector) = state.sectors.get(&sector_id) {
-                        sector.broadcast(chat_msg).await;
+                    // Get the player's current sector from state (not the cached local var
+                    // which can become stale after sector changes)
+                    let current_sector_id = state.players.get(&player_id)
+                        .map(|s| s.sector_id)
+                        .unwrap_or(sector_id);
+
+                    if let Some(sector) = state.sectors.get(&current_sector_id) {
+                        // Broadcast to others in sector
+                        for conn in sector.connections.iter() {
+                            if *conn.key() != player_id {
+                                let _ = conn.value().send(chat_msg.clone()).await;
+                            }
+                        }
                     }
+                    // Always echo back to sender
+                    let _ = tx.send(chat_msg).await;
                 }
                 _ => {
                     let _ = tx.send(chat_msg).await;

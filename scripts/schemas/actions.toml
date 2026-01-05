@@ -1,0 +1,206 @@
+# Action Parameter Schemas
+#
+# Defines expected parameters for each ScriptAction.
+# Used by the validator to check params["key"] accesses.
+#
+# Types: uuid, string, int, float, bool, array
+# Required: true if the handler should always check for this param
+
+# =============================================================================
+# Movement Actions
+# =============================================================================
+
+[move_to_position]
+description = "Move ship to absolute coordinates"
+[move_to_position.params]
+x = { type = "float", required = true }
+y = { type = "float", required = true }
+z = { type = "float", required = false }
+
+[move_to_location]
+description = "Move ship to a named location"
+[move_to_location.params]
+location_id = { type = "uuid", required = true }
+
+[move_to_sector]
+description = "Jump to another sector"
+[move_to_sector.params]
+sector_id = { type = "uuid", required = true }
+
+[stop_movement]
+description = "Cancel current movement"
+[stop_movement.params]
+# No params required
+
+# =============================================================================
+# Station Actions
+# =============================================================================
+
+[dock]
+description = "Dock at a station"
+[dock.params]
+station_id = { type = "uuid", required = true }
+
+[undock]
+description = "Undock from current station"
+[undock.params]
+# No params required
+
+[use_service]
+description = "Use a station service"
+[use_service.params]
+service = { type = "string", required = true }
+
+# =============================================================================
+# Mission Actions
+# =============================================================================
+
+[accept_mission]
+description = "Accept an available mission"
+[accept_mission.params]
+mission_id = { type = "uuid", required = true }
+
+[abandon_mission]
+description = "Abandon a current mission"
+[abandon_mission.params]
+mission_id = { type = "uuid", required = true }
+
+[mission_choice]
+description = "Make a choice in a mission"
+[mission_choice.params]
+mission_id = { type = "uuid", required = true }
+choice_id = { type = "string", required = true }
+
+# =============================================================================
+# Combat Actions
+# =============================================================================
+
+[engage_target]
+description = "Engage a target in combat"
+[engage_target.params]
+target_id = { type = "uuid", required = true }
+
+[disengage_combat]
+description = "Disengage from current combat"
+[disengage_combat.params]
+# No params required
+
+[fire_weapon]
+description = "Fire a weapon at a target"
+[fire_weapon.params]
+weapon_index = { type = "int", required = true }
+target_id = { type = "uuid", required = true }
+
+# =============================================================================
+# Squadron Actions
+# =============================================================================
+
+[create_squadron]
+description = "Create a new squadron"
+[create_squadron.params]
+name = { type = "string", required = true }
+tag = { type = "string", required = true }
+
+[invite_to_squadron]
+description = "Invite a player to your squadron"
+[invite_to_squadron.params]
+player_id = { type = "uuid", required = true }
+
+[accept_squadron_invite]
+description = "Accept a squadron invitation"
+[accept_squadron_invite.params]
+invite_id = { type = "uuid", required = true }
+
+[decline_squadron_invite]
+description = "Decline a squadron invitation"
+[decline_squadron_invite.params]
+invite_id = { type = "uuid", required = true }
+
+[leave_squadron]
+description = "Leave your current squadron"
+[leave_squadron.params]
+# No params required
+
+[disband_squadron]
+description = "Disband your squadron (leader only)"
+[disband_squadron.params]
+# No params required
+
+[kick_from_squadron]
+description = "Remove a member from squadron"
+[kick_from_squadron.params]
+player_id = { type = "uuid", required = true }
+
+[promote_to_officer]
+description = "Promote a member to officer"
+[promote_to_officer.params]
+player_id = { type = "uuid", required = true }
+
+[demote_officer]
+description = "Demote an officer to member"
+[demote_officer.params]
+player_id = { type = "uuid", required = true }
+
+[transfer_leadership]
+description = "Transfer squadron leadership"
+[transfer_leadership.params]
+player_id = { type = "uuid", required = true }
+
+[set_squadron_motto]
+description = "Set squadron motto"
+[set_squadron_motto.params]
+motto = { type = "string", required = true }
+
+# =============================================================================
+# Alliance Actions
+# =============================================================================
+
+[propose_alliance]
+description = "Propose an alliance to another squadron"
+[propose_alliance.params]
+squadron_id = { type = "uuid", required = true }
+
+[accept_alliance]
+description = "Accept an alliance proposal"
+[accept_alliance.params]
+proposal_id = { type = "uuid", required = true }
+
+[decline_alliance]
+description = "Decline an alliance proposal"
+[decline_alliance.params]
+proposal_id = { type = "uuid", required = true }
+
+[break_alliance]
+description = "Break an existing alliance"
+[break_alliance.params]
+squadron_id = { type = "uuid", required = true }
+
+[declare_war]
+description = "Declare war on another squadron"
+[declare_war.params]
+squadron_id = { type = "uuid", required = true }
+
+[propose_peace]
+description = "Propose peace to end a war"
+[propose_peace.params]
+squadron_id = { type = "uuid", required = true }
+
+[accept_peace]
+description = "Accept a peace proposal"
+[accept_peace.params]
+proposal_id = { type = "uuid", required = true }
+
+# =============================================================================
+# Social Actions
+# =============================================================================
+
+[hail]
+description = "Hail another ship"
+[hail.params]
+target_id = { type = "uuid", required = true }
+
+[respond_to_choice]
+description = "Respond to a script-generated choice dialog"
+[respond_to_choice.params]
+choice_id = { type = "string", required = true }
+response = { type = "string", required = true }

@@ -363,7 +363,7 @@ pub fn apply_resource_changes(
     player_id: Uuid,
     result: &MissionExecutionResult,
 ) -> Option<ServerMessage> {
-    use bw_core::systems::{apply_reputation_change, apply_fame_change};
+    use bw_game::systems::{apply_reputation_change, apply_fame_change};
 
     let session = state.players.get(&player_id)?;
     let ship_id = session.ship_id;

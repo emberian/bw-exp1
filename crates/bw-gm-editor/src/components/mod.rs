@@ -1,12 +1,14 @@
 //! GM Editor UI components
 
 mod config_editor;
+mod debug_panel;
 mod entity_browser;
 mod script_editor;
 mod staged_preview;
 mod tab_bar;
 
 pub use config_editor::*;
+pub use debug_panel::*;
 pub use entity_browser::*;
 pub use script_editor::*;
 pub use staged_preview::*;

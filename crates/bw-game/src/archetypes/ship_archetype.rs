@@ -215,4 +215,6 @@ mod tests {
         assert_eq!(archetype.stats.attack, 30.0);
         assert!(archetype.is_player_class);
     }
+
+    // Schema tests moved to bw-scripting (requires schema module)
 }

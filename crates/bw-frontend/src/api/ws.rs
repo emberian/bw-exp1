@@ -45,6 +45,8 @@ pub struct WsService {
     reconnect_attempts: RwSignal<u32>,
     /// Whether auto-reconnect is enabled
     auto_reconnect: RwSignal<bool>,
+    /// Whether effects have been initialized (to avoid duplicates on reconnect)
+    effects_initialized: RwSignal<bool>,
 }
 
 impl Default for WsService {
@@ -61,6 +63,7 @@ impl WsService {
             auth_token: RwSignal::new(None),
             reconnect_attempts: RwSignal::new(0),
             auto_reconnect: RwSignal::new(true),
+            effects_initialized: RwSignal::new(false),
         }
     }
 
@@ -80,6 +83,8 @@ impl WsService {
     /// Disable auto-reconnect (e.g., on manual disconnect).
     pub fn disable_reconnect(&self) {
         self.auto_reconnect.set(false);
+        // Reset counter so next reconnect cycle starts fresh
+        self.reconnect_attempts.set(0);
     }
 
     /// Enable auto-reconnect.
@@ -302,8 +307,10 @@ impl WsService {
 
     /// Internal connect method used for both initial connection and reconnection.
     fn connect_internal(&self, game_state: GameState, token: String) {
-        // Set connecting state
-        self.state.set(ConnectionState::Connecting);
+        // Set connecting state (but keep Reconnecting if already reconnecting)
+        if self.state.get() != ConnectionState::Reconnecting {
+            self.state.set(ConnectionState::Connecting);
+        }
 
         // Determine WebSocket URL based on current location
         let location = web_sys::window()
@@ -337,12 +344,11 @@ impl WsService {
         // onopen handler
         let ws_open = ws_ref.clone();
         let token_clone = token.clone();
-        let reconnect_attempts_signal = self.reconnect_attempts;
         let onopen = Closure::wrap(Box::new(move |_: web_sys::Event| {
             state_signal.set(ConnectionState::Connected);
 
-            // Reset reconnect attempts on successful connection
-            reconnect_attempts_signal.set(0);
+            // Note: Don't reset reconnect_attempts here - wait until we receive
+            // successful auth/InitialState to avoid resetting on brief connections
 
             // Send authentication message
             if let Some(ref ws) = *ws_open.borrow() {
@@ -357,6 +363,7 @@ impl WsService {
 
         // onmessage handler
         let game_state_msg = game_state;
+        let reconnect_attempts_signal = self.reconnect_attempts;
         let onmessage = Closure::wrap(Box::new(move |e: MessageEvent| {
             // Get binary data from message
             if let Ok(array_buffer) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
@@ -365,6 +372,11 @@ impl WsService {
 
                 // Deserialize MessagePack
                 if let Ok(server_msg) = deserialize_message::<ServerMessage>(&bytes) {
+                    // Reset reconnect attempts on successful InitialState
+                    // (This means the connection is fully established)
+                    if matches!(server_msg, ServerMessage::InitialState { .. }) {
+                        reconnect_attempts_signal.set(0);
+                    }
                     handle_server_message(&game_state_msg, server_msg);
                 }
             }
@@ -444,15 +456,19 @@ impl WsService {
         onerror.forget();
 
         // Watch outgoing queue and send all queued messages
+        // Note: Multiple effects may exist after reconnections, but only the one with
+        // an open WebSocket will actually drain and send. Others skip because WS is closed.
         let ws_send = ws_ref.clone();
         Effect::new(move |_| {
-            // Drain and send all queued messages
-            let messages: Vec<ClientMessage> = outgoing_queue_signal
-                .try_update(|queue| std::mem::take(queue))
-                .unwrap_or_default();
-
+            // First check if WS is open - only drain queue if we can actually send
+            // This prevents message loss when multiple effects exist from reconnections
             if let Some(ref ws) = *ws_send.borrow() {
                 if ws.ready_state() == WebSocket::OPEN {
+                    // Drain and send all queued messages
+                    let messages: Vec<ClientMessage> = outgoing_queue_signal
+                        .try_update(|queue| std::mem::take(queue))
+                        .unwrap_or_default();
+
                     for msg in messages {
                         if let Ok(bytes) = serialize_message(&msg) {
                             let _ = ws.send_with_u8_array(&bytes);
@@ -463,11 +479,16 @@ impl WsService {
         });
 
         // Update game state connected flag when state changes
-        let game_state_connected = game_state;
-        Effect::new(move |_| {
-            let connected = state_signal.get() == ConnectionState::Connected;
-            game_state_connected.connected.set(connected);
-        });
+        // Only create this effect once to avoid redundant updates
+        let effects_initialized = self.effects_initialized;
+        if !effects_initialized.get() {
+            effects_initialized.set(true);
+            let game_state_connected = game_state;
+            Effect::new(move |_| {
+                let connected = state_signal.get() == ConnectionState::Connected;
+                game_state_connected.connected.set(connected);
+            });
+        }
     }
 }
 

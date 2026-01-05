@@ -16,7 +16,11 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 
 use bw_core::models::{Player, Position, Sector, Ship, ShipClass, DangerLevel};
-use bw_scripting::{BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher};
+use bw_scripting::{
+    BehaviorManager, CoroutineScheduler, EventRegistry, EventDispatcher,
+    ActionRegistry, ActionDispatcher,
+    debug::DebugController,
+};
 use bw_server::playtest::{
     ForkConfig, PlaytestBuilder, PlaytestError, PlaytestInstance, PlaytestManager,
 };
@@ -71,9 +75,16 @@ async fn setup_test_state() -> GameState {
     let (broadcaster, _) = broadcast::channel(1000);
 
     let event_registry = Arc::new(EventRegistry::new());
-    let behavior_manager = BehaviorManager::new(scripts.clone());
+    let action_registry = Arc::new(ActionRegistry::new());
+    let debug_controller = Arc::new(DebugController::new());
+    let mut behavior_manager = BehaviorManager::new(scripts.clone());
+    behavior_manager.set_debug_controller(debug_controller.clone());
     let coroutine_scheduler = CoroutineScheduler::new(scripts.clone());
     let event_dispatcher = EventDispatcher::new(event_registry.clone(), scripts.clone());
+    let action_dispatcher = ActionDispatcher::new(action_registry.clone(), scripts.clone());
+
+    let mut playtest_manager = PlaytestManager::new(10);
+    playtest_manager.set_debug_controller(debug_controller.clone());
 
     GameState {
         db,
@@ -95,10 +106,13 @@ async fn setup_test_state() -> GameState {
         coroutine_scheduler: RwLock::new(coroutine_scheduler),
         event_registry,
         event_dispatcher: RwLock::new(event_dispatcher),
+        action_registry,
+        action_dispatcher: RwLock::new(action_dispatcher),
         state_accessor: RwLock::new(None),
         script_logs: RwLock::new(ScriptLogBuffer::new(100)),
         metrics: bw_server::simulation::metrics::MetricsStore::new(),
-        playtest_manager: PlaytestManager::new(10),
+        playtest_manager,
+        debug_controller,
     }
 }
 
@@ -139,6 +153,7 @@ async fn setup_populated_state() -> TestState {
         ship_id: player_ship_id,
         sector_id,
         connection: Some(tx),
+        connection_id: None,
         playtest_id: None,
     });
 
@@ -177,7 +192,7 @@ fn create_playtest(
 
     let builder = PlaytestBuilder::new(owner_id, name.to_string(), state.get_tick(), config.clone());
     let playtest_id = builder.id();
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, state.scripts.clone(), state.debug_controller.clone());
 
     state.fork_to_playtest(&instance, &config);
     instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
@@ -195,17 +210,19 @@ async fn test_manager_instance_limit() {
     let manager = PlaytestManager::new(2);
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
+    let scripts = Arc::new(bw_scripting::ScriptEngine::new("../../scripts"));
+    let debug_controller = Arc::new(DebugController::new());
 
     // Create two playtests - should succeed
     for i in 0..2 {
         let builder = PlaytestBuilder::new(Uuid::new_v4(), format!("Test {}", i), 100, ForkConfig::default());
-        let instance = builder.build(factions.clone(), faction_tags.clone());
+        let instance = builder.build(factions.clone(), faction_tags.clone(), scripts.clone(), debug_controller.clone());
         assert!(manager.register(instance).is_ok());
     }
 
     // Third should fail
     let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test 3".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions.clone(), faction_tags.clone());
+    let instance = builder.build(factions.clone(), faction_tags.clone(), scripts.clone(), debug_controller.clone());
     assert!(matches!(manager.register(instance), Err(PlaytestError::LimitReached)));
 }
 
@@ -214,20 +231,22 @@ async fn test_player_cannot_join_multiple_playtests() {
     let manager = PlaytestManager::new(10);
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
+    let scripts = Arc::new(bw_scripting::ScriptEngine::new("../../scripts"));
+    let debug_controller = Arc::new(DebugController::new());
 
     let player_id = Uuid::new_v4();
 
     // Create and register first playtest
     let builder1 = PlaytestBuilder::new(Uuid::new_v4(), "Test 1".into(), 100, ForkConfig::default());
     let playtest1_id = builder1.id();
-    let instance1 = builder1.build(factions.clone(), faction_tags.clone());
+    let instance1 = builder1.build(factions.clone(), faction_tags.clone(), scripts.clone(), debug_controller.clone());
     instance1.add_participant(Uuid::new_v4(), true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
     manager.register(instance1).unwrap();
 
     // Create second playtest
     let builder2 = PlaytestBuilder::new(Uuid::new_v4(), "Test 2".into(), 100, ForkConfig::default());
     let playtest2_id = builder2.id();
-    let instance2 = builder2.build(factions.clone(), faction_tags.clone());
+    let instance2 = builder2.build(factions.clone(), faction_tags.clone(), scripts.clone(), debug_controller.clone());
     instance2.add_participant(Uuid::new_v4(), true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
     manager.register(instance2).unwrap();
 
@@ -244,13 +263,15 @@ async fn test_destroy_cleans_up_all_participants() {
     let manager = PlaytestManager::new(10);
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
+    let scripts = Arc::new(bw_scripting::ScriptEngine::new("../../scripts"));
+    let debug_controller = Arc::new(DebugController::new());
 
     let owner_id = Uuid::new_v4();
     let player_ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
 
     let builder = PlaytestBuilder::new(owner_id, "Test".into(), 100, ForkConfig::default());
     let playtest_id = builder.id();
-    let instance = builder.build(factions.clone(), faction_tags.clone());
+    let instance = builder.build(factions.clone(), faction_tags.clone(), scripts.clone(), debug_controller.clone());
     instance.add_participant(owner_id, true, Uuid::new_v4(), Uuid::new_v4()).unwrap();
     manager.register(instance).unwrap();
 
@@ -389,9 +410,11 @@ async fn test_concurrent_playtests_are_isolated() {
 fn test_playtest_tick_and_time_controls() {
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
+    let scripts = Arc::new(bw_scripting::ScriptEngine::new("../../scripts"));
+    let debug_controller = Arc::new(DebugController::new());
 
     let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 1000, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, scripts, debug_controller);
 
     // Starts at fork tick
     assert_eq!(instance.get_tick(), 1000);
@@ -419,9 +442,11 @@ fn test_playtest_tick_and_time_controls() {
 fn test_participant_limit() {
     let factions = Arc::new(DashMap::new());
     let faction_tags = Arc::new(DashMap::new());
+    let scripts = Arc::new(bw_scripting::ScriptEngine::new("../../scripts"));
+    let debug_controller = Arc::new(DebugController::new());
 
     let builder = PlaytestBuilder::new(Uuid::new_v4(), "Test".into(), 100, ForkConfig::default());
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, scripts, debug_controller);
 
     // Fill to max
     for _ in 0..PlaytestInstance::MAX_PARTICIPANTS {
@@ -446,7 +471,7 @@ async fn test_promotion_copies_ship_stats_to_live() {
     let faction_tags = ts.state.get_faction_tags_arc();
 
     let builder = PlaytestBuilder::new(ts.player_id, "Promo Test".into(), ts.state.get_tick(), config.clone());
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, ts.state.scripts.clone(), ts.state.debug_controller.clone());
     ts.state.fork_to_playtest(&instance, &config);
 
     // Modify ship in playtest
@@ -478,7 +503,7 @@ async fn test_promotion_spawns_created_entities() {
     let faction_tags = ts.state.get_faction_tags_arc();
 
     let builder = PlaytestBuilder::new(ts.player_id, "Spawn Test".into(), ts.state.get_tick(), config.clone());
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, ts.state.scripts.clone(), ts.state.debug_controller.clone());
     ts.state.fork_to_playtest(&instance, &config);
 
     // Create new ship in playtest
@@ -518,7 +543,7 @@ async fn test_promotion_applies_deletions() {
     let faction_tags = ts.state.get_faction_tags_arc();
 
     let builder = PlaytestBuilder::new(ts.player_id, "Delete Test".into(), ts.state.get_tick(), config.clone());
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(factions, faction_tags, ts.state.scripts.clone(), ts.state.debug_controller.clone());
     ts.state.fork_to_playtest(&instance, &config);
 
     // Delete NPC in playtest
@@ -676,6 +701,7 @@ async fn test_full_playtest_lifecycle() {
         ship_id: Uuid::new_v4(),
         sector_id: ts.sector_id,
         connection: Some(tx2),
+        connection_id: None,
         playtest_id: None,
     });
 

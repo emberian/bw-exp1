@@ -10,6 +10,8 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use bw_scripting::{BehaviorManager, ScriptEngine, debug::{DebugController, DebugTarget}};
+
 use super::config::{ForkConfig, PlaytestError};
 use super::instance::PlaytestInstance;
 
@@ -26,6 +28,9 @@ pub struct PlaytestManager {
 
     /// Maximum concurrent playtests allowed
     max_instances: usize,
+
+    /// Debug controller for cleaning up debug sessions on playtest destruction
+    debug_controller: Option<Arc<DebugController>>,
 }
 
 impl PlaytestManager {
@@ -36,7 +41,13 @@ impl PlaytestManager {
             player_playtest: DashMap::new(),
             simulation_tasks: DashMap::new(),
             max_instances,
+            debug_controller: None,
         }
+    }
+
+    /// Set the debug controller for session cleanup on playtest destruction.
+    pub fn set_debug_controller(&mut self, controller: Arc<DebugController>) {
+        self.debug_controller = Some(controller);
     }
 
     /// Register a simulation task handle for a playtest.
@@ -174,6 +185,26 @@ impl PlaytestManager {
             handle.abort();
         }
 
+        // Clean up any debug sessions targeting this playtest
+        if let Some(ref dc) = self.debug_controller {
+            let target = DebugTarget::Playtest(playtest_id);
+            let sessions_to_end: Vec<Uuid> = dc
+                .list_sessions()
+                .into_iter()
+                .filter(|(_, t, _)| t == &target)
+                .map(|(session_id, _, _)| session_id)
+                .collect();
+
+            for session_id in sessions_to_end {
+                dc.end_session(session_id);
+                tracing::debug!(
+                    playtest_id = %playtest_id,
+                    session_id = %session_id,
+                    "Ended debug session for destroyed playtest"
+                );
+            }
+        }
+
         // Remove all participants from the index
         for participant in instance.participants.iter() {
             self.player_playtest.remove(&participant.player_id);
@@ -236,12 +267,25 @@ impl PlaytestBuilder {
     ///
     /// This creates an empty instance that must be populated by the caller
     /// with forked state from GameState.
+    ///
+    /// # Arguments
+    /// * `factions` - Shared reference to faction data (read-only in playtest)
+    /// * `faction_tags` - Shared reference to faction tag index
+    /// * `scripts` - Script engine (shared with live server - scripts are immutable)
+    /// * `debug_controller` - Debug controller for script debugging support
     pub fn build(
         self,
         factions: Arc<DashMap<Uuid, bw_core::models::Faction>>,
         faction_tags: Arc<DashMap<String, Uuid>>,
+        scripts: Arc<ScriptEngine>,
+        debug_controller: Arc<DebugController>,
     ) -> PlaytestInstance {
         let (broadcaster, _) = broadcast::channel(1000);
+
+        // Create behavior manager for this playtest (separate from live server)
+        let mut behavior_manager = BehaviorManager::new(scripts);
+        behavior_manager.set_debug_controller(debug_controller);
+        behavior_manager.set_debug_target(DebugTarget::Playtest(self.id));
 
         PlaytestInstance {
             id: self.id,
@@ -260,6 +304,7 @@ impl PlaytestBuilder {
             time_scale: AtomicU32::new(1000), // 1.0x
             broadcaster,
             state_accessor: RwLock::new(None),
+            behavior_manager: RwLock::new(behavior_manager),
             created_ship_ids: DashMap::new(),
             deleted_ship_ids: DashMap::new(),
         }

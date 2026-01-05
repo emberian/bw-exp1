@@ -440,6 +440,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5dd9dc738b7a8311c7ade152424974d8115f2cdad61e8dab8dac9f2362298510"
 
 [[package]]
+name = "bw-ai"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "rhai",
+ "serde",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "bw-core"
 version = "0.1.0"
 dependencies = [
@@ -479,6 +490,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-game"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bw-core",
+ "bw-scripting-macros",
+ "chrono",
+ "dashmap",
+ "parking_lot",
+ "rand 0.8.5",
+ "rhai",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "bw-gm-editor"
 version = "0.1.0"
 dependencies = [
@@ -507,7 +537,9 @@ name = "bw-scripting"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bw-ai",
  "bw-core",
+ "bw-game",
  "bw-scripting-macros",
  "chrono",
  "dashmap",
@@ -544,6 +576,7 @@ dependencies = [
  "axum-extra",
  "base64",
  "bw-core",
+ "bw-game",
  "bw-scripting",
  "bw-shared",
  "chrono",

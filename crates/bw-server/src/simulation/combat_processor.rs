@@ -10,7 +10,7 @@ use rhai::Dynamic;
 use uuid::Uuid;
 
 use bw_core::models::ShipStatus;
-use bw_core::systems::{CombatEngagement, CombatLogEntry, AttackResult};
+use bw_game::systems::{CombatEngagement, CombatLogEntry, AttackResult};
 use bw_scripting::ScriptEngine;
 use bw_shared::dto::CombatEventDto;
 use bw_shared::ServerMessage;

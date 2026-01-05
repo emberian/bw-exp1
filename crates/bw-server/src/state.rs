@@ -140,7 +140,7 @@ pub struct GameState {
     pub playtest_manager: PlaytestManager,
 
     /// Debug controller for script debugging sessions
-    pub debug_controller: DebugController,
+    pub debug_controller: Arc<DebugController>,
 }
 
 impl GameState {
@@ -158,10 +158,16 @@ impl GameState {
         // Create scripting systems
         let event_registry = Arc::new(EventRegistry::new());
         let action_registry = Arc::new(ActionRegistry::new());
-        let behavior_manager = BehaviorManager::new(scripts.clone());
+        let debug_controller = Arc::new(DebugController::new());
+        let mut behavior_manager = BehaviorManager::new(scripts.clone());
+        behavior_manager.set_debug_controller(debug_controller.clone());
         let coroutine_scheduler = CoroutineScheduler::new(scripts.clone());
         let event_dispatcher = EventDispatcher::new(event_registry.clone(), scripts.clone());
         let action_dispatcher = ActionDispatcher::new(action_registry.clone(), scripts.clone());
+
+        // Create playtest manager and wire debug controller for cleanup on destruction
+        let mut playtest_manager = PlaytestManager::new(10); // Max 10 concurrent playtests
+        playtest_manager.set_debug_controller(debug_controller.clone());
 
         let state = Self {
             db,
@@ -189,8 +195,8 @@ impl GameState {
             state_accessor: RwLock::new(None),
             script_logs: RwLock::new(ScriptLogBuffer::new(1000)),
             metrics: MetricsStore::new(),
-            playtest_manager: PlaytestManager::new(10), // Max 10 concurrent playtests
-            debug_controller: DebugController::new(),
+            playtest_manager,
+            debug_controller,
         };
 
         // Load factions from database
@@ -823,7 +829,7 @@ pub struct SectorInstance {
     pub missions: DashMap<Uuid, Mission>,
 
     /// Active combat engagements
-    pub combats: DashMap<Uuid, bw_core::systems::CombatEngagement>,
+    pub combats: DashMap<Uuid, bw_game::systems::CombatEngagement>,
 
     /// Connected player sessions
     pub connections: DashMap<Uuid, tokio::sync::mpsc::Sender<ServerMessage>>,
@@ -865,6 +871,8 @@ pub struct PlayerSession {
     pub ship_id: Uuid,
     pub sector_id: Uuid,
     pub connection: Option<tokio::sync::mpsc::Sender<ServerMessage>>,
+    /// Unique identifier for the current connection (used to prevent race conditions on reconnect)
+    pub connection_id: Option<Uuid>,
     /// If Some, player is currently in a playtest instance
     pub playtest_id: Option<Uuid>,
 }

@@ -397,8 +397,8 @@ mod tests {
         faction.combat_bonuses.speed_bonus = -0.1;  // -10%
 
         let (attack, defense, speed) = faction.apply_combat_bonuses(100.0, 50.0, 80.0);
-        assert_eq!(attack, 110.0);
-        assert_eq!(defense, 60.0);
-        assert_eq!(speed, 72.0);
+        assert!((attack - 110.0).abs() < 0.001);
+        assert!((defense - 60.0).abs() < 0.001);
+        assert!((speed - 72.0).abs() < 0.001);
     }
 }

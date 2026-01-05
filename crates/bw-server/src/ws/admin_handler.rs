@@ -1199,10 +1199,15 @@ async fn handle_create_playtest(
     );
     let playtest_id = builder.id();
 
-    // Build the instance with shared faction data
+    // Build the instance with shared faction data and scripting components
     let factions = state.get_factions_arc();
     let faction_tags = state.get_faction_tags_arc();
-    let instance = builder.build(factions, faction_tags);
+    let instance = builder.build(
+        factions,
+        faction_tags,
+        state.scripts.clone(),
+        state.debug_controller.clone(),
+    );
 
     // Fork state into the instance
     state.fork_to_playtest(&instance, &fork_config);
@@ -1219,6 +1224,13 @@ async fn handle_create_playtest(
     // Register with manager
     match state.playtest_manager.register(instance) {
         Ok(instance) => {
+            // Initialize scripting systems now that the instance is Arc-wrapped
+            instance.initialize_scripting();
+
+            // Attach behaviors from live server to forked NPC ships
+            let live_behaviors = state.behavior_manager.read().list_all();
+            instance.attach_forked_behaviors(&live_behaviors);
+
             // Spawn the simulation loop for this playtest
             let handle = crate::playtest::spawn_playtest_loop(instance);
             state.playtest_manager.register_simulation_task(playtest_id, handle);
@@ -1834,9 +1846,28 @@ async fn handle_start_debug_session(
         return;
     }
 
-    // Convert DTO to internal type
+    // Convert DTO to internal type and validate
     let target = match target_dto {
-        DebugTargetDto::Playtest(id) => DebugTarget::Playtest(id),
+        DebugTargetDto::Playtest(playtest_id) => {
+            // Validate playtest exists and player has access
+            match state.playtest_manager.get(playtest_id) {
+                Some(pt) if pt.is_owner(player_id) || pt.is_participant(player_id) => {
+                    DebugTarget::Playtest(playtest_id)
+                }
+                Some(_) => {
+                    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+                        message: "You don't have access to debug this playtest".to_string(),
+                    })).await;
+                    return;
+                }
+                None => {
+                    let _ = tx.send(ServerMessage::Admin(AdminServerMessage::DebugError {
+                        message: format!("Playtest {} not found", playtest_id),
+                    })).await;
+                    return;
+                }
+            }
+        }
         DebugTargetDto::Live => DebugTarget::Live,
     };
 

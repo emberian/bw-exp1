@@ -38,6 +38,22 @@ pub async fn run_playtest_loop(playtest: Arc<PlaytestInstance>) {
         let time_scale = playtest.get_time_scale();
         let delta_time = (TICK_DURATION_MS as f64 / 1000.0) * time_scale as f64;
 
+        // Update all entity behaviors (NPC AI scripts)
+        {
+            let results = playtest.behavior_manager.write().update_all(tick, delta_time);
+            // Log any behavior errors
+            for result in results.iter().filter(|r| !r.success) {
+                if let Some(ref error) = result.error {
+                    tracing::warn!(
+                        playtest_id = %playtest.id,
+                        behavior_id = %result.behavior_id,
+                        error = %error,
+                        "Playtest behavior update failed"
+                    );
+                }
+            }
+        }
+
         // Process each sector
         for sector_ref in playtest.sectors.iter() {
             let sector_id = *sector_ref.key();
@@ -91,7 +107,7 @@ async fn process_playtest_sector_tick(
                 let speed = ship.ship_class.base_stats().speed * ship.resources.fuel_movement_modifier();
                 let distance_per_tick = speed as f64 * delta_time;
 
-                let arrived = bw_core::systems::move_ship_towards(
+                let arrived = bw_game::systems::move_ship_towards(
                     &mut ship,
                     dest,
                     distance_per_tick,

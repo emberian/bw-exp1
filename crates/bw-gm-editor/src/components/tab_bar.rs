@@ -8,6 +8,7 @@ pub enum Tab {
     Scripts,
     Config,
     Entities,
+    Debug,
     Staged,
 }
 
@@ -17,12 +18,13 @@ impl Tab {
             Tab::Scripts => "Scripts",
             Tab::Config => "Config",
             Tab::Entities => "Entities",
+            Tab::Debug => "Debug",
             Tab::Staged => "Staged",
         }
     }
 
     pub fn all() -> &'static [Tab] {
-        &[Tab::Scripts, Tab::Config, Tab::Entities, Tab::Staged]
+        &[Tab::Scripts, Tab::Config, Tab::Entities, Tab::Debug, Tab::Staged]
     }
 }
 

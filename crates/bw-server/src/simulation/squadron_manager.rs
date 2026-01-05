@@ -5,7 +5,7 @@
 use uuid::Uuid;
 
 use bw_core::models::{Squadron, SquadronBuildingType, SquadronRank, Location, LocationType, StationService, Ship, ShipClass};
-use bw_core::systems::spend_reputation;
+use bw_game::systems::spend_reputation;
 use bw_shared::dto::SquadronDto;
 
 use crate::{GameState, SquadronInvite, AllianceProposal, ContestedSector};

@@ -220,6 +220,26 @@ impl DebugController {
             .collect()
     }
 
+    /// Find sessions debugging a specific script with a specific target.
+    ///
+    /// This is used by BehaviorManagers to find only debug sessions that apply
+    /// to their context (Live server or a specific Playtest).
+    pub fn sessions_for_script_with_target(&self, script_path: &str, target: &DebugTarget) -> Vec<Uuid> {
+        self.sessions
+            .iter()
+            .filter(|r| {
+                // Match target
+                &r.target == target &&
+                // Has enabled breakpoints for this script
+                r.breakpoints
+                    .read()
+                    .iter()
+                    .any(|bp| bp.source == script_path && bp.enabled)
+            })
+            .map(|r| r.id)
+            .collect()
+    }
+
     /// Create a debug-enabled Rhai engine for a specific session.
     ///
     /// The returned engine will:

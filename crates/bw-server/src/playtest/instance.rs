@@ -11,8 +11,8 @@ use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use bw_core::models::{Faction, Mission, Player, Sector, Ship, Squadron};
-use bw_core::systems::CombatEngagement;
-use bw_scripting::StateAccessor;
+use bw_game::systems::CombatEngagement;
+use bw_scripting::{BehaviorManager, EntityBehavior, StateAccessor};
 use bw_shared::ServerMessage;
 
 use super::config::PlaytestError;
@@ -74,6 +74,9 @@ pub struct PlaytestInstance {
     /// State accessor configured for this playtest
     pub state_accessor: RwLock<Option<Arc<StateAccessor>>>,
 
+    /// Behavior manager for script execution (separate from live server)
+    pub behavior_manager: RwLock<BehaviorManager>,
+
     /// IDs of entities created in playtest (for promote tracking)
     pub created_ship_ids: DashMap<Uuid, ()>,
 
@@ -82,6 +85,78 @@ pub struct PlaytestInstance {
 }
 
 impl PlaytestInstance {
+    /// Initialize scripting systems after the instance is wrapped in Arc.
+    ///
+    /// This must be called after the instance is registered with the PlaytestManager
+    /// because the StateAccessor needs a reference to the instance as a StateProvider.
+    pub fn initialize_scripting(self: &Arc<Self>) {
+        use bw_scripting::StateAccessor;
+
+        // Create state accessor with self as provider
+        let accessor = Arc::new(StateAccessor::new(self.clone()));
+
+        // Wire up behavior manager
+        {
+            let mut bm = self.behavior_manager.write();
+            bm.set_state_accessor(accessor.clone());
+        }
+
+        // Store accessor for direct access
+        *self.state_accessor.write() = Some(accessor);
+
+        tracing::debug!(
+            playtest_id = %self.id,
+            "Playtest scripting systems initialized"
+        );
+    }
+
+    /// Attach behaviors for NPC ships that had behaviors in the live server.
+    ///
+    /// This should be called after `initialize_scripting()` to copy over
+    /// behaviors from the live server's behavior manager.
+    ///
+    /// # Arguments
+    /// * `live_behaviors` - List of behaviors from the live server's BehaviorManager
+    pub fn attach_forked_behaviors(&self, live_behaviors: &[EntityBehavior]) {
+        let bm = self.behavior_manager.write();
+        let mut attached = 0;
+
+        for behavior in live_behaviors {
+            // Only attach if this entity was forked into the playtest
+            if !self.ships.contains_key(&behavior.entity_id) {
+                continue;
+            }
+
+            // Attach the same behavior script to this entity
+            let sector_id = behavior.sector_id;
+            match bm.attach(
+                behavior.entity_id,
+                behavior.entity_type,
+                &behavior.script_path,
+                sector_id,
+            ) {
+                Ok(_behavior_id) => {
+                    attached += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        playtest_id = %self.id,
+                        entity_id = %behavior.entity_id,
+                        script = %behavior.script_path,
+                        error = %e,
+                        "Failed to attach forked behavior"
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            playtest_id = %self.id,
+            attached = attached,
+            "Attached forked behaviors"
+        );
+    }
+
     /// Get the current tick.
     pub fn get_tick(&self) -> u64 {
         self.tick.load(Ordering::Relaxed)

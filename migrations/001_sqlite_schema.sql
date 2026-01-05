@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS players (
     missions_completed INTEGER NOT NULL DEFAULT 0,
     missions_failed INTEGER NOT NULL DEFAULT 0,
 
+    -- Economy
+    credits INTEGER DEFAULT 0,
+
+    -- Game settings
+    game_mode TEXT,
+    owned_ships TEXT, -- JSON array of ship UUIDs
+
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -73,6 +80,14 @@ CREATE TABLE IF NOT EXISTS ships (
     is_player_ship INTEGER NOT NULL DEFAULT 0,
     faction_id TEXT,
     squadron_id TEXT,
+
+    -- Combat state
+    combat_stance TEXT,
+    locked_target TEXT,
+
+    -- Cargo and upgrades (JSON)
+    cargo TEXT NOT NULL DEFAULT '[]',
+    upgrades TEXT NOT NULL DEFAULT '[]',
 
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))

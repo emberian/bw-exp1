@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::{CombatStats, WeaponType};
+use bw_core::models::{CombatStats, WeaponType};
 
 /// A combat engagement between ships.
 #[derive(Debug, Clone, Serialize, Deserialize)]

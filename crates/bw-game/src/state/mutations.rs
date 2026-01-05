@@ -75,8 +75,8 @@ pub struct ChoiceOption {
     pub requirement_text: Option<String>,
 }
 
-// EntityType is defined in behaviors module
-pub use crate::behaviors::EntityType;
+// EntityType is defined in lib.rs
+pub use crate::EntityType;
 
 // =============================================================================
 // Helper functions for complex field parsing (used by RhaiDeserialize)

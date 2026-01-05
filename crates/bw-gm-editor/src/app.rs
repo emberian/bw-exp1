@@ -4,9 +4,9 @@ use leptos::prelude::*;
 
 use crate::api::{init_admin_ws, shutdown_admin_ws};
 use crate::components::{
-    ConfigEditor, EntityBrowser, ScriptEditor, StagedPreview, TabBar, Tab,
+    ConfigEditor, DebugPanel, EntityBrowser, ScriptEditor, StagedPreview, TabBar, Tab,
 };
-use crate::state::{GMEditorState, StagedChangesState};
+use crate::state::{DebugPanelState, GMEditorState, StagedChangesState};
 
 /// Root component for the GM Editor
 #[component]
@@ -17,6 +17,7 @@ pub fn GMEditorApp(
     // Create state
     let gm_state = GMEditorState::new();
     let staged = StagedChangesState::new();
+    let debug_state = DebugPanelState::new();
 
     // Initialize WebSocket client (thread_local storage)
     init_admin_ws(&ws_url, &auth_token);
@@ -29,6 +30,7 @@ pub fn GMEditorApp(
     // Provide contexts (state only, not WS client)
     provide_context(gm_state);
     provide_context(staged);
+    provide_context(debug_state);
 
     // Active tab
     let active_tab = RwSignal::new(Tab::Scripts);
@@ -79,6 +81,7 @@ pub fn GMEditorApp(
                         Tab::Scripts => view! { <ScriptEditor /> }.into_any(),
                         Tab::Config => view! { <ConfigEditor /> }.into_any(),
                         Tab::Entities => view! { <EntityBrowser /> }.into_any(),
+                        Tab::Debug => view! { <DebugPanel /> }.into_any(),
                         Tab::Staged => view! { <StagedPreview /> }.into_any(),
                     }}
                 </div>

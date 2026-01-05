@@ -28,6 +28,7 @@ use rhai::{Dynamic, Map};
 use uuid::Uuid;
 
 use crate::ai::BtNode;
+pub use bw_game::EntityType;
 
 /// A behavior script attached to an entity.
 #[derive(Debug, Clone)]
@@ -89,26 +90,6 @@ impl EntityBehavior {
     /// Check if behavior has a behavior tree.
     pub fn has_behavior_tree(&self) -> bool {
         self.behavior_tree.is_some()
-    }
-}
-
-/// Entity types that can have behaviors attached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EntityType {
-    Ship,
-    Station,
-    Sector,
-    Mission,
-}
-
-impl EntityType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Ship => "ship",
-            Self::Station => "station",
-            Self::Sector => "sector",
-            Self::Mission => "mission",
-        }
     }
 }
 

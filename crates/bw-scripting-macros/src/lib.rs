@@ -4,6 +4,7 @@
 //!
 //! - `#[derive(RhaiSerialize)]` - Generates `to_dynamic()` method
 //! - `#[derive(RhaiDeserialize)]` - Generates `from_dynamic()` method
+//! - `#[derive(RhaiSchema)]` - Generates `schema()` method for validation
 //!
 //! # Field Attributes
 //!
@@ -490,3 +491,121 @@ fn deserialize_field_expr(key: &str, field_type: &Type, attrs: &FieldAttrs) -> s
 
     Ok(parser)
 }
+
+// =============================================================================
+// RhaiSchema Implementation
+// =============================================================================
+
+/// Derive macro for generating schema information for validation.
+///
+/// Generates an implementation of the `RhaiSchema` trait which provides
+/// static schema information about the struct's fields for script validation.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(RhaiSchema)]
+/// struct ShipArchetype {
+///     pub id: String,           // required
+///     pub name: String,         // required
+///     #[rhai(default)]
+///     pub tier: u32,            // optional (has default)
+///     #[rhai(rename = "hp")]
+///     pub health: f32,          // renamed in Rhai
+/// }
+/// ```
+#[proc_macro_derive(RhaiSchema, attributes(rhai))]
+pub fn derive_rhai_schema(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    match impl_rhai_schema(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn impl_rhai_schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let name = &input.ident;
+    let name_str = name.to_string();
+    let generics = &input.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    let fields = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => &fields.named,
+            _ => return Err(syn::Error::new_spanned(input, "Only named fields are supported")),
+        },
+        _ => return Err(syn::Error::new_spanned(input, "Only structs are supported")),
+    };
+
+    let mut field_schemas = Vec::new();
+
+    for field in fields {
+        let field_name = field.ident.as_ref().unwrap();
+        let field_type = &field.ty;
+        let attrs = parse_field_attrs(&field.attrs)?;
+
+        if attrs.skip {
+            continue;
+        }
+
+        // Get the Rhai key name (respecting rename)
+        let key_name = attrs.rename.as_ref()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| field_name.to_string());
+
+        // Get the Rust type as a string for schema
+        let type_str = simplify_type_name(&quote!(#field_type).to_string());
+
+        // Field is required if it has no default attribute
+        let required = attrs.default.is_none();
+
+        field_schemas.push(quote! {
+            crate::schema::FieldSchema {
+                name: #key_name,
+                rust_type: #type_str,
+                required: #required,
+            }
+        });
+    }
+
+    let field_count = field_schemas.len();
+
+    Ok(quote! {
+        impl #impl_generics crate::schema::RhaiSchema for #name #ty_generics #where_clause {
+            fn schema() -> crate::schema::ArchetypeSchema {
+                static FIELDS: [crate::schema::FieldSchema; #field_count] = [
+                    #(#field_schemas),*
+                ];
+                crate::schema::ArchetypeSchema {
+                    name: #name_str,
+                    fields: &FIELDS,
+                }
+            }
+        }
+    })
+}
+
+/// Simplify type name for schema display.
+fn simplify_type_name(type_str: &str) -> String {
+    let s = type_str.replace(" ", "");
+    // Simplify common patterns
+    if s.starts_with("Vec<") {
+        format!("Vec<{}>", simplify_inner_type(&s[4..s.len()-1]))
+    } else if s.starts_with("Option<") {
+        format!("Option<{}>", simplify_inner_type(&s[7..s.len()-1]))
+    } else if s.starts_with("HashMap<") {
+        s.to_string()
+    } else {
+        simplify_inner_type(&s)
+    }
+}
+
+fn simplify_inner_type(s: &str) -> String {
+    // Remove path prefixes like std::string::String -> String
+    s.rsplit("::").next().unwrap_or(s).to_string()
+}
+
+// Note: Schema types (ArchetypeSchema, FieldSchema, RhaiSchema trait)
+// are defined in bw-scripting::schema module since proc-macro crates
+// cannot export regular items.
