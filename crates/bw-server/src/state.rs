@@ -292,6 +292,28 @@ impl GameState {
                     if let Some(ref status_change) = changes.status {
                         ship.status = status_change.to_ship_status();
                     }
+                    if let Some(ref stance_str) = changes.combat_stance {
+                        use bw_core::models::CombatStance;
+                        ship.combat_stance = match stance_str.to_lowercase().as_str() {
+                            "aggressive" => CombatStance::Aggressive,
+                            "defensive" => CombatStance::Defensive,
+                            "evasive" => CombatStance::Evasive,
+                            _ => CombatStance::Balanced,
+                        };
+                    }
+                    if let Some(ref locked) = changes.locked_target {
+                        ship.locked_target = *locked;
+                    }
+                    if let Some(ref cargo_add) = changes.add_cargo {
+                        ship.add_cargo(
+                            cargo_add.cargo_type.clone(),
+                            cargo_add.quantity,
+                            cargo_add.purchase_price,
+                        );
+                    }
+                    if let Some(ref cargo_remove) = changes.remove_cargo {
+                        ship.remove_cargo(&cargo_remove.cargo_type, cargo_remove.quantity);
+                    }
                     // Persistence is automatic via TrackedDashMap dirty tracking
                     MutationResult::success(mutation)
                 } else {
@@ -312,6 +334,12 @@ impl GameState {
                     }
                     if let Some(fame_delta) = changes.fame_delta {
                         player.resources.fame = (player.resources.fame + fame_delta).max(0);
+                    }
+                    if let Some(credits) = changes.credits {
+                        player.credits = credits.max(0);
+                    }
+                    if let Some(credits_delta) = changes.credits_delta {
+                        player.credits = (player.credits + credits_delta).max(0);
                     }
                     // Persistence is automatic via TrackedDashMap dirty tracking
                     MutationResult::success(mutation)
@@ -404,6 +432,74 @@ impl GameState {
                     target = ?target_id,
                     "Script emitted event"
                 );
+                MutationResult::success(mutation)
+            }
+
+            StateMutation::SendNotification { player_id, message, notification_type } => {
+                // Queue notification for delivery via WebSocket
+                // The actual sending happens in the game loop when processing mutations
+                tracing::debug!(
+                    player_id = %player_id,
+                    notification_type = %notification_type,
+                    message = %message,
+                    "Script queued notification"
+                );
+                // For now, try to send immediately if player is connected
+                if let Some(session) = self.players.get(&player_id) {
+                    if let Some(ref conn) = session.connection {
+                        let msg = ServerMessage::Notification {
+                            message: message.clone(),
+                            notification_type: notification_type.clone(),
+                        };
+                        let _ = conn.try_send(msg);
+                    }
+                }
+                MutationResult::success(mutation)
+            }
+
+            StateMutation::SendChoice { player_id, choice_id, description, choices } => {
+                tracing::debug!(
+                    player_id = %player_id,
+                    choice_id = %choice_id,
+                    num_choices = choices.len(),
+                    "Script queued choice dialog"
+                );
+                // For now, try to send immediately if player is connected
+                if let Some(session) = self.players.get(&player_id) {
+                    if let Some(ref conn) = session.connection {
+                        let msg = ServerMessage::ChoiceRequired {
+                            choice_id: choice_id.clone(),
+                            description: description.clone(),
+                            choices: choices.iter().map(|c| bw_shared::dto::ChoiceDto {
+                                id: c.id.clone(),
+                                text: c.text.clone(),
+                                is_available: c.is_available,
+                                requirement_text: c.requirement_text.clone(),
+                            }).collect(),
+                        };
+                        let _ = conn.try_send(msg);
+                    }
+                }
+                MutationResult::success(mutation)
+            }
+
+            StateMutation::BroadcastToSector { sector_id, message, notification_type } => {
+                tracing::debug!(
+                    sector_id = %sector_id,
+                    notification_type = %notification_type,
+                    message = %message,
+                    "Script queued sector broadcast"
+                );
+                // Broadcast to all players in the sector
+                if let Some(sector) = self.sectors.get(&sector_id) {
+                    let msg = ServerMessage::Notification {
+                        message: message.clone(),
+                        notification_type: notification_type.clone(),
+                    };
+                    for conn in sector.connections.iter() {
+                        let _ = conn.value().try_send(msg.clone());
+                    }
+                }
                 MutationResult::success(mutation)
             }
         }

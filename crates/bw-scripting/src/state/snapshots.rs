@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use bw_core::models::{
     DangerLevel, Position, Ship, ShipStatus, Player, Sector, Location,
-    LocationType, TrafficDensity,
+    LocationType, TrafficDensity, CombatStance, CargoItem, GameMode,
 };
 
 /// Read-only snapshot of a ship's state.
@@ -36,6 +36,39 @@ pub struct ShipSnapshot {
     pub defense: f32,
     pub speed: f32,
     pub sensor_range: f32,
+    // Combat control
+    pub combat_stance: String,
+    pub locked_target: Option<Uuid>,
+    // Cargo
+    pub cargo: Vec<CargoSnapshot>,
+    pub cargo_capacity: u32,
+    pub cargo_used: u32,
+}
+
+/// Read-only snapshot of a cargo item.
+#[derive(Debug, Clone)]
+pub struct CargoSnapshot {
+    pub cargo_type: String,
+    pub quantity: u32,
+    pub purchase_price: i64,
+}
+
+impl CargoSnapshot {
+    pub fn from_cargo(item: &CargoItem) -> Self {
+        Self {
+            cargo_type: item.cargo_type.clone(),
+            quantity: item.quantity,
+            purchase_price: item.purchase_price,
+        }
+    }
+
+    pub fn to_dynamic(&self) -> Dynamic {
+        let mut map = Map::new();
+        map.insert("type".into(), self.cargo_type.clone().into());
+        map.insert("quantity".into(), (self.quantity as i64).into());
+        map.insert("price".into(), self.purchase_price.into());
+        Dynamic::from(map)
+    }
 }
 
 impl ShipSnapshot {
@@ -65,6 +98,11 @@ impl ShipSnapshot {
             defense: combat_stats.defense,
             speed: combat_stats.speed,
             sensor_range: combat_stats.sensor_range,
+            combat_stance: combat_stance_to_string(&ship.combat_stance),
+            locked_target: ship.locked_target,
+            cargo: ship.cargo.iter().map(CargoSnapshot::from_cargo).collect(),
+            cargo_capacity: ship.cargo_capacity(),
+            cargo_used: ship.cargo_used(),
         }
     }
 
@@ -92,6 +130,12 @@ impl ShipSnapshot {
         map.insert("defense".into(), (self.defense as f64).into());
         map.insert("speed".into(), (self.speed as f64).into());
         map.insert("sensor_range".into(), (self.sensor_range as f64).into());
+        map.insert("combat_stance".into(), self.combat_stance.clone().into());
+        map.insert("locked_target".into(), self.locked_target.map(|id| id.to_string()).unwrap_or_default().into());
+        let cargo_arr: Vec<Dynamic> = self.cargo.iter().map(|c| c.to_dynamic()).collect();
+        map.insert("cargo".into(), Dynamic::from(cargo_arr));
+        map.insert("cargo_capacity".into(), (self.cargo_capacity as i64).into());
+        map.insert("cargo_used".into(), (self.cargo_used as i64).into());
         Dynamic::from(map)
     }
 }
@@ -136,6 +180,9 @@ pub struct PlayerSnapshot {
     pub username: String,
     pub reputation: i32,
     pub fame: i32,
+    pub credits: i64,
+    pub game_mode: String,
+    pub owned_ships: Vec<Uuid>,
     pub active_ship_id: Uuid,
     pub sector_id: Uuid,
     pub faction_id: Uuid,
@@ -154,6 +201,9 @@ impl PlayerSnapshot {
             username: player.username.clone(),
             reputation: player.resources.reputation,
             fame: player.resources.fame,
+            credits: player.credits,
+            game_mode: game_mode_to_string(&player.game_mode),
+            owned_ships: player.owned_ships.clone(),
             active_ship_id: player.active_ship_id,
             sector_id: player.patrol_sector_id,
             faction_id: player.faction_id,
@@ -172,6 +222,12 @@ impl PlayerSnapshot {
         map.insert("username".into(), self.username.clone().into());
         map.insert("reputation".into(), (self.reputation as i64).into());
         map.insert("fame".into(), (self.fame as i64).into());
+        map.insert("credits".into(), self.credits.into());
+        map.insert("game_mode".into(), self.game_mode.clone().into());
+        let owned_ships_arr: Vec<Dynamic> = self.owned_ships.iter()
+            .map(|id| Dynamic::from(id.to_string()))
+            .collect();
+        map.insert("owned_ships".into(), Dynamic::from(owned_ships_arr));
         map.insert("active_ship_id".into(), self.active_ship_id.to_string().into());
         map.insert("sector_id".into(), self.sector_id.to_string().into());
         map.insert("faction_id".into(), self.faction_id.to_string().into());
@@ -320,5 +376,21 @@ fn location_type_to_string(loc_type: &LocationType) -> String {
         LocationType::FreePort => "free_port".to_string(),
         LocationType::Archive => "archive".to_string(),
         LocationType::Shipyard => "shipyard".to_string(),
+    }
+}
+
+fn combat_stance_to_string(stance: &CombatStance) -> String {
+    match stance {
+        CombatStance::Aggressive => "aggressive".to_string(),
+        CombatStance::Balanced => "balanced".to_string(),
+        CombatStance::Defensive => "defensive".to_string(),
+        CombatStance::Evasive => "evasive".to_string(),
+    }
+}
+
+fn game_mode_to_string(mode: &GameMode) -> String {
+    match mode {
+        GameMode::Standard => "standard".to_string(),
+        GameMode::Hardcore => "hardcore".to_string(),
     }
 }

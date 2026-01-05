@@ -189,6 +189,8 @@ fn resolve_attack(
     // Get combat stats
     let attacker_stats = attacker.combat_effectiveness();
     let defender_stats = target.combat_effectiveness();
+    let attacker_stance = format!("{:?}", attacker.combat_stance).to_lowercase();
+    let defender_stance = format!("{:?}", target.combat_stance).to_lowercase();
 
     // Use first weapon
     let weapon = attacker.weapons.first()?;
@@ -204,6 +206,8 @@ fn resolve_attack(
         &defender_stats,
         weapon_damage,
         weapon_accuracy,
+        &attacker_stance,
+        &defender_stance,
     )?;
 
     // Consume ammo
@@ -442,6 +446,11 @@ fn script_select_target(
     attacker_map.insert("hull".into(), Dynamic::from(attacker.hull_integrity as f64));
     attacker_map.insert("shields".into(), Dynamic::from(attacker.shield_strength as f64));
     attacker_map.insert("speed".into(), Dynamic::from(attacker_stats.speed as f64));
+    attacker_map.insert("is_player_ship".into(), Dynamic::from(attacker.is_player_ship));
+    attacker_map.insert("locked_target".into(), Dynamic::from(
+        attacker.locked_target.map(|id| id.to_string()).unwrap_or_default()
+    ));
+    attacker_map.insert("combat_stance".into(), Dynamic::from(format!("{:?}", attacker.combat_stance).to_lowercase()));
     drop(attacker);
 
     // Build targets array
@@ -484,6 +493,8 @@ fn script_calculate_attack(
     defender_stats: &CombatStats,
     weapon_damage: f32,
     weapon_accuracy: f32,
+    attacker_stance: &str,
+    defender_stance: &str,
 ) -> Option<AttackResult> {
     // Build context
     let mut ctx = rhai::Map::new();
@@ -492,11 +503,13 @@ fn script_calculate_attack(
     attacker_map.insert("attack".into(), Dynamic::from(attacker_stats.attack as f64));
     attacker_map.insert("defense".into(), Dynamic::from(attacker_stats.defense as f64));
     attacker_map.insert("speed".into(), Dynamic::from(attacker_stats.speed as f64));
+    attacker_map.insert("combat_stance".into(), Dynamic::from(attacker_stance.to_string()));
 
     let mut defender_map = rhai::Map::new();
     defender_map.insert("attack".into(), Dynamic::from(defender_stats.attack as f64));
     defender_map.insert("defense".into(), Dynamic::from(defender_stats.defense as f64));
     defender_map.insert("speed".into(), Dynamic::from(defender_stats.speed as f64));
+    defender_map.insert("combat_stance".into(), Dynamic::from(defender_stance.to_string()));
 
     ctx.insert("attacker".into(), Dynamic::from(attacker_map));
     ctx.insert("defender".into(), Dynamic::from(defender_map));

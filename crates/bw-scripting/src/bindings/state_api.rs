@@ -60,7 +60,7 @@ pub fn clear_current_accessor() {
 }
 
 /// Get the current accessor (panics if not set).
-fn with_accessor<T, F: FnOnce(&StateAccessor) -> T>(f: F) -> Option<T> {
+pub fn with_accessor<T, F: FnOnce(&StateAccessor) -> T>(f: F) -> Option<T> {
     CURRENT_ACCESSOR.with(|cell| {
         cell.borrow().as_ref().map(|accessor| f(accessor))
     })
@@ -411,5 +411,255 @@ pub fn register(engine: &mut Engine) {
             "droneharvester" | "drone_harvester" |
             "droneswarm" | "drone_swarm"
         )
+    });
+
+    // === Economy convenience functions ===
+
+    // add_credits(player_id: String, amount: i64) -> bool
+    engine.register_fn("add_credits", |player_id: String, amount: i64| -> bool {
+        let id = match Uuid::parse_str(&player_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = PlayerChanges {
+            credits_delta: Some(amount),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_player(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // spend_credits(player_id: String, amount: i64) -> bool
+    // Returns false if not enough credits
+    engine.register_fn("spend_credits", |player_id: String, amount: i64| -> bool {
+        let id = match Uuid::parse_str(&player_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        with_accessor(|accessor| {
+            // First check if player has enough credits
+            if let Ok(Some(player)) = accessor.get_player(id) {
+                if player.credits >= amount {
+                    let changes = PlayerChanges {
+                        credits_delta: Some(-amount),
+                        ..Default::default()
+                    };
+                    return accessor.modify_player(id, changes).is_ok();
+                }
+            }
+            false
+        }).unwrap_or(false)
+    });
+
+    // get_credits(player_id: String) -> i64
+    engine.register_fn("get_credits", |player_id: String| -> i64 {
+        let id = match Uuid::parse_str(&player_id) {
+            Ok(id) => id,
+            Err(_) => return 0,
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_player(id)
+                .ok()
+                .flatten()
+                .map(|p| p.credits)
+                .unwrap_or(0)
+        }).unwrap_or(0)
+    });
+
+    // === Cargo convenience functions ===
+
+    // add_cargo(ship_id: String, cargo_type: String, quantity: i64, price: i64) -> bool
+    engine.register_fn("add_cargo", |ship_id: String, cargo_type: String, quantity: i64, price: i64| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = ShipChanges {
+            add_cargo: Some(crate::state::CargoChange {
+                cargo_type,
+                quantity: quantity as u32,
+                purchase_price: price,
+            }),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_ship(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // remove_cargo(ship_id: String, cargo_type: String, quantity: i64) -> bool
+    engine.register_fn("remove_cargo", |ship_id: String, cargo_type: String, quantity: i64| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = ShipChanges {
+            remove_cargo: Some(crate::state::CargoChange {
+                cargo_type,
+                quantity: quantity as u32,
+                purchase_price: 0,
+            }),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_ship(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // get_cargo(ship_id: String) -> Array
+    engine.register_fn("get_cargo", |ship_id: String| -> Array {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return Array::new(),
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_ship(id)
+                .ok()
+                .flatten()
+                .map(|ship| {
+                    ship.cargo.iter().map(|c| {
+                        let mut map = Map::new();
+                        map.insert("type".into(), Dynamic::from(c.cargo_type.clone()));
+                        map.insert("quantity".into(), Dynamic::from(c.quantity as i64));
+                        map.insert("price".into(), Dynamic::from(c.purchase_price));
+                        Dynamic::from(map)
+                    }).collect()
+                })
+                .unwrap_or_default()
+        }).unwrap_or_default()
+    });
+
+    // get_cargo_capacity(ship_id: String) -> i64
+    engine.register_fn("get_cargo_capacity", |ship_id: String| -> i64 {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return 0,
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_ship(id)
+                .ok()
+                .flatten()
+                .map(|ship| ship.cargo_capacity as i64)
+                .unwrap_or(0)
+        }).unwrap_or(0)
+    });
+
+    // get_cargo_used(ship_id: String) -> i64
+    engine.register_fn("get_cargo_used", |ship_id: String| -> i64 {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return 0,
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_ship(id)
+                .ok()
+                .flatten()
+                .map(|ship| ship.cargo_used as i64)
+                .unwrap_or(0)
+        }).unwrap_or(0)
+    });
+
+    // === Combat stance convenience functions ===
+
+    // set_combat_stance(ship_id: String, stance: String) -> bool
+    engine.register_fn("set_combat_stance", |ship_id: String, stance: String| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = ShipChanges {
+            combat_stance: Some(stance),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_ship(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // get_combat_stance(ship_id: String) -> String
+    engine.register_fn("get_combat_stance", |ship_id: String| -> String {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return "balanced".to_string(),
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_ship(id)
+                .ok()
+                .flatten()
+                .map(|ship| format!("{:?}", ship.combat_stance).to_lowercase())
+                .unwrap_or_else(|| "balanced".to_string())
+        }).unwrap_or_else(|| "balanced".to_string())
+    });
+
+    // === Target lock convenience functions ===
+
+    // lock_target(ship_id: String, target_id: String) -> bool
+    engine.register_fn("lock_target", |ship_id: String, target_id: String| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+        let target = match Uuid::parse_str(&target_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = ShipChanges {
+            locked_target: Some(Some(target)),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_ship(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // clear_target(ship_id: String) -> bool
+    engine.register_fn("clear_target", |ship_id: String| -> bool {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let changes = ShipChanges {
+            locked_target: Some(None),
+            ..Default::default()
+        };
+
+        with_accessor(|accessor| {
+            accessor.modify_ship(id, changes).is_ok()
+        }).unwrap_or(false)
+    });
+
+    // get_locked_target(ship_id: String) -> String
+    engine.register_fn("get_locked_target", |ship_id: String| -> String {
+        let id = match Uuid::parse_str(&ship_id) {
+            Ok(id) => id,
+            Err(_) => return String::new(),
+        };
+
+        with_accessor(|accessor| {
+            accessor.get_ship(id)
+                .ok()
+                .flatten()
+                .and_then(|ship| ship.locked_target)
+                .map(|id| id.to_string())
+                .unwrap_or_default()
+        }).unwrap_or_default()
     });
 }

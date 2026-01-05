@@ -7,27 +7,78 @@
 // Select a target from available enemies.
 //
 // Context (ctx) contains:
-//   - attacker: Map with ship data (id, name, hull, shields, speed, etc.)
+//   - attacker: Map with ship data (id, name, hull, shields, speed, is_player_ship, locked_target, combat_stance)
 //   - targets: Array of enemy ship data maps
 //   - combat_round: i64
 //
 // Returns: String (target UUID) or () for no target
-//
-// Default behavior: random selection
-// Advanced options: prioritize low HP, highest threat, nearest, etc.
 fn select_target(ctx) {
+    let attacker = ctx["attacker"];
     let targets = ctx["targets"];
 
     if targets.is_empty() {
         return ();
     }
 
-    // Default: random target selection (matches current Rust behavior)
+    // If attacker has a locked target, prefer it (for player ships)
+    let locked = attacker["locked_target"];
+    if locked != "" && locked != () {
+        // Verify locked target is in available targets
+        for t in targets {
+            if t["id"] == locked {
+                return locked;
+            }
+        }
+        // Locked target not available, fall through to other selection
+    }
+
+    // Stance-based targeting for NPCs
+    let stance = attacker["combat_stance"];
+    if stance == "aggressive" {
+        // Aggressive: prioritize lowest HP (finish kills)
+        return select_target_lowest_hp(targets);
+    } else if stance == "defensive" {
+        // Defensive: prioritize highest threat
+        return select_target_highest_threat(targets);
+    }
+
+    // Default: random target selection
     let idx = floor(rand() * targets.len());
     if idx >= targets.len() {
         idx = targets.len() - 1;
     }
 
+    targets[idx]["id"]
+}
+
+// Helper: Select target with lowest HP
+fn select_target_lowest_hp(targets) {
+    let lowest_hp = 999999.0;
+    let best_target = ();
+
+    for t in targets {
+        let hp = t["hull"];
+        if hp < lowest_hp {
+            lowest_hp = hp;
+            best_target = t["id"];
+        }
+    }
+
+    if best_target != () {
+        return best_target;
+    }
+
+    // Fallback to first target
+    targets[0]["id"]
+}
+
+// Helper: Select target with highest threat (most attack)
+fn select_target_highest_threat(targets) {
+    // For now just pick randomly since we don't have attack stat in target data
+    let idx = floor(rand() * targets.len());
+    if idx >= targets.len() {
+        idx = targets.len() - 1;
+    }
     targets[idx]["id"]
 }
 
@@ -67,8 +118,8 @@ fn calculate_flee_chance(ctx) {
 // Calculate attack damage, hit chance, and critical hits.
 //
 // Context (ctx) contains:
-//   - attacker: Map with combat stats (attack, defense, speed)
-//   - defender: Map with combat stats (attack, defense, speed)
+//   - attacker: Map with combat stats (attack, defense, speed, combat_stance)
+//   - defender: Map with combat stats (attack, defense, speed, combat_stance)
 //   - weapon_damage: f64
 //   - weapon_accuracy: f64
 //
@@ -79,10 +130,23 @@ fn calculate_attack(ctx) {
     let weapon_damage = ctx["weapon_damage"];
     let weapon_accuracy = ctx["weapon_accuracy"];
 
+    // Get stance modifiers from data file
+    let attacker_stance = attacker["combat_stance"];
+    let defender_stance = defender["combat_stance"];
+
+    let attack_stance_mod = get_stance_modifier(attacker_stance, "attack");
+    let defense_stance_mod = get_stance_modifier(defender_stance, "defense");
+
+    // Apply stance modifiers to stats
+    let attacker_attack = attacker["attack"] * attack_stance_mod;
+    let defender_defense = defender["defense"] * defense_stance_mod;
+    let attacker_speed = attacker["speed"] * get_stance_modifier(attacker_stance, "speed");
+    let defender_speed = defender["speed"] * get_stance_modifier(defender_stance, "speed");
+
     // Calculate hit chance: base accuracy adjusted by attacker/defender stats
-    let attack_bonus = attacker["attack"] / 100.0;
-    let defense_penalty = defender["defense"] / 200.0;
-    let speed_factor = (attacker["speed"] - defender["speed"]) / 200.0;
+    let attack_bonus = attacker_attack / 100.0;
+    let defense_penalty = defender_defense / 200.0;
+    let speed_factor = (attacker_speed - defender_speed) / 200.0;
 
     let hit_chance = weapon_accuracy + attack_bonus - defense_penalty + speed_factor;
 
@@ -109,8 +173,8 @@ fn calculate_attack(ctx) {
 
     // Calculate damage
     let base_damage = weapon_damage;
-    let attack_mult = 1.0 + (attacker["attack"] / 100.0);
-    let defense_reduction = defender["defense"] / 200.0;
+    let attack_mult = 1.0 + (attacker_attack / 100.0);
+    let defense_reduction = defender_defense / 200.0;
 
     let damage = base_damage * attack_mult * (1.0 - defense_reduction);
 
@@ -120,8 +184,8 @@ fn calculate_attack(ctx) {
 
     // Critical hit check (10% base chance, +1% per 10 attack over 50)
     let crit_chance = 0.10;
-    if attacker["attack"] > 50.0 {
-        crit_chance = crit_chance + ((attacker["attack"] - 50.0) / 1000.0);
+    if attacker_attack > 50.0 {
+        crit_chance = crit_chance + ((attacker_attack - 50.0) / 1000.0);
     }
     if crit_chance > 0.30 {
         crit_chance = 0.30;  // Cap at 30%
@@ -143,6 +207,31 @@ fn calculate_attack(ctx) {
         critical_hit: critical_hit,
         ammo_consumed: 1.0
     }
+}
+
+// Helper: Get stance modifier for a specific stat
+fn get_stance_modifier(stance, stat_type) {
+    // Try to load from data file
+    let stance_data = get_stance_def(stance);
+
+    if stance_data != () {
+        if stat_type == "attack" {
+            let mod = stance_data["attack_modifier"];
+            if mod != () { return mod; }
+        } else if stat_type == "defense" {
+            let mod = stance_data["defense_modifier"];
+            if mod != () { return mod; }
+        } else if stat_type == "speed" {
+            let mod = stance_data["speed_modifier"];
+            if mod != () { return mod; }
+        } else if stat_type == "flee" {
+            let mod = stance_data["flee_modifier"];
+            if mod != () { return mod; }
+        }
+    }
+
+    // Default modifier if data not found
+    1.0
 }
 
 // Example: Advanced target selection (prioritize lowest HP)

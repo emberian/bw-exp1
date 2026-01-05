@@ -186,6 +186,19 @@ pub enum ServerMessage {
 
     /// Admin/GM response message
     Admin(AdminServerMessage),
+
+    /// Generic notification from scripts
+    Notification {
+        message: String,
+        notification_type: String,
+    },
+
+    /// Choice dialog from scripts (non-mission)
+    ChoiceRequired {
+        choice_id: String,
+        description: String,
+        choices: Vec<ChoiceDto>,
+    },
 }
 
 /// Chat channels.

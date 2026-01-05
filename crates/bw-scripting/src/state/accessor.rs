@@ -13,7 +13,7 @@ use bw_core::models::Position;
 use super::{
     ShipSnapshot, PlayerSnapshot, SectorSnapshot,
     StateMutation, ShipChanges, PlayerChanges, ShipSpawnConfig,
-    MutationResult, EntityType,
+    MutationResult, EntityType, ChoiceOption,
 };
 
 /// Error type for state access operations.
@@ -371,6 +371,64 @@ impl StateAccessor {
             data,
             actor_id,
             target_id,
+        });
+
+        Ok(())
+    }
+
+    /// Queue a notification to a player.
+    pub fn send_notification(
+        &self,
+        player_id: Uuid,
+        message: String,
+        notification_type: String,
+    ) -> Result<(), AccessError> {
+        // Notifications are always allowed (for now)
+        self.pending_mutations.write().push(StateMutation::SendNotification {
+            player_id,
+            message,
+            notification_type,
+        });
+
+        Ok(())
+    }
+
+    /// Queue a choice dialog to a player.
+    pub fn send_choice(
+        &self,
+        player_id: Uuid,
+        choice_id: String,
+        description: String,
+        choices: Vec<ChoiceOption>,
+    ) -> Result<(), AccessError> {
+        self.pending_mutations.write().push(StateMutation::SendChoice {
+            player_id,
+            choice_id,
+            description,
+            choices,
+        });
+
+        Ok(())
+    }
+
+    /// Queue a broadcast to a sector.
+    pub fn broadcast_to_sector(
+        &self,
+        sector_id: Uuid,
+        message: String,
+        notification_type: String,
+    ) -> Result<(), AccessError> {
+        let perms = self.permissions.read();
+        if !perms.can_access_sector(sector_id) {
+            return Err(AccessError::PermissionDenied(
+                "Cannot broadcast to this sector".into()
+            ));
+        }
+
+        self.pending_mutations.write().push(StateMutation::BroadcastToSector {
+            sector_id,
+            message,
+            notification_type,
         });
 
         Ok(())

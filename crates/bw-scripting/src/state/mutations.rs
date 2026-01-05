@@ -41,6 +41,37 @@ pub enum StateMutation {
         actor_id: Option<Uuid>,
         target_id: Option<Uuid>,
     },
+
+    /// Send a notification to a player
+    SendNotification {
+        player_id: Uuid,
+        message: String,
+        notification_type: String, // "info", "warning", "error", "success"
+    },
+
+    /// Send a choice dialog to a player
+    SendChoice {
+        player_id: Uuid,
+        choice_id: String,
+        description: String,
+        choices: Vec<ChoiceOption>,
+    },
+
+    /// Broadcast a message to all players in a sector
+    BroadcastToSector {
+        sector_id: Uuid,
+        message: String,
+        notification_type: String,
+    },
+}
+
+/// A choice option for player dialogs.
+#[derive(Debug, Clone)]
+pub struct ChoiceOption {
+    pub id: String,
+    pub text: String,
+    pub is_available: bool,
+    pub requirement_text: Option<String>,
 }
 
 // EntityType is defined in behaviors module
@@ -57,6 +88,27 @@ pub struct ShipChanges {
     pub experience: Option<i32>,
     pub position: Option<Position>,
     pub status: Option<ShipStatusChange>,
+    pub combat_stance: Option<String>,
+    pub locked_target: Option<Option<Uuid>>, // Some(None) to clear, Some(Some(id)) to set
+    pub add_cargo: Option<CargoChange>,
+    pub remove_cargo: Option<CargoChange>,
+    pub install_upgrade: Option<UpgradeInstall>,
+    pub remove_upgrade_slot: Option<String>,
+}
+
+/// Upgrade installation request.
+#[derive(Debug, Clone)]
+pub struct UpgradeInstall {
+    pub upgrade_id: String,
+    pub slot: String,
+}
+
+/// Cargo change for add/remove operations.
+#[derive(Debug, Clone)]
+pub struct CargoChange {
+    pub cargo_type: String,
+    pub quantity: u32,
+    pub purchase_price: i64,
 }
 
 impl ShipChanges {
@@ -96,6 +148,57 @@ impl ShipChanges {
                 changes.status = ShipStatusChange::from_string(&status_str);
             }
         }
+        if let Some(v) = map.get("combat_stance") {
+            changes.combat_stance = v.clone().into_string().ok();
+        }
+        if let Some(v) = map.get("locked_target") {
+            if v.is_unit() {
+                changes.locked_target = Some(None); // Clear target
+            } else if let Ok(target_str) = v.clone().into_string() {
+                if target_str.is_empty() {
+                    changes.locked_target = Some(None);
+                } else if let Ok(uuid) = Uuid::parse_str(&target_str) {
+                    changes.locked_target = Some(Some(uuid));
+                }
+            }
+        }
+        if let Some(v) = map.get("add_cargo") {
+            if let Some(cargo_map) = v.clone().try_cast::<Map>() {
+                let cargo_type = cargo_map.get("type")
+                    .and_then(|v| v.clone().into_string().ok())
+                    .unwrap_or_default();
+                let quantity = cargo_map.get("quantity")
+                    .and_then(|v| v.as_int().ok())
+                    .unwrap_or(0) as u32;
+                let purchase_price = cargo_map.get("price")
+                    .and_then(|v| v.as_int().ok())
+                    .unwrap_or(0);
+                if !cargo_type.is_empty() && quantity > 0 {
+                    changes.add_cargo = Some(CargoChange {
+                        cargo_type,
+                        quantity,
+                        purchase_price,
+                    });
+                }
+            }
+        }
+        if let Some(v) = map.get("remove_cargo") {
+            if let Some(cargo_map) = v.clone().try_cast::<Map>() {
+                let cargo_type = cargo_map.get("type")
+                    .and_then(|v| v.clone().into_string().ok())
+                    .unwrap_or_default();
+                let quantity = cargo_map.get("quantity")
+                    .and_then(|v| v.as_int().ok())
+                    .unwrap_or(0) as u32;
+                if !cargo_type.is_empty() && quantity > 0 {
+                    changes.remove_cargo = Some(CargoChange {
+                        cargo_type,
+                        quantity,
+                        purchase_price: 0,
+                    });
+                }
+            }
+        }
 
         Some(changes)
     }
@@ -110,6 +213,10 @@ impl ShipChanges {
             && self.experience.is_none()
             && self.position.is_none()
             && self.status.is_none()
+            && self.combat_stance.is_none()
+            && self.locked_target.is_none()
+            && self.add_cargo.is_none()
+            && self.remove_cargo.is_none()
     }
 }
 
@@ -149,6 +256,8 @@ pub struct PlayerChanges {
     pub fame: Option<i32>,
     pub reputation_delta: Option<i32>,
     pub fame_delta: Option<i32>,
+    pub credits: Option<i64>,
+    pub credits_delta: Option<i64>,
 }
 
 impl PlayerChanges {
@@ -169,6 +278,12 @@ impl PlayerChanges {
         if let Some(v) = map.get("fame_delta") {
             changes.fame_delta = v.as_int().ok().map(|i| i as i32);
         }
+        if let Some(v) = map.get("credits") {
+            changes.credits = v.as_int().ok();
+        }
+        if let Some(v) = map.get("credits_delta") {
+            changes.credits_delta = v.as_int().ok();
+        }
 
         Some(changes)
     }
@@ -178,6 +293,8 @@ impl PlayerChanges {
             && self.fame.is_none()
             && self.reputation_delta.is_none()
             && self.fame_delta.is_none()
+            && self.credits.is_none()
+            && self.credits_delta.is_none()
     }
 }
 

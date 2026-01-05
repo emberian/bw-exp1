@@ -11,7 +11,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use rhai::{Engine, Dynamic, Map};
 
-/// Thread-local data accessor for script execution.
+// Thread-local data accessor for script execution.
 thread_local! {
     static CURRENT_DATA: RefCell<Option<Arc<DataStore>>> = const { RefCell::new(None) };
 }
