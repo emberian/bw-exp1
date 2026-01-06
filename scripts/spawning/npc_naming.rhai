@@ -39,7 +39,7 @@ fn get_suffixes(ship_class) {
 
 // Pick a random element from an array
 fn random_pick(arr) {
-    let idx = floor(rand() * arr.len());
+    let idx = to_int(floor(rand() * arr.len()));
     if idx >= arr.len() {
         idx = arr.len() - 1;
     }

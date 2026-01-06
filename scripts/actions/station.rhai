@@ -91,9 +91,15 @@ fn handle_dock(ctx, params) {
 }
 
 // Handle undock action
-fn handle_undock(ctx, params) {
+fn handle_undock(ctx, _params) {
     let ship_id = ctx["ship_id"];
     let player_id = ctx["player_id"];
+
+    // Verify ship exists before undocking
+    let ship = query_ship(ship_id);
+    if ship == () {
+        return #{ success: false, error: "Ship not found" };
+    }
 
     // Modify ship status back to idle
     modify_ship(ship_id, #{

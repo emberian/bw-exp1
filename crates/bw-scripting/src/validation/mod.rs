@@ -20,11 +20,16 @@
 //! - `analysis` - AST walking and function analysis
 //! - `validators` - Action and definition script validators
 //! - `dependency` - Cross-script dependency analysis
+//! - `traits` - Shared traits for validators
+//! - `error_codes` - Error code taxonomy and categorization
 
 mod api_functions;
 mod analysis;
+mod builtin_functions;
 mod dependency;
+mod error_codes;
 mod schema;
+mod traits;
 mod types;
 mod validators;
 
@@ -40,8 +45,16 @@ pub use api_functions::{
 // From types
 pub use types::{
     InferredType, BinaryOpRule, BINARY_OP_RULES, BINARY_OPERATORS,
+    IndexRule, INDEX_RULES,
     NullGuardInfo, VarState, Scope, ReturnMapField, FunctionAnalysis,
     is_binary_operator, check_binary_op, is_implicit_coercion,
+    check_index_op, is_indexable, check_boolean_operand, check_logical_not,
+};
+
+// From builtin_functions
+pub use builtin_functions::{
+    BuiltinFn, BUILTIN_FUNCTIONS,
+    get_builtin_function, get_builtin_method, get_builtin,
 };
 
 // From schema
@@ -79,6 +92,15 @@ pub use validators::{
 pub use dependency::{
     ScriptActionInfo, ScriptDependencyGraph,
 };
+
+// From traits
+pub use traits::{
+    ValidationError, ValidationWarning, ScriptValidation, ValidationReport,
+    ScriptValidator, collect_rhai_files,
+};
+
+// From error_codes
+pub use error_codes::{ErrorCategory, is_error, is_warning};
 
 #[cfg(test)]
 mod tests {
@@ -479,5 +501,93 @@ fn handle_test(ctx, params) {
         assert_eq!(archetype_category("get_weapon"), Some("weapons"));
         assert_eq!(archetype_category("get_faction"), Some("factions"));
         assert_eq!(archetype_category("unknown_fn"), None);
+    }
+
+    // ========================================================================
+    // ScriptValidator Trait Tests
+    // ========================================================================
+
+    #[test]
+    fn test_validator_trait_action() {
+        // Test that ActionScriptValidator implements ScriptValidator
+        fn assert_validator<V: ScriptValidator>(_v: &V) {}
+
+        let validator = ActionScriptValidator::new();
+        assert_validator(&validator);
+
+        // Validate through trait interface
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("actions").join("trait_test.rhai");
+        std::fs::create_dir_all(test_file.parent().unwrap()).ok();
+        std::fs::write(&test_file, r#"
+fn init() {
+    register_action("test", "handle_test");
+}
+fn handle_test(ctx, params) {
+    #{ success: true }
+}
+"#).unwrap();
+
+        let result: ActionScriptValidation = <ActionScriptValidator as ScriptValidator>::validate_file(&validator, &test_file);
+        std::fs::remove_file(&test_file).ok();
+
+        assert!(ScriptValidation::is_valid(&result));
+        assert!(ScriptValidation::errors(&result).is_empty());
+        assert!(!ScriptValidation::path(&result).is_empty());
+    }
+
+    #[test]
+    fn test_validator_trait_definition() {
+        // Test that DefinitionScriptValidator implements ScriptValidator
+        fn assert_validator<V: ScriptValidator>(_v: &V) {}
+
+        let validator = DefinitionScriptValidator::new();
+        assert_validator(&validator);
+    }
+
+    #[test]
+    fn test_validation_error_trait() {
+        let error = ActionValidationError {
+            code: "E001",
+            message: "Test error".to_string(),
+            line: Some(10),
+        };
+
+        assert_eq!(ValidationError::code(&error), "E001");
+        assert_eq!(ValidationError::message(&error), "Test error");
+        assert_eq!(ValidationError::line(&error), Some(10));
+    }
+
+    #[test]
+    fn test_validation_warning_trait() {
+        let warning = ActionValidationWarning {
+            code: "W001",
+            message: "Test warning".to_string(),
+            line: None,
+        };
+
+        assert_eq!(ValidationWarning::code(&warning), "W001");
+        assert_eq!(ValidationWarning::message(&warning), "Test warning");
+        assert_eq!(ValidationWarning::line(&warning), None);
+    }
+
+    #[test]
+    fn test_collect_rhai_files() {
+        let temp_dir = std::env::temp_dir().join("validation_test");
+        let sub_dir = temp_dir.join("subdir");
+        std::fs::create_dir_all(&sub_dir).ok();
+        std::fs::write(temp_dir.join("test1.rhai"), "// test").ok();
+        std::fs::write(temp_dir.join("test2.txt"), "// not rhai").ok();
+        std::fs::write(sub_dir.join("test3.rhai"), "// nested").ok();
+
+        let files = collect_rhai_files(&temp_dir);
+
+        // Clean up
+        std::fs::remove_dir_all(&temp_dir).ok();
+
+        // Should find both .rhai files but not .txt
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|p| p.ends_with("test1.rhai")));
+        assert!(files.iter().any(|p| p.ends_with("test3.rhai")));
     }
 }

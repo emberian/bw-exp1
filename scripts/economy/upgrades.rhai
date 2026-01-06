@@ -519,8 +519,8 @@ fn compare_upgrade(ship_id, new_upgrade_id, slot) {
         let change = new_val - old_val;
         if change != 0.0 {
             diff[stat] = #{
-                old: old_val,
-                new: new_val,
+                old_value: old_val,
+                new_value: new_val,
                 change: change
             };
         }

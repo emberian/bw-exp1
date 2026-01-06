@@ -3,6 +3,7 @@
 //! Executes Rhai mission scripts and processes player choices.
 
 use uuid::Uuid;
+use tracing::{debug, info, instrument, trace, warn};
 
 use bw_core::models::{Mission, MissionStatus, Ship};
 use bw_scripting::{MissionContext, MissionRunner};
@@ -60,6 +61,7 @@ impl Default for MissionExecutionResult {
 }
 
 /// Start a mission for a player.
+#[instrument(skip(state), fields(player_id = %player_id, mission_id = %mission_id))]
 pub fn start_mission(
     state: &GameState,
     player_id: Uuid,
@@ -93,6 +95,7 @@ pub fn start_mission(
 
     // Check if can accept
     if !mission.can_accept(player_id, None) {
+        debug!(mission_title = %mission.title, "Player cannot accept mission");
         return Err("Cannot accept this mission".to_string());
     }
 
@@ -102,6 +105,7 @@ pub fn start_mission(
         let distance = ship.position.distance_to(target_pos);
         // Allow accepting from reasonable distance (500 units) - can approach later
         if distance > 500.0 {
+            debug!(distance, "Player too far from mission area");
             return Err(format!(
                 "Too far from mission area (distance: {:.0}, need < 500)",
                 distance
@@ -114,7 +118,16 @@ pub fn start_mission(
 
     // Run mission script
     let runner = MissionRunner::new(&state.scripts);
-    let outcome = runner.start_mission(&ctx).map_err(|e| e.to_string())?;
+    let outcome = runner.start_mission(&ctx).map_err(|e| {
+        warn!(error = %e, "Mission script failed to start");
+        e.to_string()
+    })?;
+
+    info!(
+        mission_title = %mission.title,
+        mission_type = ?mission.mission_type,
+        "Mission started"
+    );
 
     // Update mission state
     mission.status = MissionStatus::InProgress;
@@ -158,6 +171,7 @@ pub fn start_mission(
 }
 
 /// Process a player's mission choice.
+#[instrument(skip(state), fields(player_id = %player_id, mission_id = %mission_id, choice_id = %choice_id))]
 pub fn process_mission_choice(
     state: &GameState,
     player_id: Uuid,
@@ -192,8 +206,11 @@ pub fn process_mission_choice(
 
     // Check if player is assigned
     if mission.assigned_to != Some(player_id) {
+        debug!("Player not assigned to this mission");
         return Err("Not assigned to this mission".to_string());
     }
+
+    let mission_title = mission.title.clone();
 
     // Build mission context
     let ctx = build_mission_context(state, &mission, &ship, player_id);
@@ -202,7 +219,17 @@ pub fn process_mission_choice(
     let runner = MissionRunner::new(&state.scripts);
     let outcome = runner
         .process_choice(&ctx, choice_id)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            warn!(error = %e, "Mission choice processing failed");
+            e.to_string()
+        })?;
+
+    debug!(
+        mission_title = %mission_title,
+        choice_id,
+        new_state = %outcome.new_state,
+        "Mission choice processed"
+    );
 
     // Update mission state
     mission.current_state = outcome.new_state.to_string();
@@ -211,6 +238,11 @@ pub fn process_mission_choice(
     if outcome.is_complete {
         mission.status = MissionStatus::Completed { success: outcome.success };
         mission.progress = 1.0;
+        info!(
+            mission_title = %mission_title,
+            success = outcome.success,
+            "Mission completed"
+        );
     }
 
     // Build result
@@ -249,6 +281,7 @@ pub fn process_mission_choice(
 }
 
 /// Process combat result for a mission.
+#[instrument(skip(state), fields(player_id = %player_id, mission_id = %mission_id, player_won, enemy_fled))]
 pub fn process_mission_combat_result(
     state: &GameState,
     player_id: Uuid,
@@ -256,6 +289,8 @@ pub fn process_mission_combat_result(
     player_won: bool,
     enemy_fled: bool,
 ) -> Result<MissionExecutionResult, String> {
+    debug!(player_won, enemy_fled, "Processing mission combat result");
+
     // Get player session
     let session = state
         .players
@@ -282,6 +317,8 @@ pub fn process_mission_combat_result(
         .get_mut(&mission_id)
         .ok_or("Mission not found")?;
 
+    let mission_title = mission.title.clone();
+
     // Build mission context
     let ctx = build_mission_context(state, &mission, &ship, player_id);
 
@@ -289,7 +326,10 @@ pub fn process_mission_combat_result(
     let runner = MissionRunner::new(&state.scripts);
     let outcome = runner
         .process_combat_result(&ctx, player_won, enemy_fled)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            warn!(error = %e, "Mission combat result processing failed");
+            e.to_string()
+        })?;
 
     // Update mission state
     mission.current_state = outcome.new_state.to_string();
@@ -297,6 +337,12 @@ pub fn process_mission_combat_result(
     if outcome.is_complete {
         mission.status = MissionStatus::Completed { success: outcome.success };
         mission.progress = 1.0;
+        info!(
+            mission_title = %mission_title,
+            success = outcome.success,
+            player_won,
+            "Mission completed via combat"
+        );
     }
 
     // Build result
@@ -358,6 +404,11 @@ fn build_mission_context(
 }
 
 /// Apply resource changes to a player's ship and player model.
+#[instrument(skip(state, result), fields(
+    player_id = %player_id,
+    rep_change = result.reputation_change,
+    fame_change = result.fame_change,
+))]
 pub fn apply_resource_changes(
     state: &GameState,
     player_id: Uuid,
@@ -394,6 +445,16 @@ pub fn apply_resource_changes(
     } else {
         (100, 0)
     };
+
+    trace!(
+        reputation = final_reputation,
+        fame = final_fame,
+        ammo = ammunition,
+        fuel = fuel,
+        morale = morale,
+        xp = experience,
+        "Resource changes applied"
+    );
 
     // Build resource update message
     Some(ServerMessage::ResourceUpdate {

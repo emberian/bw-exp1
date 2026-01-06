@@ -45,6 +45,89 @@ impl InferredType {
             InferredType::String | InferredType::Array | InferredType::Map
         )
     }
+
+    /// Check if this type is numeric (Int or Float).
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, InferredType::Int | InferredType::Float)
+    }
+
+    /// Check if this type is compatible with another type.
+    ///
+    /// This is used for checking if a value can be assigned or passed to a parameter.
+    /// Dynamic is compatible with anything. Int and Float have implicit coercion.
+    pub fn is_compatible_with(&self, other: &InferredType) -> bool {
+        // Same type
+        if self == other {
+            return true;
+        }
+
+        // Dynamic is compatible with anything
+        if *self == InferredType::Dynamic || *other == InferredType::Dynamic {
+            return true;
+        }
+
+        // Nullable is compatible with Map and Unit
+        if *self == InferredType::Nullable {
+            return matches!(other, InferredType::Map | InferredType::Unit | InferredType::Nullable);
+        }
+        if *other == InferredType::Nullable {
+            return matches!(self, InferredType::Map | InferredType::Unit | InferredType::Nullable);
+        }
+
+        // Int and Float have implicit coercion
+        if self.is_numeric() && other.is_numeric() {
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if this type can be assigned to a target type.
+    ///
+    /// More restrictive than is_compatible_with - used for type annotation checking.
+    pub fn is_assignable_to(&self, target: &InferredType) -> bool {
+        // Same type
+        if self == target {
+            return true;
+        }
+
+        // Dynamic source can be assigned to anything (we can't verify)
+        if *self == InferredType::Dynamic {
+            return true;
+        }
+
+        // Anything can be assigned to Dynamic target
+        if *target == InferredType::Dynamic {
+            return true;
+        }
+
+        // Nullable target accepts Map or Unit
+        if *target == InferredType::Nullable {
+            return matches!(self, InferredType::Map | InferredType::Unit | InferredType::Nullable);
+        }
+
+        // Int can be assigned to Float (widening)
+        if *self == InferredType::Int && *target == InferredType::Float {
+            return true;
+        }
+
+        false
+    }
+
+    /// Get a human-readable type name.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            InferredType::Unit => "()",
+            InferredType::Bool => "Bool",
+            InferredType::Int => "Int",
+            InferredType::Float => "Float",
+            InferredType::String => "String",
+            InferredType::Array => "Array",
+            InferredType::Map => "Map",
+            InferredType::Nullable => "Nullable",
+            InferredType::Dynamic => "Dynamic",
+        }
+    }
 }
 
 // ============================================================================
@@ -192,6 +275,141 @@ pub fn is_implicit_coercion(left: &InferredType, right: &InferredType) -> bool {
 }
 
 // ============================================================================
+// Index Operation Type Rules
+// ============================================================================
+
+/// A rule for indexing operations: container[index] -> result
+#[derive(Debug, Clone)]
+pub struct IndexRule {
+    /// Container type (Array, String, Map)
+    pub container: InferredType,
+    /// Required index type
+    pub index: InferredType,
+    /// Result type
+    pub result: InferredType,
+}
+
+impl IndexRule {
+    pub const fn new(container: InferredType, index: InferredType, result: InferredType) -> Self {
+        Self { container, index, result }
+    }
+}
+
+/// Type rules for indexing operations.
+///
+/// These catch bugs like using Float as an array index (floor() returns Float, not Int).
+pub static INDEX_RULES: &[IndexRule] = &[
+    // Array[Int] -> Dynamic (element type unknown)
+    IndexRule::new(InferredType::Array, InferredType::Int, InferredType::Dynamic),
+    // String[Int] -> String (single character as string)
+    IndexRule::new(InferredType::String, InferredType::Int, InferredType::String),
+    // Map[String] -> Dynamic (value type unknown)
+    IndexRule::new(InferredType::Map, InferredType::String, InferredType::Dynamic),
+];
+
+/// Check an index operation for type correctness.
+///
+/// Returns Ok(result_type) if valid, Err(error_message) if type mismatch.
+///
+/// # Arguments
+/// * `container` - The type being indexed
+/// * `index` - The type of the index expression
+///
+/// # Examples
+/// ```ignore
+/// // This is OK: array[42] where 42 is Int
+/// check_index_op(&InferredType::Array, &InferredType::Int) // Ok(Dynamic)
+///
+/// // This is an ERROR: array[3.14] where 3.14 is Float
+/// check_index_op(&InferredType::Array, &InferredType::Float) // Err(...)
+///
+/// // This catches the floor() bug:
+/// // let idx = floor(rand() * arr.len());  // idx is Float!
+/// // arr[idx]  // ERROR: Array index must be Int, got Float
+/// ```
+pub fn check_index_op(container: &InferredType, index: &InferredType) -> Result<InferredType, String> {
+    // Dynamic containers can be indexed with anything (we can't verify)
+    if *container == InferredType::Dynamic {
+        return Ok(InferredType::Dynamic);
+    }
+
+    // Nullable containers (e.g., from query_ship) - treat as potentially valid Map
+    // Null safety is handled separately by W100 unchecked nullable warnings
+    if *container == InferredType::Nullable {
+        return Ok(InferredType::Dynamic);
+    }
+
+    // Dynamic index - can't verify, allow with warning
+    if *index == InferredType::Dynamic {
+        return Ok(InferredType::Dynamic);
+    }
+
+    // Find matching rule
+    for rule in INDEX_RULES {
+        if rule.container == *container {
+            // Check if index type matches
+            if rule.index == *index {
+                return Ok(rule.result.clone());
+            }
+
+            // Special case: Int is compatible where Float is expected (but not vice versa)
+            // Actually, this is backwards - we want to be strict about Float where Int is required
+
+            // If the required index is Int and we got Float, that's the floor() bug
+            if rule.index == InferredType::Int && *index == InferredType::Float {
+                return Err(format!(
+                    "{} index must be {}, got {} (hint: use .to_int() to convert)",
+                    container.type_name(),
+                    rule.index.type_name(),
+                    index.type_name()
+                ));
+            }
+
+            // Other type mismatch
+            return Err(format!(
+                "{} index must be {}, got {}",
+                container.type_name(),
+                rule.index.type_name(),
+                index.type_name()
+            ));
+        }
+    }
+
+    // Container type can't be indexed
+    Err(format!("type {} cannot be indexed", container.type_name()))
+}
+
+/// Check if a type is indexable.
+pub fn is_indexable(ty: &InferredType) -> bool {
+    matches!(ty, InferredType::Array | InferredType::String | InferredType::Map | InferredType::Dynamic)
+}
+
+// ============================================================================
+// Boolean Operation Rules
+// ============================================================================
+
+/// Check that a boolean operator receives boolean operands.
+///
+/// Returns Err if the operand is not Bool (and not Dynamic).
+pub fn check_boolean_operand(op: &str, operand: &InferredType) -> Result<(), String> {
+    if *operand == InferredType::Bool || *operand == InferredType::Dynamic {
+        return Ok(());
+    }
+
+    Err(format!(
+        "operator '{}' requires Bool operand, got {}",
+        op,
+        operand.type_name()
+    ))
+}
+
+/// Check logical NOT operator.
+pub fn check_logical_not(operand: &InferredType) -> Result<InferredType, String> {
+    check_boolean_operand("!", operand)?;
+    Ok(InferredType::Bool)
+}
+
+// ============================================================================
 // Null Guard Tracking
 // ============================================================================
 
@@ -264,6 +482,10 @@ pub struct FunctionAnalysis {
     pub unchecked_nullables: Vec<(String, Option<Position>)>,
     /// Type mismatches in binary operations (description, position) - E700
     pub type_mismatches: Vec<(String, Option<Position>)>,
+    /// Index type mismatches (description, position) - E701
+    pub index_type_errors: Vec<(String, Option<Position>)>,
+    /// Boolean operator requires Bool (description, position) - E702
+    pub boolean_op_errors: Vec<(String, Option<Position>)>,
     /// Implicit type coercions (description, position) - W700
     pub implicit_coercions: Vec<(String, Option<Position>)>,
     /// Invalid archetype IDs (empty string) - E900

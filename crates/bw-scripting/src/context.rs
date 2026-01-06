@@ -27,6 +27,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc;
+use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 use thiserror::Error;
 
@@ -176,12 +177,31 @@ impl ExecutionGuard {
     ///
     /// Returns `ExecutionError::ReentrantExecution` if a script is already
     /// executing on this thread.
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(
+            script = %context.script_path,
+            owner = ?context.owner_entity_id,
+            sector = ?context.sector_id,
+            tick = context.tick
+        )
+    )]
     pub fn enter(context: ScriptExecutionContext) -> Result<Self, ExecutionError> {
         CURRENT_CONTEXT.with(|cell| {
             let mut ctx = cell.borrow_mut();
             if ctx.is_some() {
+                warn!(
+                    script = %context.script_path,
+                    "Re-entrant script execution detected"
+                );
                 return Err(ExecutionError::ReentrantExecution);
             }
+
+            trace!(
+                script = %context.script_path,
+                "Entering script execution context"
+            );
 
             // Set up error context (script path and tick)
             crate::errors::set_current_script(&context.script_path);
@@ -197,18 +217,36 @@ impl Drop for ExecutionGuard {
     fn drop(&mut self) {
         CURRENT_CONTEXT.with(|cell| {
             if let Some(ctx) = cell.borrow_mut().take() {
+                trace!(
+                    script = %ctx.script_path,
+                    "Exiting script execution context"
+                );
+
                 // Apply pending mutations and log any failures
                 let results = ctx.accessor.apply_pending_mutations();
+                let mutation_count = results.len();
+                let mut failure_count = 0;
+
                 for result in results {
                     if !result.success
                         && let Some(ref error) = result.error {
-                            tracing::warn!(
+                            failure_count += 1;
+                            warn!(
                                 script = %ctx.script_path,
                                 mutation = ?result.mutation,
                                 error = %error,
                                 "Mutation failed during script cleanup"
                             );
                         }
+                }
+
+                if mutation_count > 0 {
+                    debug!(
+                        script = %ctx.script_path,
+                        mutations_applied = mutation_count,
+                        failures = failure_count,
+                        "Script execution context mutations applied"
+                    );
                 }
 
                 // Clear error context

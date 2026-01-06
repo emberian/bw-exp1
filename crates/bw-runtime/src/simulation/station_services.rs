@@ -3,6 +3,7 @@
 //! Handles docking, undocking, and station service usage.
 
 use uuid::Uuid;
+use tracing::{debug, info, instrument, warn};
 
 use bw_core::models::{LocationType, Ship, ShipStatus, StationService};
 use bw_game::systems::spend_reputation;
@@ -21,6 +22,7 @@ pub struct ServiceResult {
 }
 
 /// Attempt to dock at a station.
+#[instrument(skip(state), fields(player_id = %player_id, station_id = %station_id))]
 pub fn dock_at_station(
     state: &GameState,
     player_id: Uuid,
@@ -43,10 +45,12 @@ pub fn dock_at_station(
 
     // Check if ship can dock
     if !ship.can_move() {
+        debug!(status = ?ship.status, "Ship cannot dock in current state");
         return Err("Ship cannot dock in current state".to_string());
     }
 
     if matches!(ship.status, ShipStatus::InCombat { .. }) {
+        debug!("Cannot dock while in combat");
         return Err("Cannot dock while in combat".to_string());
     }
 
@@ -71,12 +75,14 @@ pub fn dock_at_station(
             | LocationType::NavalStation
             | LocationType::FreePort
     ) {
+        debug!(location_type = ?station.location_type, "Cannot dock at this location type");
         return Err("Cannot dock at this location".to_string());
     }
 
     // Check distance
     let distance = ship.position.distance_to(&station.position);
     if distance > 50.0 {
+        debug!(distance, "Too far from station");
         return Err(format!(
             "Too far from station (distance: {:.0}, need < 50)",
             distance
@@ -90,10 +96,12 @@ pub fn dock_at_station(
     ship.position = station.position;
 
     let station_name = station.name.clone();
+    info!(station_name = %station_name, ship_id = %ship_id, "Ship docked at station");
     Ok(format!("Docked at {}", station_name))
 }
 
 /// Undock from current station.
+#[instrument(skip(state), fields(player_id = %player_id))]
 pub fn undock(state: &GameState, player_id: Uuid) -> Result<String, String> {
     // Get player session
     let session = state
@@ -111,6 +119,7 @@ pub fn undock(state: &GameState, player_id: Uuid) -> Result<String, String> {
 
     // Check if docked
     if !matches!(ship.status, ShipStatus::Docked { .. }) {
+        debug!(status = ?ship.status, "Not currently docked");
         return Err("Not currently docked".to_string());
     }
 
@@ -119,10 +128,12 @@ pub fn undock(state: &GameState, player_id: Uuid) -> Result<String, String> {
     ship.position.x += 10.0;
     ship.position.y += 10.0;
 
+    info!(ship_id = %ship_id, "Ship undocked");
     Ok("Undocked successfully".to_string())
 }
 
 /// Use a station service.
+#[instrument(skip(state), fields(player_id = %player_id, service = ?service))]
 pub fn use_service(
     state: &GameState,
     player_id: Uuid,
@@ -132,6 +143,7 @@ pub fn use_service(
     let session = match state.players.get(&player_id) {
         Some(s) => s,
         None => {
+            debug!("Player not found");
             return ServiceResult {
                 success: false,
                 message: "Player not found".to_string(),

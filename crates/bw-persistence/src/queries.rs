@@ -190,4 +190,86 @@ impl<'a> Queries<'a> {
         txn.commit().await?;
         Ok(())
     }
+
+    // ========================================================================
+    // Seed data methods
+    // ========================================================================
+
+    /// Count factions in the database.
+    pub async fn count_factions(&self) -> Result<u64, DbError> {
+        Ok(faction::Entity::find().count(self.conn).await?)
+    }
+
+    /// Count sectors in the database.
+    pub async fn count_sectors(&self) -> Result<u64, DbError> {
+        Ok(sector::Entity::find().count(self.conn).await?)
+    }
+
+    /// Insert a faction.
+    pub async fn insert_faction(&self, f: &Faction) -> Result<(), DbError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let model = faction::ActiveModel {
+            id: Set(f.id.to_string()),
+            name: Set(f.name.clone()),
+            tag: Set(f.tag.clone()),
+            faction_type: Set(format!("{:?}", f.faction_type)),
+            description: Set(Some(f.description.clone())),
+            philosophy: Set(Some(f.philosophy.clone())),
+            aesthetic: Set(Some(f.aesthetic.clone())),
+            is_playable: Set(if f.is_playable { 1 } else { 0 }),
+            is_hostile: Set(if f.is_hostile { 1 } else { 0 }),
+            default_standings: Set("{}".to_string()),
+            created_at: Set(now),
+        };
+        model.insert(self.conn).await?;
+        Ok(())
+    }
+
+    /// Insert a sector.
+    pub async fn insert_sector(&self, s: &Sector) -> Result<(), DbError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let model = sector::ActiveModel {
+            id: Set(s.id.to_string()),
+            name: Set(s.name.clone()),
+            description: Set(Some(s.description.clone())),
+            bounds_min_x: Set(s.bounds.min.x),
+            bounds_min_y: Set(s.bounds.min.y),
+            bounds_min_z: Set(s.bounds.min.z),
+            bounds_max_x: Set(s.bounds.max.x),
+            bounds_max_y: Set(s.bounds.max.y),
+            bounds_max_z: Set(s.bounds.max.z),
+            danger_level: Set(format!("{:?}", s.danger_level).to_lowercase()),
+            traffic_density: Set(format!("{:?}", s.traffic_density).to_lowercase()),
+            fuel_cost_modifier: Set(s.fuel_cost_modifier),
+            is_core_sector: Set(if s.is_core_sector { 1 } else { 0 }),
+            controlling_faction_id: Set(s.controlling_faction.map(|id| id.to_string())),
+            controlling_squadron_id: Set(s.controlling_squadron.map(|id| id.to_string())),
+            adjacent_sectors: Set(serde_json::to_string(&s.adjacent_sectors).unwrap_or_default()),
+            created_at: Set(now),
+        };
+        model.insert(self.conn).await?;
+        Ok(())
+    }
+
+    /// Insert a location.
+    pub async fn insert_location(&self, sector_id: Uuid, loc: &bw_core::models::Location) -> Result<(), DbError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let services: Vec<String> = loc.services.iter().map(|s| format!("{:?}", s)).collect();
+        let model = location::ActiveModel {
+            id: Set(loc.id.to_string()),
+            sector_id: Set(sector_id.to_string()),
+            name: Set(loc.name.clone()),
+            description: Set(Some(loc.description.clone())),
+            location_type: Set(format!("{:?}", loc.location_type)),
+            position_x: Set(loc.position.x),
+            position_y: Set(loc.position.y),
+            position_z: Set(loc.position.z),
+            faction_id: Set(loc.faction_id.map(|id| id.to_string())),
+            services: Set(serde_json::to_string(&services).unwrap_or_default()),
+            is_active: Set(1),
+            created_at: Set(now),
+        };
+        model.insert(self.conn).await?;
+        Ok(())
+    }
 }

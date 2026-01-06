@@ -315,7 +315,16 @@ fn impl_rhai_deserialize(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let parser = if let Some(with_fn) = &attrs.with_fn {
             // Custom deserialization function
             let fn_path: syn::Path = syn::parse_str(with_fn)?;
-            quote! { #fn_path(map.get(#key_name))? }
+            // Respect default attribute for custom functions too
+            let default_handler = match &attrs.default {
+                Some(DefaultValue::Default) => quote! { .unwrap_or_default() },
+                Some(DefaultValue::Expr(expr)) => {
+                    let expr_tokens: TokenStream2 = expr.parse()?;
+                    quote! { .unwrap_or(#expr_tokens) }
+                }
+                None => quote! { ? },
+            };
+            quote! { #fn_path(map.get(#key_name)) #default_handler }
         } else if attrs.flatten {
             // Flatten: parse from the entire map
             let inner_type = field_type;

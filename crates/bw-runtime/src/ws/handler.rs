@@ -220,22 +220,36 @@ async fn send_initial_state(
 ) {
     use bw_shared::dto::*;
 
+    tracing::info!("send_initial_state: player={}, sector={}", player_id, sector_id);
+
     // Get player data
     let session = match state.players.get(&player_id) {
         Some(s) => s,
-        None => return,
+        None => {
+            tracing::error!("send_initial_state: player session not found for {}", player_id);
+            return;
+        }
     };
 
+    let ship_id = session.ship_id;
+    tracing::info!("send_initial_state: ship_id={}", ship_id);
+
     // Get ship
-    let ship = match state.ships.get(&session.ship_id) {
+    let ship = match state.ships.get(&ship_id) {
         Some(s) => s,
-        None => return,
+        None => {
+            tracing::error!("send_initial_state: ship not found for {}", ship_id);
+            return;
+        }
     };
 
     // Get sector
     let sector = match state.sectors.get(&sector_id) {
         Some(s) => s,
-        None => return,
+        None => {
+            tracing::error!("send_initial_state: sector not found for {}", sector_id);
+            return;
+        }
     };
 
     // Build player DTO
@@ -244,9 +258,14 @@ async fn send_initial_state(
             let faction_tag = state.faction_tag_or(player.faction_id, "COMPACT");
             let squadron_tag = state.squadron_tag(player.squadron_id);
             let is_admin = config().is_admin(&player.username);
+            tracing::info!(
+                "send_initial_state: player={} username={} is_admin={}",
+                player_id, player.username, is_admin
+            );
             PlayerDto::from_core(&player, faction_tag, squadron_tag, is_admin)
         }
         None => {
+            tracing::warn!("send_initial_state: player_data missing for {}, using fallback with is_admin=false", player_id);
             // Fallback for missing player data
             PlayerDto {
                 id: player_id,

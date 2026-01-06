@@ -16,6 +16,9 @@ use super::analysis::{
     analyze_ast, analyze_function, archetype_category, AstAnalysis, ArchetypeRegistry,
 };
 use super::api_functions::{get_api_function, is_known_event_type, CTX_KEYS};
+use super::traits::{
+    ScriptValidation, ScriptValidator, ValidationError, ValidationReport, ValidationWarning,
+};
 use super::types::InferredType;
 
 // ============================================================================
@@ -38,6 +41,24 @@ impl ActionScriptValidation {
     }
 }
 
+impl ScriptValidation for ActionScriptValidation {
+    type Error = ActionValidationError;
+    type Warning = ActionValidationWarning;
+
+    fn path(&self) -> &str {
+        &self.path
+    }
+    fn is_valid(&self) -> bool {
+        self.errors.is_empty()
+    }
+    fn errors(&self) -> &[Self::Error] {
+        &self.errors
+    }
+    fn warnings(&self) -> &[Self::Warning] {
+        &self.warnings
+    }
+}
+
 /// A registered action found in a script
 #[derive(Debug, Clone)]
 pub struct RegisteredAction {
@@ -54,12 +75,36 @@ pub struct ActionValidationError {
     pub line: Option<usize>,
 }
 
+impl ValidationError for ActionValidationError {
+    fn code(&self) -> &str {
+        self.code
+    }
+    fn message(&self) -> &str {
+        &self.message
+    }
+    fn line(&self) -> Option<usize> {
+        self.line
+    }
+}
+
 /// A validation warning (script may have issues)
 #[derive(Debug, Clone)]
 pub struct ActionValidationWarning {
     pub code: &'static str,
     pub message: String,
     pub line: Option<usize>,
+}
+
+impl ValidationWarning for ActionValidationWarning {
+    fn code(&self) -> &str {
+        self.code
+    }
+    fn message(&self) -> &str {
+        &self.message
+    }
+    fn line(&self) -> Option<usize> {
+        self.line
+    }
 }
 
 /// Result of validating all scripts
@@ -100,6 +145,23 @@ impl ActionValidationReport {
         ));
 
         output
+    }
+}
+
+impl ValidationReport for ActionValidationReport {
+    type Validation = ActionScriptValidation;
+
+    fn scripts(&self) -> &[Self::Validation] {
+        &self.scripts
+    }
+    fn total_errors(&self) -> usize {
+        self.total_errors
+    }
+    fn total_warnings(&self) -> usize {
+        self.total_warnings
+    }
+    fn format_report(&self) -> String {
+        ActionValidationReport::format_report(self)
     }
 }
 
@@ -716,6 +778,30 @@ impl ActionScriptValidator {
             });
         }
 
+        // E701: Index type mismatches (e.g., arr[floor(x)] where floor returns Float)
+        for (msg, pos) in &analysis.index_type_errors {
+            errors.push(ActionValidationError {
+                code: "E701",
+                message: format!(
+                    "In '{}()': Index type error - {}",
+                    handler_name, msg
+                ),
+                line: pos.and_then(|p| p.line()),
+            });
+        }
+
+        // E702: Boolean operator requires Bool operand
+        for (msg, pos) in &analysis.boolean_op_errors {
+            errors.push(ActionValidationError {
+                code: "E702",
+                message: format!(
+                    "In '{}()': Boolean operator error - {}",
+                    handler_name, msg
+                ),
+                line: pos.and_then(|p| p.line()),
+            });
+        }
+
         // W700: Implicit type coercions
         for (msg, pos) in &analysis.implicit_coercions {
             warnings.push(ActionValidationWarning {
@@ -946,6 +1032,19 @@ impl Default for ActionScriptValidator {
     }
 }
 
+impl ScriptValidator for ActionScriptValidator {
+    type Validation = ActionScriptValidation;
+    type Report = ActionValidationReport;
+
+    fn validate_file(&self, path: &Path) -> Self::Validation {
+        ActionScriptValidator::validate_file(self, path)
+    }
+
+    fn validate_directory(&self, dir: &Path) -> Self::Report {
+        ActionScriptValidator::validate_directory(self, dir)
+    }
+}
+
 // ============================================================================
 // Definition Script Validator
 // ============================================================================
@@ -965,6 +1064,24 @@ impl DefinitionScriptValidation {
     }
 }
 
+impl ScriptValidation for DefinitionScriptValidation {
+    type Error = DefinitionValidationError;
+    type Warning = DefinitionValidationWarning;
+
+    fn path(&self) -> &str {
+        &self.path
+    }
+    fn is_valid(&self) -> bool {
+        self.errors.is_empty()
+    }
+    fn errors(&self) -> &[Self::Error] {
+        &self.errors
+    }
+    fn warnings(&self) -> &[Self::Warning] {
+        &self.warnings
+    }
+}
+
 /// Information about a definition found in a script
 #[derive(Debug, Clone)]
 pub struct DefinitionInfo {
@@ -981,12 +1098,36 @@ pub struct DefinitionValidationError {
     pub line: Option<usize>,
 }
 
+impl ValidationError for DefinitionValidationError {
+    fn code(&self) -> &str {
+        self.code
+    }
+    fn message(&self) -> &str {
+        &self.message
+    }
+    fn line(&self) -> Option<usize> {
+        self.line
+    }
+}
+
 /// A validation warning for definition scripts
 #[derive(Debug, Clone)]
 pub struct DefinitionValidationWarning {
     pub code: &'static str,
     pub message: String,
     pub line: Option<usize>,
+}
+
+impl ValidationWarning for DefinitionValidationWarning {
+    fn code(&self) -> &str {
+        self.code
+    }
+    fn message(&self) -> &str {
+        &self.message
+    }
+    fn line(&self) -> Option<usize> {
+        self.line
+    }
 }
 
 /// Result of validating all definition scripts
@@ -1027,6 +1168,23 @@ impl DefinitionValidationReport {
         ));
 
         output
+    }
+}
+
+impl ValidationReport for DefinitionValidationReport {
+    type Validation = DefinitionScriptValidation;
+
+    fn scripts(&self) -> &[Self::Validation] {
+        &self.scripts
+    }
+    fn total_errors(&self) -> usize {
+        self.total_errors
+    }
+    fn total_warnings(&self) -> usize {
+        self.total_warnings
+    }
+    fn format_report(&self) -> String {
+        DefinitionValidationReport::format_report(self)
     }
 }
 
@@ -1322,6 +1480,19 @@ impl DefinitionScriptValidator {
 impl Default for DefinitionScriptValidator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ScriptValidator for DefinitionScriptValidator {
+    type Validation = DefinitionScriptValidation;
+    type Report = DefinitionValidationReport;
+
+    fn validate_file(&self, path: &Path) -> Self::Validation {
+        DefinitionScriptValidator::validate_file(self, path)
+    }
+
+    fn validate_directory(&self, dir: &Path) -> Self::Report {
+        DefinitionScriptValidator::validate_directory(self, dir)
     }
 }
 

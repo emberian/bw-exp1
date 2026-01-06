@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tracing::{debug, error, info, instrument, trace, warn, Span};
 use uuid::Uuid;
 
 use crate::bindings;
@@ -422,6 +423,7 @@ pub struct ScriptEngine {
 
 impl ScriptEngine {
     /// Create a new script engine with all bindings.
+    #[instrument(level = "info", skip_all, fields(scripts_dir))]
     pub fn new(scripts_dir: impl Into<String>) -> Self {
         Self::with_modules(scripts_dir, None::<String>)
     }
@@ -433,12 +435,20 @@ impl ScriptEngine {
     /// import "utils" as utils;
     /// import "combat/helpers" as combat;
     /// ```
+    #[instrument(level = "info", skip_all, fields(scripts_dir, modules_dir))]
     pub fn with_modules(
         scripts_dir: impl Into<String>,
         modules_dir: Option<impl Into<String>>,
     ) -> Self {
         let scripts_dir = scripts_dir.into();
         let modules_dir = modules_dir.map(|d| d.into());
+
+        Span::current().record("scripts_dir", &scripts_dir);
+        if let Some(ref md) = modules_dir {
+            Span::current().record("modules_dir", md);
+        }
+
+        debug!("Initializing Rhai scripting engine");
 
         let mut engine = Engine::new();
 
@@ -451,12 +461,22 @@ impl ScriptEngine {
         engine.set_max_map_size(500);
         engine.set_max_modules(50); // Limit imported modules
 
+        trace!(
+            max_operations = 100_000,
+            max_call_levels = 32,
+            max_modules = 50,
+            "Script engine safety limits configured"
+        );
+
         // Set up module resolver
         let resolver = Self::create_module_resolver(&scripts_dir, modules_dir.as_deref());
         engine.set_module_resolver(resolver);
 
         // Register all API bindings
+        debug!("Registering API bindings");
         bindings::register_all(&mut engine);
+
+        info!(scripts_dir = %scripts_dir, "Script engine initialized");
 
         Self {
             engine,
@@ -507,24 +527,43 @@ impl ScriptEngine {
     }
 
     /// Load a script from file.
+    #[instrument(level = "debug", skip(self), fields(script = %name))]
     pub fn load_script(&self, name: &str) -> Result<(), ScriptError> {
         let path = std::path::PathBuf::from(format!("{}/{}", self.scripts_dir, name));
-        let ast = self.engine.compile_file(path)
-            .map_err(|e| ScriptError::from_compile_file_error(name, e))?;
+        trace!(path = %path.display(), "Compiling script file");
+
+        let ast = self.engine.compile_file(path.clone())
+            .map_err(|e| {
+                error!(script = %name, error = %e, "Script compilation failed");
+                ScriptError::from_compile_file_error(name, e)
+            })?;
 
         self.scripts.write().insert(name.to_string(), ast);
+        debug!(script = %name, "Script loaded successfully");
         Ok(())
     }
 
     /// Load all scripts from the scripts directory.
+    #[instrument(level = "info", skip(self), fields(scripts_dir = %self.scripts_dir))]
     pub fn load_all_scripts(&self) -> Result<(), ScriptError> {
+        info!("Loading all scripts from directory");
         let path = Path::new(&self.scripts_dir);
+        let start = Instant::now();
+
         self.load_scripts_recursive(path, "")?;
+
+        let loaded_count = self.scripts.read().len();
+        info!(
+            scripts_loaded = loaded_count,
+            elapsed_ms = %start.elapsed().as_millis(),
+            "All scripts loaded"
+        );
         Ok(())
     }
 
     fn load_scripts_recursive(&self, dir: &Path, prefix: &str) -> Result<(), ScriptError> {
         if !dir.exists() {
+            trace!(dir = %dir.display(), "Directory does not exist, skipping");
             return Ok(());
         }
 
@@ -545,7 +584,7 @@ impl ScriptEngine {
                 } else {
                     format!("{}/{}", prefix, entry.file_name().to_string_lossy())
                 };
-                tracing::info!("Loading script: {}", name);
+                trace!(script = %name, "Loading script");
                 self.load_script(&name)?;
             }
         }
@@ -564,6 +603,7 @@ impl ScriptEngine {
     }
 
     /// Validate a loaded script against a contract.
+    #[instrument(level = "debug", skip(self, contract), fields(script = %name))]
     pub fn validate_script(
         &self,
         name: &str,
@@ -571,18 +611,37 @@ impl ScriptEngine {
     ) -> Result<crate::validation::ValidationResult, ScriptError> {
         let scripts = self.scripts.read();
         let ast = scripts.get(name)
-            .ok_or_else(|| ScriptError::NotFound(name.to_string()))?;
+            .ok_or_else(|| {
+                warn!(script = %name, "Script not found for validation");
+                ScriptError::NotFound(name.to_string())
+            })?;
 
-        Ok(crate::validation::validate_script(&self.engine, ast, contract, name))
+        trace!(script = %name, "Validating script against contract");
+        let result = crate::validation::validate_script(&self.engine, ast, contract, name);
+
+        if result.is_valid() {
+            debug!(script = %name, warnings = result.warnings.len(), "Script validation passed");
+        } else {
+            warn!(
+                script = %name,
+                missing_functions = ?result.missing_required.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                "Script validation failed"
+            );
+        }
+
+        Ok(result)
     }
 
     /// Validate a script using an inferred contract based on its path.
+    #[instrument(level = "debug", skip(self), fields(script = %name))]
     pub fn validate_script_auto(&self, name: &str) -> Result<crate::validation::ValidationResult, ScriptError> {
+        trace!("Inferring contract from script path");
         let contract = crate::validation::infer_contract(name);
         self.validate_script(name, &contract)
     }
 
     /// Load a script and validate it, returning error if validation fails.
+    #[instrument(level = "debug", skip(self, contract), fields(script = %name))]
     pub fn load_and_validate(
         &self,
         name: &str,
@@ -595,6 +654,12 @@ impl ScriptEngine {
             // Remove the invalid script
             self.scripts.write().remove(name);
 
+            error!(
+                script = %name,
+                message = %result.error_message().unwrap_or_default(),
+                "Script failed validation, removed from registry"
+            );
+
             return Err(ScriptError::ValidationError {
                 script: name.to_string(),
                 message: result.error_message().unwrap_or_default(),
@@ -604,15 +669,19 @@ impl ScriptEngine {
 
         // Log warnings if any
         for warning in &result.warnings {
-            tracing::warn!(script = name, "{}", warning);
+            warn!(script = %name, "{}", warning);
         }
 
+        debug!(script = %name, "Script loaded and validated successfully");
         Ok(())
     }
 
     /// Validate all loaded scripts, returning a summary of results.
+    #[instrument(level = "info", skip(self))]
     pub fn validate_all(&self) -> Vec<crate::validation::ValidationResult> {
         let script_names: Vec<String> = self.scripts.read().keys().cloned().collect();
+        info!(script_count = script_names.len(), "Validating all loaded scripts");
+
         let mut results = Vec::new();
 
         for name in script_names {
@@ -623,22 +692,37 @@ impl ScriptEngine {
                 }
         }
 
+        info!(
+            issues_found = results.len(),
+            "Script validation complete"
+        );
         results
     }
 
     /// Reload a script from disk (for hot-reload).
     /// Returns list of warnings on success.
+    #[instrument(level = "info", skip(self), fields(script = %name))]
     pub fn reload_script(&self, name: &str) -> Result<Vec<String>, ScriptError> {
+        debug!("Hot-reloading script");
+
         // First load the new version
         let path = std::path::PathBuf::from(format!("{}/{}", self.scripts_dir, name));
         let ast = self.engine.compile_file(path)
-            .map_err(|e| ScriptError::from_compile_file_error(name, e))?;
+            .map_err(|e| {
+                error!(script = %name, error = %e, "Script reload compilation failed");
+                ScriptError::from_compile_file_error(name, e)
+            })?;
 
         // Validate before replacing
         let contract = crate::validation::infer_contract(name);
         let result = crate::validation::validate_script(&self.engine, &ast, &contract, name);
 
         if !result.is_valid() {
+            warn!(
+                script = %name,
+                message = %result.error_message().unwrap_or_default(),
+                "Script reload failed validation"
+            );
             return Err(ScriptError::ValidationError {
                 script: name.to_string(),
                 message: result.error_message().unwrap_or_default(),
@@ -648,13 +732,14 @@ impl ScriptEngine {
 
         // Replace the old script
         self.scripts.write().insert(name.to_string(), ast);
-        tracing::info!(script = name, "Script reloaded successfully");
+        info!(script = %name, warnings = result.warnings.len(), "Script hot-reloaded successfully");
 
         Ok(result.warnings)
     }
 
     /// Reload archetype definitions (ships, weapons).
     /// Returns (ships_loaded, weapons_loaded, errors) tuple.
+    #[instrument(level = "info", skip(self))]
     pub fn reload_definitions(&self) -> Result<(usize, usize, Vec<String>), ScriptError> {
         // Reload the archetype definitions
         // This would reload from scripts/definitions/*.rhai
@@ -662,8 +747,11 @@ impl ScriptEngine {
         let path = Path::new(&definitions_dir);
 
         if !path.exists() {
+            warn!(path = %definitions_dir, "Definitions directory not found");
             return Err(ScriptError::NotFound("definitions directory".to_string()));
         }
+
+        debug!(path = %definitions_dir, "Reloading archetype definitions");
 
         let mut ships_loaded = 0;
         let mut weapons_loaded = 0;
@@ -687,26 +775,28 @@ impl ScriptEngine {
                         } else {
                             ships_loaded += 1; // Default to counting as ship definitions
                         }
-                        tracing::info!(script = %name, "Reloaded definition script");
+                        debug!(script = %name, "Reloaded definition script");
                     }
                     Err(e) => {
+                        error!(script = %name, error = %e, "Failed to reload definition");
                         errors.push(format!("{}: {}", name, e));
                     }
                 }
             }
         }
 
-        tracing::info!(
+        info!(
             ships = ships_loaded,
             weapons = weapons_loaded,
             errors = errors.len(),
-            "Reloaded archetype definitions"
+            "Archetype definitions reloaded"
         );
 
         Ok((ships_loaded, weapons_loaded, errors))
     }
 
     /// Run a script function with arguments.
+    #[instrument(level = "trace", skip(self, args), fields(script = %script_name, function = %function))]
     pub fn call_function<T: Clone + Send + Sync + 'static>(
         &self,
         script_name: &str,
@@ -715,18 +805,42 @@ impl ScriptEngine {
     ) -> Result<T, ScriptError> {
         let scripts = self.scripts.read();
         let ast = scripts.get(script_name)
-            .ok_or_else(|| ScriptError::NotFound(script_name.to_string()))?;
+            .ok_or_else(|| {
+                warn!(script = %script_name, function = %function, "Script not found");
+                ScriptError::NotFound(script_name.to_string())
+            })?;
 
         let start = Instant::now();
         let result = self.engine
             .call_fn::<T>(&mut Scope::new(), ast, function, args)
-            .map_err(|e| ScriptError::from_eval_error(script_name, e));
-        self.profiler.record(script_name, function, start.elapsed());
+            .map_err(|e| {
+                let elapsed = start.elapsed();
+                error!(
+                    script = %script_name,
+                    function = %function,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    error = %e,
+                    "Script function execution failed"
+                );
+                ScriptError::from_eval_error(script_name, e)
+            });
+        let elapsed = start.elapsed();
+        self.profiler.record(script_name, function, elapsed);
+
+        if result.is_ok() {
+            trace!(
+                script = %script_name,
+                function = %function,
+                elapsed_us = elapsed.as_micros() as u64,
+                "Script function executed"
+            );
+        }
 
         result
     }
 
     /// Run a script function returning Dynamic.
+    #[instrument(level = "trace", skip(self, args), fields(script = %script_name, function = %function))]
     pub fn call_function_dynamic(
         &self,
         script_name: &str,
@@ -735,13 +849,36 @@ impl ScriptEngine {
     ) -> Result<Dynamic, ScriptError> {
         let scripts = self.scripts.read();
         let ast = scripts.get(script_name)
-            .ok_or_else(|| ScriptError::NotFound(script_name.to_string()))?;
+            .ok_or_else(|| {
+                warn!(script = %script_name, function = %function, "Script not found");
+                ScriptError::NotFound(script_name.to_string())
+            })?;
 
         let start = Instant::now();
         let result = self.engine
             .call_fn::<Dynamic>(&mut Scope::new(), ast, function, args)
-            .map_err(|e| ScriptError::from_eval_error(script_name, e));
-        self.profiler.record(script_name, function, start.elapsed());
+            .map_err(|e| {
+                let elapsed = start.elapsed();
+                error!(
+                    script = %script_name,
+                    function = %function,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    error = %e,
+                    "Script function execution failed"
+                );
+                ScriptError::from_eval_error(script_name, e)
+            });
+        let elapsed = start.elapsed();
+        self.profiler.record(script_name, function, elapsed);
+
+        if result.is_ok() {
+            trace!(
+                script = %script_name,
+                function = %function,
+                elapsed_us = elapsed.as_micros() as u64,
+                "Script function executed"
+            );
+        }
 
         result
     }
@@ -750,6 +887,7 @@ impl ScriptEngine {
     ///
     /// This allows passing local variables and state to the function.
     /// Used by the coroutine scheduler to preserve state across yields.
+    #[instrument(level = "trace", skip(self, scope, args), fields(script = %script_name, function = %function))]
     pub fn call_function_with_scope(
         &self,
         script_name: &str,
@@ -759,13 +897,36 @@ impl ScriptEngine {
     ) -> Result<Dynamic, ScriptError> {
         let scripts = self.scripts.read();
         let ast = scripts.get(script_name)
-            .ok_or_else(|| ScriptError::NotFound(script_name.to_string()))?;
+            .ok_or_else(|| {
+                warn!(script = %script_name, function = %function, "Script not found");
+                ScriptError::NotFound(script_name.to_string())
+            })?;
 
         let start = Instant::now();
         let result = self.engine
             .call_fn::<Dynamic>(scope, ast, function, args)
-            .map_err(|e| ScriptError::from_eval_error(script_name, e));
-        self.profiler.record(script_name, function, start.elapsed());
+            .map_err(|e| {
+                let elapsed = start.elapsed();
+                error!(
+                    script = %script_name,
+                    function = %function,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    error = %e,
+                    "Script function execution failed"
+                );
+                ScriptError::from_eval_error(script_name, e)
+            });
+        let elapsed = start.elapsed();
+        self.profiler.record(script_name, function, elapsed);
+
+        if result.is_ok() {
+            trace!(
+                script = %script_name,
+                function = %function,
+                elapsed_us = elapsed.as_micros() as u64,
+                "Script function executed with scope"
+            );
+        }
 
         result
     }
@@ -774,6 +935,7 @@ impl ScriptEngine {
     ///
     /// This allows executing scripts with a specially configured engine,
     /// such as one with debugging callbacks registered.
+    #[instrument(level = "trace", skip(self, custom_engine, args), fields(script = %script_name, function = %function))]
     pub fn call_function_dynamic_with_engine(
         &self,
         custom_engine: &Engine,
@@ -783,18 +945,43 @@ impl ScriptEngine {
     ) -> Result<Dynamic, ScriptError> {
         let scripts = self.scripts.read();
         let ast = scripts.get(script_name)
-            .ok_or_else(|| ScriptError::NotFound(script_name.to_string()))?;
+            .ok_or_else(|| {
+                warn!(script = %script_name, function = %function, "Script not found");
+                ScriptError::NotFound(script_name.to_string())
+            })?;
 
+        trace!("Executing with custom engine");
         let start = Instant::now();
         let result = custom_engine
             .call_fn::<Dynamic>(&mut Scope::new(), ast, function, args)
-            .map_err(|e| ScriptError::from_eval_error(script_name, e));
-        self.profiler.record(script_name, function, start.elapsed());
+            .map_err(|e| {
+                let elapsed = start.elapsed();
+                error!(
+                    script = %script_name,
+                    function = %function,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    error = %e,
+                    "Script function execution failed"
+                );
+                ScriptError::from_eval_error(script_name, e)
+            });
+        let elapsed = start.elapsed();
+        self.profiler.record(script_name, function, elapsed);
+
+        if result.is_ok() {
+            trace!(
+                script = %script_name,
+                function = %function,
+                elapsed_us = elapsed.as_micros() as u64,
+                "Script function executed with custom engine"
+            );
+        }
 
         result
     }
 
     /// Run a script with a scope.
+    #[instrument(level = "trace", skip(self, scope), fields(script = %script_name))]
     pub fn run_with_scope(
         &self,
         script_name: &str,
@@ -802,27 +989,55 @@ impl ScriptEngine {
     ) -> Result<Dynamic, ScriptError> {
         let scripts = self.scripts.read();
         let ast = scripts.get(script_name)
-            .ok_or_else(|| ScriptError::NotFound(script_name.to_string()))?;
+            .ok_or_else(|| {
+                warn!(script = %script_name, "Script not found");
+                ScriptError::NotFound(script_name.to_string())
+            })?;
 
         let start = Instant::now();
         let result = self.engine
             .run_ast_with_scope(scope, ast)
-            .map_err(|e| ScriptError::from_eval_error(script_name, e));
-        self.profiler.record(script_name, "<run>", start.elapsed());
+            .map_err(|e| {
+                let elapsed = start.elapsed();
+                error!(
+                    script = %script_name,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    error = %e,
+                    "Script run failed"
+                );
+                ScriptError::from_eval_error(script_name, e)
+            });
+        let elapsed = start.elapsed();
+        self.profiler.record(script_name, "<run>", elapsed);
 
         result?;
+
+        trace!(
+            script = %script_name,
+            elapsed_us = elapsed.as_micros() as u64,
+            "Script run completed"
+        );
 
         // Return the result variable if set
         Ok(scope.get_value::<Dynamic>("result").unwrap_or(Dynamic::UNIT))
     }
 
     /// Evaluate a script expression.
+    #[instrument(level = "trace", skip(self), fields(script_len = script.len()))]
     pub fn eval<T: Clone + Send + Sync + 'static>(&self, script: &str) -> Result<T, ScriptError> {
         let start = Instant::now();
         let result = self.engine
             .eval::<T>(script)
-            .map_err(|e| ScriptError::from_eval_error("<eval>", e));
-        self.profiler.record("<eval>", "<inline>", start.elapsed());
+            .map_err(|e| {
+                error!(error = %e, "Inline script evaluation failed");
+                ScriptError::from_eval_error("<eval>", e)
+            });
+        let elapsed = start.elapsed();
+        self.profiler.record("<eval>", "<inline>", elapsed);
+
+        if result.is_ok() {
+            trace!(elapsed_us = elapsed.as_micros() as u64, "Inline script evaluated");
+        }
 
         result
     }

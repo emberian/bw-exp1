@@ -9,9 +9,10 @@ use std::path::Path;
 use rhai::{AST, ASTNode, Dynamic, Engine, Expr, FnCallExpr, Position, Stmt};
 
 use super::api_functions::{get_api_function, EventSubscriptionInfo, ReturnType};
+use super::builtin_functions::{get_builtin_function, get_builtin_method};
 use super::schema::{get_object_schema, api_return_schema, AccessPath, AccessSegment};
 use super::types::{
-    check_binary_op, is_binary_operator, is_implicit_coercion,
+    check_binary_op, check_boolean_operand, check_index_op, is_binary_operator, is_implicit_coercion,
     FunctionAnalysis, InferredType, NullGuardInfo, ReturnMapField, Scope, VarState,
 };
 
@@ -832,10 +833,17 @@ impl<'a> FunctionAnalyzer<'a> {
             }
 
             Stmt::Switch(boxed, pos) => {
-                let (scrutinee, _cases) = boxed.as_ref();
+                let (scrutinee, cases) = boxed.as_ref();
                 self.analyze_expr(scrutinee);
-                // Switch statements are complex - for now, don't assume they return
-                // A more complete analysis would track all case branches
+
+                // Analyze all case expressions (both conditions and body expressions)
+                for case_expr in &cases.expressions {
+                    self.analyze_expr(&case_expr.lhs);  // condition
+                    self.analyze_expr(&case_expr.rhs);  // body/result expression
+                }
+
+                // Switch statements with a default case that returns could be considered
+                // as returning, but for simplicity we don't assume they return
                 let _ = pos;
                 false
             }
@@ -936,6 +944,14 @@ impl<'a> FunctionAnalyzer<'a> {
                     ));
                 }
 
+                // E701: Check index type matches container requirements
+                // This catches bugs like: arr[floor(rand() * len)] where floor() returns Float
+                let container_type = self.infer_expr_type(&boxed.lhs);
+                let index_type = self.infer_expr_type(&boxed.rhs);
+                if let Err(msg) = check_index_op(&container_type, &index_type) {
+                    self.result.index_type_errors.push((msg, Some(*pos)));
+                }
+
                 if let Expr::Variable(var_box, _, _) = &boxed.lhs {
                     let var_name = var_box.1.to_string();
                     self.check_nullable_access(&var_name, Some(*pos));
@@ -992,11 +1008,23 @@ impl<'a> FunctionAnalyzer<'a> {
                 }
             }
 
-            Expr::And(boxed, _pos) | Expr::Or(boxed, _pos) => {
+            Expr::And(boxed, pos) | Expr::Or(boxed, pos) => {
                 // And/Or contain a vector of expressions
-                for expr in boxed.iter() {
-                    self.analyze_expr(expr);
+                // E702: Check that all operands are Bool
+                let op_name = if matches!(expr, Expr::And(_, _)) { "&&" } else { "||" };
+                for sub_expr in boxed.iter() {
+                    self.analyze_expr(sub_expr);
+                    let operand_type = self.infer_expr_type(sub_expr);
+                    if let Err(msg) = check_boolean_operand(op_name, &operand_type) {
+                        self.result.boolean_op_errors.push((msg, Some(*pos)));
+                    }
                 }
+            }
+
+            // Statement block as expression (e.g., `let x = switch { ... }`)
+            Expr::Stmt(stmt_block) => {
+                // Analyze all statements in the block
+                self.analyze_statements(stmt_block.statements().iter());
             }
 
             _ => {
@@ -1014,6 +1042,14 @@ impl<'a> FunctionAnalyzer<'a> {
         }
 
         let fn_name = call_expr.name.as_str();
+
+        // Check logical NOT operator (E702)
+        if fn_name == "!" && call_expr.args.len() == 1 {
+            let operand_type = self.infer_expr_type(&call_expr.args[0]);
+            if let Err(msg) = check_boolean_operand("!", &operand_type) {
+                self.result.boolean_op_errors.push((msg, None));
+            }
+        }
 
         // Check if this is a binary operator
         if is_binary_operator(fn_name) && call_expr.args.len() == 2 {
@@ -1069,33 +1105,32 @@ impl<'a> FunctionAnalyzer<'a> {
             Expr::Map(_, _) => InferredType::Map,
 
             Expr::FnCall(call_expr, _) => {
-                let fn_name = call_expr.name.as_str();
+                self.infer_fn_call_type(call_expr)
+            }
 
-                // Check if it's a binary operator first
-                if is_binary_operator(fn_name) && call_expr.args.len() == 2 {
-                    let left_type = self.infer_expr_type(&call_expr.args[0]);
-                    let right_type = self.infer_expr_type(&call_expr.args[1]);
-                    // Try to find result type, default to Dynamic on error
-                    check_binary_op(fn_name, &left_type, &right_type)
-                        .unwrap_or(InferredType::Dynamic)
-                }
-                // Check API function return types
-                else if let Some(api_fn) = get_api_function(fn_name) {
-                    match api_fn.returns {
-                        ReturnType::Unit => InferredType::Unit,
-                        ReturnType::Bool => InferredType::Bool,
-                        ReturnType::Map => InferredType::Map,
-                        ReturnType::Array => InferredType::Array,
-                        ReturnType::Number => InferredType::Float, // Could be Int too
-                        ReturnType::String => InferredType::String,
-                        ReturnType::Nullable => InferredType::Nullable,
-                        ReturnType::Dynamic => InferredType::Dynamic,
+            // Method call: x.method() - infer receiver and look up method
+            Expr::Dot(boxed, _, _) => {
+                if let Expr::FnCall(call_expr, _) = &boxed.rhs {
+                    let fn_name = call_expr.name.as_str();
+                    let receiver_type = self.infer_expr_type(&boxed.lhs);
+
+                    // Look up as built-in method
+                    if let Some(builtin) = get_builtin_method(fn_name, &receiver_type) {
+                        return builtin.returns.clone();
                     }
-                } else if is_nullable_fn_name(fn_name) {
-                    InferredType::Nullable
-                } else {
-                    InferredType::Dynamic
                 }
+                // If not a method call or unknown method, check if it's property access
+                InferredType::Dynamic
+            }
+
+            // Index operation: x[key] - result depends on container type
+            Expr::Index(boxed, _, _) => {
+                let container_type = self.infer_expr_type(&boxed.lhs);
+                let index_type = self.infer_expr_type(&boxed.rhs);
+
+                // Use index rules to determine result type
+                check_index_op(&container_type, &index_type)
+                    .unwrap_or(InferredType::Dynamic)
             }
 
             Expr::Variable(boxed, _, _) => {
@@ -1106,6 +1141,54 @@ impl<'a> FunctionAnalyzer<'a> {
             }
 
             _ => InferredType::Dynamic,
+        }
+    }
+
+    /// Infer the return type of a function call.
+    fn infer_fn_call_type(&self, call_expr: &FnCallExpr) -> InferredType {
+        let fn_name = call_expr.name.as_str();
+
+        // Check if it's a binary operator first
+        if is_binary_operator(fn_name) && call_expr.args.len() == 2 {
+            let left_type = self.infer_expr_type(&call_expr.args[0]);
+            let right_type = self.infer_expr_type(&call_expr.args[1]);
+            // Try to find result type, default to Dynamic on error
+            return check_binary_op(fn_name, &left_type, &right_type)
+                .unwrap_or(InferredType::Dynamic);
+        }
+
+        // Check if it's a method call (has receiver as first arg)
+        // In Rhai, method calls like x.floor() become FnCall("floor", [x])
+        if !call_expr.args.is_empty() {
+            let receiver_type = self.infer_expr_type(&call_expr.args[0]);
+            if let Some(builtin) = get_builtin_method(fn_name, &receiver_type) {
+                return builtin.returns.clone();
+            }
+        }
+
+        // Check built-in standalone functions
+        if let Some(builtin) = get_builtin_function(fn_name) {
+            return builtin.returns.clone();
+        }
+
+        // Check API function return types
+        if let Some(api_fn) = get_api_function(fn_name) {
+            return match api_fn.returns {
+                ReturnType::Unit => InferredType::Unit,
+                ReturnType::Bool => InferredType::Bool,
+                ReturnType::Map => InferredType::Map,
+                ReturnType::Array => InferredType::Array,
+                ReturnType::Number => InferredType::Float, // Could be Int too
+                ReturnType::String => InferredType::String,
+                ReturnType::Nullable => InferredType::Nullable,
+                ReturnType::Dynamic => InferredType::Dynamic,
+            };
+        }
+
+        if is_nullable_fn_name(fn_name) {
+            InferredType::Nullable
+        } else {
+            InferredType::Dynamic
         }
     }
 

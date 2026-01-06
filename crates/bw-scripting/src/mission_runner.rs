@@ -8,6 +8,7 @@
 
 use rhai::{Dynamic, Map};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::engine::{MissionContext, ScriptEngine, ScriptError};
 
@@ -22,12 +23,24 @@ impl<'a> MissionRunner<'a> {
     }
 
     /// Start a new mission, calling on_start in the script.
+    #[instrument(
+        level = "info",
+        skip(self, ctx),
+        fields(
+            script = %ctx.script_path,
+            mission_id = %ctx.mission_id,
+            player_id = %ctx.player_id
+        )
+    )]
     pub fn start_mission(&self, ctx: &MissionContext) -> Result<MissionOutcome, ScriptError> {
         let script_name = &ctx.script_path;
 
         if !self.engine.has_script(script_name) {
+            warn!(script = %script_name, "Mission script not found");
             return Err(ScriptError::NotFound(script_name.clone()));
         }
+
+        info!(script = %script_name, "Starting mission");
 
         let ctx_dynamic = ctx.to_dynamic();
         let result = self.engine.call_function_dynamic(
@@ -36,11 +49,33 @@ impl<'a> MissionRunner<'a> {
             (ctx_dynamic,),
         )?;
 
-        MissionOutcome::from_dynamic(result)
-            .ok_or_else(|| ScriptError::runtime(script_name, "Invalid mission result"))
+        let outcome = MissionOutcome::from_dynamic(result)
+            .ok_or_else(|| {
+                error!(script = %script_name, "Invalid mission result from on_start");
+                ScriptError::runtime(script_name, "Invalid mission result")
+            })?;
+
+        debug!(
+            script = %script_name,
+            new_state = %outcome.new_state,
+            choices = outcome.choices.len(),
+            is_complete = outcome.is_complete,
+            "Mission started"
+        );
+
+        Ok(outcome)
     }
 
     /// Process a player choice, calling on_choice in the script.
+    #[instrument(
+        level = "info",
+        skip(self, ctx),
+        fields(
+            script = %ctx.script_path,
+            mission_id = %ctx.mission_id,
+            choice = %choice_id
+        )
+    )]
     pub fn process_choice(
         &self,
         ctx: &MissionContext,
@@ -49,8 +84,11 @@ impl<'a> MissionRunner<'a> {
         let script_name = &ctx.script_path;
 
         if !self.engine.has_script(script_name) {
+            warn!(script = %script_name, "Mission script not found");
             return Err(ScriptError::NotFound(script_name.clone()));
         }
+
+        debug!(script = %script_name, choice = %choice_id, "Processing mission choice");
 
         let ctx_dynamic = ctx.to_dynamic();
         let result = self.engine.call_function_dynamic(
@@ -59,11 +97,34 @@ impl<'a> MissionRunner<'a> {
             (ctx_dynamic, choice_id.to_string()),
         )?;
 
-        MissionOutcome::from_dynamic(result)
-            .ok_or_else(|| ScriptError::runtime(script_name, "Invalid mission result"))
+        let outcome = MissionOutcome::from_dynamic(result)
+            .ok_or_else(|| {
+                error!(script = %script_name, "Invalid mission result from on_choice");
+                ScriptError::runtime(script_name, "Invalid mission result")
+            })?;
+
+        info!(
+            script = %script_name,
+            choice = %choice_id,
+            new_state = %outcome.new_state,
+            is_complete = outcome.is_complete,
+            "Mission choice processed"
+        );
+
+        Ok(outcome)
     }
 
     /// Process combat resolution, calling on_combat_resolved in the script.
+    #[instrument(
+        level = "info",
+        skip(self, ctx),
+        fields(
+            script = %ctx.script_path,
+            mission_id = %ctx.mission_id,
+            player_won,
+            enemy_fled
+        )
+    )]
     pub fn process_combat_result(
         &self,
         ctx: &MissionContext,
@@ -73,8 +134,16 @@ impl<'a> MissionRunner<'a> {
         let script_name = &ctx.script_path;
 
         if !self.engine.has_script(script_name) {
+            warn!(script = %script_name, "Mission script not found");
             return Err(ScriptError::NotFound(script_name.clone()));
         }
+
+        debug!(
+            script = %script_name,
+            player_won,
+            enemy_fled,
+            "Processing combat result for mission"
+        );
 
         let ctx_dynamic = ctx.to_dynamic();
 
@@ -90,11 +159,29 @@ impl<'a> MissionRunner<'a> {
             (ctx_dynamic, combat_result_dynamic),
         )?;
 
-        MissionOutcome::from_dynamic(result)
-            .ok_or_else(|| ScriptError::runtime(script_name, "Invalid mission result"))
+        let outcome = MissionOutcome::from_dynamic(result)
+            .ok_or_else(|| {
+                error!(script = %script_name, "Invalid mission result from on_combat_resolved");
+                ScriptError::runtime(script_name, "Invalid mission result")
+            })?;
+
+        info!(
+            script = %script_name,
+            new_state = %outcome.new_state,
+            is_complete = outcome.is_complete,
+            success = outcome.success,
+            "Mission combat result processed"
+        );
+
+        Ok(outcome)
     }
 
     /// Process a timed event (for missions with time pressure).
+    #[instrument(
+        level = "trace",
+        skip(self, ctx),
+        fields(script = %ctx.script_path, elapsed_seconds)
+    )]
     pub fn process_tick(
         &self,
         ctx: &MissionContext,
@@ -117,11 +204,26 @@ impl<'a> MissionRunner<'a> {
                 if result.is_unit() {
                     Ok(None)
                 } else {
-                    Ok(MissionOutcome::from_dynamic(result))
+                    let outcome = MissionOutcome::from_dynamic(result);
+                    if let Some(ref o) = outcome {
+                        debug!(
+                            script = %script_name,
+                            new_state = %o.new_state,
+                            is_complete = o.is_complete,
+                            "Mission tick produced outcome"
+                        );
+                    }
+                    Ok(outcome)
                 }
             }
-            Err(e) if e.is_function_not_found() => Ok(None),
-            Err(e) => Err(e),
+            Err(e) if e.is_function_not_found() => {
+                trace!(script = %script_name, "Mission has no on_tick handler");
+                Ok(None)
+            }
+            Err(e) => {
+                error!(script = %script_name, error = %e, "Mission tick failed");
+                Err(e)
+            }
         }
     }
 }

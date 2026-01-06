@@ -3,7 +3,9 @@
 //! Dispatches game events to subscribed script handlers.
 
 use std::sync::Arc;
+use std::time::Instant;
 use rhai::{Dynamic, Map};
+use tracing::{debug, error, instrument, trace, warn};
 use uuid::Uuid;
 
 use bw_core::events::{GameEvent, GameEventType};
@@ -63,57 +65,95 @@ impl EventDispatcher {
     }
 
     /// Dispatch an event to all subscribed handlers.
+    #[instrument(
+        level = "debug",
+        skip(self, event),
+        fields(
+            event_type = ?event.event_type,
+            event_id = %event.id,
+            sector_id = %event.sector_id,
+            actor_id = ?event.actor_id
+        )
+    )]
     pub fn dispatch(&self, event: &GameEvent) -> DispatchResult {
+        let start = Instant::now();
         let mut result = DispatchResult::new(event.event_type);
 
         // Get handlers sorted by priority
         let handlers = self.registry.get_handlers_sorted(event.event_type);
 
         if handlers.is_empty() {
+            trace!(event_type = ?event.event_type, "No handlers registered for event");
             return result;
         }
+
+        trace!(
+            event_type = ?event.event_type,
+            total_handlers = handlers.len(),
+            "Processing event handlers"
+        );
 
         // Convert event to Rhai map
         let event_data = event_to_dynamic(event);
 
         for handler in handlers {
             if !handler.enabled {
+                trace!(handler_id = %handler.id, "Skipping disabled handler");
                 continue;
             }
 
             // Check sector filter
             if let Some(sector_filter) = handler.sector_id
                 && event.sector_id != sector_filter {
+                    trace!(handler_id = %handler.id, "Handler filtered by sector");
                     continue;
                 }
 
             // Check custom filter
             if let Some(ref filter) = handler.filter
                 && !filter.matches(event.sector_id, event.actor_id, event.target_id) {
+                    trace!(handler_id = %handler.id, "Handler filtered by custom filter");
                     continue;
                 }
 
             result.handlers_called += 1;
+
+            trace!(
+                handler_id = %handler.id,
+                script = %handler.script_path,
+                function = %handler.handler_function,
+                "Executing event handler"
+            );
 
             // Execute handler
             match self.execute_handler(&handler, event_data.clone()) {
                 Ok(mutations) => {
                     result.successes += 1;
                     result.mutations.extend(mutations);
+                    trace!(handler_id = %handler.id, "Event handler succeeded");
                 }
                 Err(e) => {
+                    warn!(
+                        handler_id = %handler.id,
+                        error = %e,
+                        "Event handler failed"
+                    );
                     result.failures.push((handler.id, e));
                 }
             }
         }
 
+        let elapsed = start.elapsed();
+
         if result.handlers_called > 0 {
-            tracing::debug!(
+            debug!(
                 event_type = ?event.event_type,
-                handlers = result.handlers_called,
+                handlers_called = result.handlers_called,
                 successes = result.successes,
                 failures = result.failures.len(),
-                "Event dispatched"
+                mutations = result.mutations.len(),
+                elapsed_us = elapsed.as_micros() as u64,
+                "Event dispatch completed"
             );
         }
 
@@ -121,6 +161,11 @@ impl EventDispatcher {
     }
 
     /// Dispatch a simple event (no full GameEvent struct).
+    #[instrument(
+        level = "debug",
+        skip(self, data),
+        fields(event_type = ?event_type, sector_id = %sector_id, actor_id = ?actor_id)
+    )]
     pub fn dispatch_simple(
         &self,
         event_type: GameEventType,
@@ -139,9 +184,19 @@ impl EventDispatcher {
             data: serde_json::to_value(&data).unwrap_or_default(),
         };
 
+        trace!("Created simple event for dispatch");
         self.dispatch(&event)
     }
 
+    #[instrument(
+        level = "trace",
+        skip(self, handler, event_data),
+        fields(
+            handler_id = %handler.id,
+            script = %handler.script_path,
+            function = %handler.handler_function
+        )
+    )]
     fn execute_handler(
         &self,
         handler: &EventSubscription,
@@ -149,6 +204,7 @@ impl EventDispatcher {
     ) -> Result<Vec<StateMutation>, String> {
         // Check script exists
         if !self.engine.has_script(&handler.script_path) {
+            error!(script = %handler.script_path, "Script not found for event handler");
             return Err(format!("Script not found: {}", handler.script_path));
         }
 
@@ -183,9 +239,12 @@ impl EventDispatcher {
 
             // Enter execution context (RAII guard handles cleanup)
             match ExecutionGuard::enter(exec_ctx) {
-                Ok(guard) => Some(guard),
+                Ok(guard) => {
+                    trace!("Execution context entered for event handler");
+                    Some(guard)
+                }
                 Err(e) => {
-                    tracing::warn!("Failed to enter execution context for event handler: {}", e);
+                    warn!(error = %e, "Failed to enter execution context for event handler");
                     None
                 }
             }
@@ -203,6 +262,8 @@ impl EventDispatcher {
         }
         ctx.insert("subscription_id".into(), handler.id.to_string().into());
 
+        let start = Instant::now();
+
         // Call the handler function
         let result = self.engine.call_function_dynamic(
             &handler.script_path,
@@ -210,9 +271,13 @@ impl EventDispatcher {
             (Dynamic::from(ctx), event_data),
         );
 
+        let elapsed = start.elapsed();
+
         // Collect mutations before guard drops
         let mutations = if let Some(ref accessor) = self.state_accessor {
-            accessor.take_mutations()
+            let m = accessor.take_mutations();
+            trace!(mutations = m.len(), "Collected mutations from event handler");
+            m
         } else {
             Vec::new()
         };
@@ -220,8 +285,22 @@ impl EventDispatcher {
         // Guard drops here automatically
 
         match result {
-            Ok(_) => Ok(mutations),
-            Err(e) => Err(e.to_string()),
+            Ok(_) => {
+                trace!(
+                    elapsed_us = elapsed.as_micros() as u64,
+                    mutations = mutations.len(),
+                    "Event handler executed successfully"
+                );
+                Ok(mutations)
+            }
+            Err(e) => {
+                error!(
+                    elapsed_us = elapsed.as_micros() as u64,
+                    error = %e,
+                    "Event handler execution failed"
+                );
+                Err(e.to_string())
+            }
         }
     }
 }

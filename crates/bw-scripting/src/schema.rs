@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use serde::Deserialize;
 
+use crate::schema_traits::{Schema, SchemaField, SchemaRegistry, TypeCategory};
+
 // =============================================================================
 // Archetype Schema (from derive macro)
 // =============================================================================
@@ -86,6 +88,51 @@ impl FieldSchema {
 pub trait RhaiSchema {
     /// Get the schema for this type.
     fn schema() -> ArchetypeSchema;
+}
+
+// =============================================================================
+// Schema Trait Implementations for ArchetypeSchema
+// =============================================================================
+
+impl SchemaField for FieldSchema {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn type_name(&self) -> &str {
+        self.rust_type
+    }
+
+    fn type_category(&self) -> TypeCategory {
+        if self.is_optional() {
+            TypeCategory::Optional
+        } else if self.is_string() {
+            TypeCategory::String
+        } else if self.is_numeric() {
+            TypeCategory::Number
+        } else if self.is_bool() {
+            TypeCategory::Bool
+        } else if self.is_array() {
+            TypeCategory::Array
+        } else {
+            TypeCategory::Unknown
+        }
+    }
+
+    fn is_required(&self) -> bool {
+        self.required
+    }
+}
+
+impl Schema for ArchetypeSchema {
+    type Field = FieldSchema;
+
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn fields(&self) -> &[Self::Field] {
+        self.fields
+    }
 }
 
 // =============================================================================
@@ -359,6 +406,54 @@ impl DefinitionSchemaRegistry {
         } else {
             None
         }
+    }
+}
+
+// =============================================================================
+// Schema Trait Implementations for DefinitionSchema
+// =============================================================================
+
+impl SchemaField for DefFieldSchema {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn type_name(&self) -> &str {
+        self.field_type.name()
+    }
+
+    fn type_category(&self) -> TypeCategory {
+        match self.field_type {
+            DefFieldType::String => TypeCategory::String,
+            DefFieldType::Number => TypeCategory::Number,
+            DefFieldType::Bool => TypeCategory::Bool,
+            DefFieldType::Array => TypeCategory::Array,
+            DefFieldType::Map => TypeCategory::Map,
+            DefFieldType::Any => TypeCategory::Unknown,
+        }
+    }
+
+    fn is_required(&self) -> bool {
+        self.required
+    }
+}
+
+impl Schema for DefinitionSchema {
+    type Field = DefFieldSchema;
+
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn fields(&self) -> &[Self::Field] {
+        self.fields
+    }
+}
+
+impl SchemaRegistry for DefinitionSchemaRegistry {
+    type Schema = DefinitionSchema;
+
+    fn get_schema(&self, name: &str) -> Option<&Self::Schema> {
+        self.schemas.get(name).copied()
     }
 }
 
@@ -658,5 +753,104 @@ mod tests {
         } else {
             eprintln!("Schema file not found at {:?}, skipping", schema_path);
         }
+    }
+
+    // ==========================================================================
+    // Schema Trait Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_schema_trait_archetype() {
+        use crate::schema_traits::Schema;
+
+        static FIELDS: [FieldSchema; 2] = [
+            FieldSchema { name: "id", rust_type: "String", required: true },
+            FieldSchema { name: "count", rust_type: "i32", required: false },
+        ];
+
+        let schema = ArchetypeSchema {
+            name: "Test",
+            fields: &FIELDS,
+        };
+
+        // Test Schema trait methods
+        assert_eq!(Schema::name(&schema), "Test");
+        assert_eq!(Schema::fields(&schema).len(), 2);
+        assert!(Schema::has_field(&schema, "id"));
+        assert!(!Schema::has_field(&schema, "missing"));
+
+        let required: Vec<_> = Schema::required_field_names(&schema).collect();
+        assert_eq!(required, vec!["id"]);
+    }
+
+    #[test]
+    fn test_schema_trait_definition() {
+        use crate::schema_traits::Schema;
+
+        // Test DefinitionSchema implements Schema trait
+        let schema = &SHIP_SCHEMA;
+
+        assert_eq!(Schema::name(schema), "ShipArchetype");
+        assert!(Schema::has_field(schema, "id"));
+        assert!(Schema::has_field(schema, "name"));
+        assert!(!Schema::has_field(schema, "nonexistent"));
+
+        // Check required fields through trait
+        let required: Vec<_> = Schema::required_field_names(schema).collect();
+        assert!(required.contains(&"id"));
+        assert!(required.contains(&"name"));
+    }
+
+    #[test]
+    fn test_schema_field_trait() {
+        use crate::schema_traits::SchemaField;
+
+        // FieldSchema
+        let field = FieldSchema { name: "test", rust_type: "String", required: true };
+        assert_eq!(SchemaField::name(&field), "test");
+        assert_eq!(SchemaField::type_name(&field), "String");
+        assert!(SchemaField::is_required(&field));
+
+        // DefFieldSchema
+        let def_field = DefFieldSchema::required("id", DefFieldType::String);
+        assert_eq!(SchemaField::name(&def_field), "id");
+        assert_eq!(SchemaField::type_name(&def_field), "string");
+        assert!(SchemaField::is_required(&def_field));
+    }
+
+    #[test]
+    fn test_type_category() {
+        use crate::schema_traits::SchemaField;
+
+        // FieldSchema type categories
+        let string_field = FieldSchema { name: "s", rust_type: "String", required: false };
+        assert_eq!(SchemaField::type_category(&string_field), TypeCategory::String);
+
+        let num_field = FieldSchema { name: "n", rust_type: "i32", required: false };
+        assert_eq!(SchemaField::type_category(&num_field), TypeCategory::Number);
+
+        let array_field = FieldSchema { name: "a", rust_type: "Vec<i32>", required: false };
+        assert_eq!(SchemaField::type_category(&array_field), TypeCategory::Array);
+
+        // DefFieldSchema type categories
+        let def_string = DefFieldSchema::optional("s", DefFieldType::String);
+        assert_eq!(SchemaField::type_category(&def_string), TypeCategory::String);
+
+        let def_map = DefFieldSchema::optional("m", DefFieldType::Map);
+        assert_eq!(SchemaField::type_category(&def_map), TypeCategory::Map);
+    }
+
+    #[test]
+    fn test_schema_registry_trait() {
+        use crate::schema_traits::SchemaRegistry;
+
+        let registry = DefinitionSchemaRegistry::with_builtins();
+
+        assert!(SchemaRegistry::has_schema(&registry, "ship"));
+        assert!(SchemaRegistry::has_schema(&registry, "weapon"));
+        assert!(!SchemaRegistry::has_schema(&registry, "nonexistent"));
+
+        let ship_schema = SchemaRegistry::get_schema(&registry, "ship").unwrap();
+        assert_eq!(ship_schema.name, "ShipArchetype");
     }
 }

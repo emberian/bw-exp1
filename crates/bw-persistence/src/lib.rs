@@ -146,4 +146,29 @@ impl Database {
     pub async fn register_player(&self, player: &Player, password_hash: &str, ship: &Ship) -> Result<(), DbError> {
         self.queries().register_player_atomically(player, password_hash, ship).await
     }
+
+    /// Count factions.
+    pub async fn count_factions(&self) -> Result<u64, DbError> {
+        self.queries().count_factions().await
+    }
+
+    /// Count sectors.
+    pub async fn count_sectors(&self) -> Result<u64, DbError> {
+        self.queries().count_sectors().await
+    }
+
+    /// Insert a faction.
+    pub async fn insert_faction(&self, faction: &Faction) -> Result<(), DbError> {
+        self.queries().insert_faction(faction).await
+    }
+
+    /// Insert a sector.
+    pub async fn insert_sector(&self, sector: &Sector) -> Result<(), DbError> {
+        self.queries().insert_sector(sector).await
+    }
+
+    /// Insert a location in a sector.
+    pub async fn insert_location(&self, sector_id: Uuid, location: &bw_core::models::Location) -> Result<(), DbError> {
+        self.queries().insert_location(sector_id, location).await
+    }
 }

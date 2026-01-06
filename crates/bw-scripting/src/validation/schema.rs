@@ -5,6 +5,8 @@
 
 use rhai::Position;
 
+use crate::schema_traits::{Schema, SchemaField, TypeCategory};
+
 // ============================================================================
 // Schema Types
 // ============================================================================
@@ -45,6 +47,66 @@ impl ObjectSchema {
     /// Find a field by name.
     pub fn get_field(&self, name: &str) -> Option<&NestedFieldSchema> {
         self.fields.iter().find(|f| f.name == name)
+    }
+}
+
+// ============================================================================
+// Schema Trait Implementations
+// ============================================================================
+
+impl NestedFieldType {
+    /// Get type name for error messages.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            NestedFieldType::String => "string",
+            NestedFieldType::Int => "int",
+            NestedFieldType::Float => "float",
+            NestedFieldType::Bool => "bool",
+            NestedFieldType::Uuid => "uuid",
+            NestedFieldType::Array(_) => "array",
+            NestedFieldType::Object(name) => name,
+            NestedFieldType::Optional(name) => name,
+            NestedFieldType::Dynamic => "dynamic",
+        }
+    }
+}
+
+impl SchemaField for NestedFieldSchema {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn type_name(&self) -> &str {
+        self.field_type.type_name()
+    }
+
+    fn type_category(&self) -> TypeCategory {
+        match &self.field_type {
+            NestedFieldType::String | NestedFieldType::Uuid => TypeCategory::String,
+            NestedFieldType::Int | NestedFieldType::Float => TypeCategory::Number,
+            NestedFieldType::Bool => TypeCategory::Bool,
+            NestedFieldType::Array(_) => TypeCategory::Array,
+            NestedFieldType::Object(_) => TypeCategory::Map,
+            NestedFieldType::Optional(_) => TypeCategory::Optional,
+            NestedFieldType::Dynamic => TypeCategory::Unknown,
+        }
+    }
+
+    fn is_required(&self) -> bool {
+        // In ObjectSchema, all fields are optional by default
+        // (they may or may not be present at runtime)
+        false
+    }
+}
+
+impl Schema for ObjectSchema {
+    type Field = NestedFieldSchema;
+
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn fields(&self) -> &[Self::Field] {
+        self.fields
     }
 }
 

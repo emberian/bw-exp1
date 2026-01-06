@@ -3,6 +3,7 @@
 //! Handles squadron CRUD, membership, sector control, building, and PvP rules.
 
 use uuid::Uuid;
+use tracing::{debug, info, instrument, warn};
 
 use bw_core::models::{Squadron, SquadronBuildingType, SquadronRank, Location, LocationType, StationService, Ship, ShipClass};
 use bw_game::systems::spend_reputation;
@@ -19,6 +20,7 @@ pub struct SquadronResult {
 }
 
 /// Create a new squadron.
+#[instrument(skip(state), fields(player_id = %player_id, name = %name, tag = %tag))]
 pub fn create_squadron(
     state: &GameState,
     player_id: Uuid,
@@ -106,12 +108,7 @@ pub fn create_squadron(
     // Store squadron
     state.squadrons.insert(squadron_id, squadron);
 
-    tracing::info!(
-        "Squadron '{}' [{}] created by player {}",
-        name,
-        tag,
-        player_id
-    );
+    info!(squadron_id = %squadron_id, "Squadron created");
 
     SquadronResult {
         success: true,
@@ -129,6 +126,7 @@ pub struct InviteResult {
 }
 
 /// Invite a player to the squadron (creates pending invite).
+#[instrument(skip(state), fields(inviter_id = %inviter_id, invitee_id = %invitee_id))]
 pub fn invite_to_squadron(
     state: &GameState,
     inviter_id: Uuid,
@@ -231,11 +229,10 @@ pub fn invite_to_squadron(
     let invite_clone = invite.clone();
     state.pending_squadron_invites.insert(invitee_id, invite);
 
-    tracing::info!(
-        "Player {} invited {} to squadron '{}'",
-        inviter_name,
-        invitee_name,
-        squadron_name
+    info!(
+        invitee_name = %invitee_name,
+        squadron_name = %squadron_name,
+        "Player invited to squadron"
     );
 
     InviteResult {
@@ -305,11 +302,7 @@ pub fn accept_squadron_invite(
     let squadron_name = squadron.name.clone();
     drop(squadron);
 
-    tracing::info!(
-        "Player {} joined squadron '{}'",
-        player_name,
-        squadron_name
-    );
+    info!(player_name = %player_name, squadron_name = %squadron_name, "Player joined squadron");
 
     SquadronResult {
         success: true,
@@ -336,11 +329,7 @@ pub fn decline_squadron_invite(
         }
     };
 
-    tracing::info!(
-        "Player {} declined invitation to squadron '{}'",
-        player_id,
-        invite.squadron_name
-    );
+    debug!(squadron_name = %invite.squadron_name, "Player declined squadron invitation");
 
     SquadronResult {
         success: true,
@@ -399,7 +388,7 @@ pub fn leave_squadron(state: &GameState, player_id: Uuid) -> SquadronResult {
             player.squadron_id = None;
             player.squadron_rank = None;
 
-            tracing::info!("Squadron '{}' disbanded", squadron_name);
+            info!(squadron_name = %squadron_name, "Squadron disbanded");
 
             return SquadronResult {
                 success: true,
@@ -849,10 +838,9 @@ fn declare_war(
     drop(squadron);
 
     // The target squadron can choose to reciprocate
-    tracing::info!(
-        "Squadron {} declared war on {}",
-        squadron_id,
-        target_squadron_id
+    info!(
+        target_squadron_id = %target_squadron_id,
+        "Squadron declared war"
     );
 
     SquadronResult {
@@ -897,11 +885,7 @@ fn make_peace(
 
     squadron.make_peace(target_squadron_id);
 
-    tracing::info!(
-        "Squadron {} made peace with {}",
-        squadron_id,
-        target_squadron_id
-    );
+    info!(target_squadron_id = %target_squadron_id, "Squadron made peace");
 
     SquadronResult {
         success: true,
@@ -1000,11 +984,7 @@ fn form_alliance(
 
     state.pending_alliances.insert(target_squadron_id, proposal);
 
-    tracing::info!(
-        "Squadron '{}' proposed alliance to '{}'",
-        from_squadron_name,
-        target_name
-    );
+    info!(from = %from_squadron_name, to = %target_name, "Squadron proposed alliance");
 
     SquadronResult {
         success: true,
@@ -1085,10 +1065,10 @@ pub fn accept_alliance(
         to_squadron.form_alliance(proposal.from_squadron_id);
     }
 
-    tracing::info!(
-        "Alliance formed between squadrons {} and {}",
-        proposal.from_squadron_id,
-        squadron_id
+    info!(
+        from_squadron_id = %proposal.from_squadron_id,
+        to_squadron_id = %squadron_id,
+        "Alliance formed"
     );
 
     SquadronResult {
@@ -1161,11 +1141,7 @@ pub fn decline_alliance(
         }
     };
 
-    tracing::info!(
-        "Squadron {} declined alliance from {}",
-        squadron_id,
-        proposal.from_squadron_name
-    );
+    debug!(from_squadron = %proposal.from_squadron_name, "Alliance proposal declined");
 
     SquadronResult {
         success: true,
@@ -1298,7 +1274,7 @@ pub fn claim_sector_control(
 
                 state.contested_sectors.remove(&sector_id);
 
-                tracing::info!("Squadron {} captured sector {} from {}", squadron_id, sector_id, defender_id);
+                info!(squadron_id = %squadron_id, sector_id = %sector_id, from = %defender_id, "Squadron captured sector");
 
                 return SquadronResult {
                     success: true,
@@ -1333,11 +1309,11 @@ pub fn claim_sector_control(
             .map(|s| s.sector.name.clone())
             .unwrap_or_default();
 
-        tracing::info!(
-            "Squadron {} initiated contest for sector '{}' against {}",
-            squadron_id,
-            sector_name,
-            controller_id
+        info!(
+            squadron_id = %squadron_id,
+            sector_name = %sector_name,
+            defender = %controller_id,
+            "Sector contest initiated"
         );
 
         return SquadronResult {
@@ -1362,7 +1338,7 @@ pub fn claim_sector_control(
             squadron.stats.sectors_controlled = squadron.patrol_sectors.len() as i32;
         }
 
-    tracing::info!("Squadron {} claimed sector '{}'", squadron_id, sector_name);
+    info!(squadron_id = %squadron_id, sector_name = %sector_name, "Squadron claimed sector");
 
     SquadronResult {
         success: true,
@@ -1455,7 +1431,7 @@ pub fn release_sector_control(
         squadron.stats.sectors_controlled = squadron.patrol_sectors.len() as i32;
     }
 
-    tracing::info!("Squadron {} released sector '{}'", squadron_id, sector_name);
+    info!(squadron_id = %squadron_id, sector_name = %sector_name, "Squadron released sector");
 
     SquadronResult {
         success: true,
@@ -1652,13 +1628,12 @@ pub fn build_structure(
     let sector_name = sector.sector.name.clone();
     drop(sector);
 
-    tracing::info!(
-        "Player {} built {:?} in sector '{}' for {} rep (squadron: {})",
-        player_id,
-        building_type,
-        sector_name,
+    info!(
+        building_type = ?building_type,
+        sector_name = %sector_name,
         cost,
-        squadron_name
+        squadron_name = %squadron_name,
+        "Structure built"
     );
 
     SquadronResult {

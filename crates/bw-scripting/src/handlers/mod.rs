@@ -20,8 +20,10 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Instant;
 use parking_lot::RwLock;
 use rhai::{Dynamic, Map};
+use tracing::{debug, error, instrument, trace, warn};
 use uuid::Uuid;
 
 use crate::engine::ScriptEngine;
@@ -296,32 +298,63 @@ impl<C: HandlerContext> HandlerDispatcher<C> {
     }
 
     /// Dispatch to a handler by name.
+    #[instrument(level = "debug", skip(self, ctx, params), fields(handler = %name))]
     pub fn dispatch(&self, name: &str, ctx: &C, params: &Dynamic) -> HandlerResult {
+        let start = Instant::now();
+
         // Look up the handler
         let handler = match self.registry.get(name) {
             Some(h) => h,
             None => {
-                tracing::debug!(name = %name, "Handler not found");
+                debug!(handler = %name, "Handler not found");
                 return HandlerResult::error(format!("Unknown handler: {}", name));
             }
         };
 
         // Check if handler is enabled
         if !handler.enabled {
+            warn!(handler = %name, "Handler is disabled");
             return HandlerResult::error(format!("Handler '{}' is currently disabled", name));
         }
 
+        trace!(handler = %name, "Executing handler");
+
         // Execute based on handler type
         match self.execute_handler(&handler, ctx, params) {
-            Ok((result, mutations)) => result.with_mutations(mutations),
+            Ok((result, mutations)) => {
+                let elapsed = start.elapsed();
+                if result.success {
+                    debug!(
+                        handler = %name,
+                        mutations = mutations.len(),
+                        elapsed_us = elapsed.as_micros() as u64,
+                        "Handler executed successfully"
+                    );
+                } else {
+                    warn!(
+                        handler = %name,
+                        error = ?result.error,
+                        elapsed_us = elapsed.as_micros() as u64,
+                        "Handler returned failure"
+                    );
+                }
+                result.with_mutations(mutations)
+            }
             Err(e) => {
-                tracing::warn!(name = %name, error = %e, "Handler execution failed");
+                let elapsed = start.elapsed();
+                error!(
+                    handler = %name,
+                    error = %e,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    "Handler execution failed"
+                );
                 HandlerResult::error(e)
             }
         }
     }
 
     /// Execute a handler.
+    #[instrument(level = "trace", skip(self, handler, ctx, params), fields(handler = %handler.name))]
     fn execute_handler(
         &self,
         handler: &Handler<C>,
@@ -330,17 +363,30 @@ impl<C: HandlerContext> HandlerDispatcher<C> {
     ) -> Result<(HandlerResult, Vec<StateMutation>), String> {
         match &handler.handler_type {
             HandlerType::Builtin(handler_fn) => {
+                trace!(handler = %handler.name, "Executing built-in handler");
                 // Built-in handlers execute directly
                 let result = handler_fn.execute(ctx, params);
+                trace!(handler = %handler.name, success = result.success, "Built-in handler completed");
                 Ok((result, Vec::new()))
             }
             HandlerType::Script { script_path, function_name } => {
+                trace!(
+                    handler = %handler.name,
+                    script = %script_path,
+                    function = %function_name,
+                    "Executing script handler"
+                );
                 self.execute_script_handler(script_path, function_name, ctx, params)
             }
         }
     }
 
     /// Execute a script-based handler.
+    #[instrument(
+        level = "trace",
+        skip(self, ctx, params),
+        fields(script = %script_path, function = %function_name)
+    )]
     fn execute_script_handler(
         &self,
         script_path: &str,
@@ -350,6 +396,7 @@ impl<C: HandlerContext> HandlerDispatcher<C> {
     ) -> Result<(HandlerResult, Vec<StateMutation>), String> {
         // Check script exists
         if !self.engine.has_script(script_path) {
+            error!(script = %script_path, "Script not found for handler");
             return Err(format!("Script not found: {}", script_path));
         }
 
@@ -368,15 +415,20 @@ impl<C: HandlerContext> HandlerDispatcher<C> {
             }
 
             match ExecutionGuard::enter(exec_ctx) {
-                Ok(guard) => Some(guard),
+                Ok(guard) => {
+                    trace!("Execution context entered for script handler");
+                    Some(guard)
+                }
                 Err(e) => {
-                    tracing::warn!("Failed to enter execution context: {}", e);
+                    warn!(error = %e, "Failed to enter execution context");
                     return Err(format!("Execution context error: {}", e));
                 }
             }
         } else {
             None
         };
+
+        let start = Instant::now();
 
         // Call the handler function
         let result = self.engine.call_function_dynamic(
@@ -385,9 +437,13 @@ impl<C: HandlerContext> HandlerDispatcher<C> {
             (ctx.to_dynamic(), params.clone()),
         );
 
+        let elapsed = start.elapsed();
+
         // Collect mutations before guard drops
         let mutations = if let Some(ref accessor) = self.state_accessor {
-            accessor.take_mutations()
+            let m = accessor.take_mutations();
+            trace!(mutations = m.len(), "Collected mutations from handler");
+            m
         } else {
             Vec::new()
         };
@@ -396,9 +452,21 @@ impl<C: HandlerContext> HandlerDispatcher<C> {
         match result {
             Ok(return_val) => {
                 let handler_result = parse_handler_result(return_val);
+                trace!(
+                    success = handler_result.success,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    "Script handler completed"
+                );
                 Ok((handler_result, mutations))
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                error!(
+                    error = %e,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    "Script handler execution failed"
+                );
+                Err(e.to_string())
+            }
         }
     }
 }

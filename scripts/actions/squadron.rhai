@@ -109,7 +109,7 @@ fn handle_create_squadron(ctx, params) {
 }
 
 // Leave current squadron
-fn handle_leave_squadron(ctx, params) {
+fn handle_leave_squadron(ctx, _params) {
     let player_id = ctx["player_id"];
     let player = query_player(player_id);
 

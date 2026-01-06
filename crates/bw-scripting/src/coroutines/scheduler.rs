@@ -5,7 +5,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::Instant;
 use parking_lot::{Mutex, RwLock};
+use tracing::{debug, error, instrument, trace, warn};
 use uuid::Uuid;
 use rhai::{Dynamic, Map, Scope};
 
@@ -67,6 +69,7 @@ impl CoroutineScheduler {
     }
 
     /// Spawn a new coroutine.
+    #[instrument(level = "debug", skip(self), fields(script = %script_path, function = %function_name, tick = current_tick))]
     pub fn spawn(
         &self,
         script_path: &str,
@@ -75,6 +78,7 @@ impl CoroutineScheduler {
     ) -> Result<Uuid, ScriptError> {
         // Verify script exists
         if !self.engine.has_script(script_path) {
+            warn!(script = %script_path, "Cannot spawn coroutine: script not found");
             return Err(ScriptError::NotFound(script_path.to_string()));
         }
 
@@ -84,12 +88,28 @@ impl CoroutineScheduler {
         self.coroutines.write().insert(id, coroutine);
         self.ready_queue.lock().push_back(id);
 
-        tracing::debug!(coroutine_id = %id, script = script_path, function = function_name, "Spawned coroutine");
+        debug!(
+            coroutine_id = %id,
+            script = %script_path,
+            function = %function_name,
+            "Coroutine spawned"
+        );
 
         Ok(id)
     }
 
     /// Spawn a coroutine with owner and sector context.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            script = %script_path,
+            function = %function_name,
+            tick = current_tick,
+            owner = ?owner_entity_id,
+            sector = ?sector_id
+        )
+    )]
     pub fn spawn_with_context(
         &self,
         script_path: &str,
@@ -99,6 +119,7 @@ impl CoroutineScheduler {
         sector_id: Option<Uuid>,
     ) -> Result<Uuid, ScriptError> {
         if !self.engine.has_script(script_path) {
+            warn!(script = %script_path, "Cannot spawn coroutine: script not found");
             return Err(ScriptError::NotFound(script_path.to_string()));
         }
 
@@ -111,6 +132,8 @@ impl CoroutineScheduler {
         self.coroutines.write().insert(id, coroutine);
         self.ready_queue.lock().push_back(id);
 
+        debug!(coroutine_id = %id, "Coroutine spawned with context");
+
         Ok(id)
     }
 
@@ -118,6 +141,16 @@ impl CoroutineScheduler {
     ///
     /// Unlike `spawn_with_context`, this doesn't add the coroutine to the ready queue.
     /// Instead, it schedules it to wake up at `current_tick + delay_ticks`.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            script = %script_path,
+            function = %function_name,
+            tick = current_tick,
+            delay = delay_ticks
+        )
+    )]
     pub fn spawn_scheduled(
         &self,
         script_path: &str,
@@ -128,6 +161,7 @@ impl CoroutineScheduler {
         sector_id: Option<Uuid>,
     ) -> Result<Uuid, ScriptError> {
         if !self.engine.has_script(script_path) {
+            warn!(script = %script_path, "Cannot spawn scheduled coroutine: script not found");
             return Err(ScriptError::NotFound(script_path.to_string()));
         }
 
@@ -146,19 +180,17 @@ impl CoroutineScheduler {
             .or_default()
             .push(id);
 
-        tracing::debug!(
+        debug!(
             coroutine_id = %id,
-            script = script_path,
-            function = function_name,
-            delay_ticks,
             resume_tick,
-            "Spawned scheduled coroutine"
+            "Scheduled coroutine spawned"
         );
 
         Ok(id)
     }
 
     /// Cancel a coroutine.
+    #[instrument(level = "debug", skip(self), fields(coroutine_id = %coroutine_id))]
     pub fn cancel(&self, coroutine_id: Uuid) -> bool {
         let mut coroutines = self.coroutines.write();
         if let Some(coroutine) = coroutines.remove(&coroutine_id) {
@@ -174,14 +206,21 @@ impl CoroutineScheduler {
                     waiters.retain(|id| *id != coroutine_id);
                 }
 
-            tracing::debug!(coroutine_id = %coroutine_id, "Cancelled coroutine");
+            debug!(
+                coroutine_id = %coroutine_id,
+                script = %coroutine.script_path,
+                function = %coroutine.function_name,
+                "Coroutine cancelled"
+            );
             true
         } else {
+            trace!(coroutine_id = %coroutine_id, "Coroutine not found for cancellation");
             false
         }
     }
 
     /// Cancel all coroutines for an entity.
+    #[instrument(level = "debug", skip(self), fields(entity_id = %entity_id))]
     pub fn cancel_for_entity(&self, entity_id: Uuid) {
         let ids_to_cancel: Vec<Uuid> = self.coroutines.read()
             .iter()
@@ -189,18 +228,26 @@ impl CoroutineScheduler {
             .map(|(id, _)| *id)
             .collect();
 
-        for id in ids_to_cancel {
-            self.cancel(id);
+        if !ids_to_cancel.is_empty() {
+            debug!(count = ids_to_cancel.len(), "Cancelling coroutines for entity");
+            for id in ids_to_cancel {
+                self.cancel(id);
+            }
         }
     }
 
     /// Process one tick of coroutine scheduling.
+    #[instrument(level = "trace", skip(self), fields(tick = current_tick))]
     pub fn tick(&self, current_tick: u64) -> CoroutineTickResult {
+        let start = Instant::now();
+
         // Move tick waiters that are ready to the ready queue
         self.wake_tick_waiters(current_tick);
 
         // Move next-frame waiters to ready queue
         self.wake_next_frame_waiters();
+
+        let ready_count = self.ready_queue.lock().len();
 
         // Process ready coroutines (up to max_per_tick)
         let mut completed = Vec::new();
@@ -219,17 +266,21 @@ impl CoroutineScheduler {
 
             match self.execute_coroutine(id, current_tick) {
                 Ok(CoroutineExecResult::Completed(_)) => {
+                    trace!(coroutine_id = %id, "Coroutine completed");
                     completed.push(id);
                     self.coroutines.write().remove(&id);
                 }
                 Ok(CoroutineExecResult::Yielded(request)) => {
+                    trace!(coroutine_id = %id, yield_type = ?request.yield_type, "Coroutine yielded");
                     self.handle_yield(id, request, current_tick);
                 }
                 Ok(CoroutineExecResult::Failed(error)) => {
+                    warn!(coroutine_id = %id, error = %error, "Coroutine failed");
                     failed.push((id, error));
                     self.coroutines.write().remove(&id);
                 }
                 Err(e) => {
+                    error!(coroutine_id = %id, error = %e, "Coroutine execution error");
                     failed.push((id, e.to_string()));
                     self.coroutines.write().remove(&id);
                 }
@@ -239,6 +290,20 @@ impl CoroutineScheduler {
         }
 
         let pending_count = self.coroutines.read().len();
+        let elapsed = start.elapsed();
+
+        if processed > 0 || !completed.is_empty() || !failed.is_empty() {
+            debug!(
+                tick = current_tick,
+                ready = ready_count,
+                processed,
+                completed = completed.len(),
+                failed = failed.len(),
+                pending = pending_count,
+                elapsed_us = elapsed.as_micros() as u64,
+                "Coroutine tick processed"
+            );
+        }
 
         CoroutineTickResult {
             completed,
@@ -248,6 +313,7 @@ impl CoroutineScheduler {
     }
 
     /// Notify the scheduler of a game event (may wake event waiters).
+    #[instrument(level = "debug", skip(self, event_data), fields(event_type = %event_type))]
     pub fn notify_event(&self, event_type: &str, event_data: Map) {
         let waiters = {
             let mut event_waiters = self.event_waiters.write();
@@ -255,10 +321,15 @@ impl CoroutineScheduler {
         };
 
         if waiters.is_empty() {
+            trace!(event_type = %event_type, "No coroutines waiting for event");
             return;
         }
 
-        tracing::debug!(event_type, waiter_count = waiters.len(), "Waking event waiters");
+        debug!(
+            event_type = %event_type,
+            waiter_count = waiters.len(),
+            "Waking coroutines for event"
+        );
 
         let mut coroutines = self.coroutines.write();
         let mut ready_queue = self.ready_queue.lock();
@@ -268,6 +339,7 @@ impl CoroutineScheduler {
                 coroutine.state = CoroutineState::Ready;
                 coroutine.resume_value = Some(Dynamic::from(event_data.clone()));
                 ready_queue.push_back(id);
+                trace!(coroutine_id = %id, "Coroutine woken by event");
             }
         }
     }
@@ -332,12 +404,16 @@ impl CoroutineScheduler {
         }
     }
 
+    #[instrument(level = "trace", skip(self), fields(coroutine_id = %id, tick = current_tick))]
     fn execute_coroutine(&self, id: Uuid, current_tick: u64) -> Result<CoroutineExecResult, ScriptError> {
         // Get coroutine info (but don't hold lock during execution)
         let (script_path, function_name, local_vars, resume_value, owner_id, sector_id) = {
             let mut coroutines = self.coroutines.write();
             let coroutine = coroutines.get_mut(&id)
-                .ok_or_else(|| ScriptError::NotFound(format!("Coroutine {} not found", id)))?;
+                .ok_or_else(|| {
+                    warn!(coroutine_id = %id, "Coroutine not found during execution");
+                    ScriptError::NotFound(format!("Coroutine {} not found", id))
+                })?;
 
             coroutine.state = CoroutineState::Running;
 
@@ -350,6 +426,13 @@ impl CoroutineScheduler {
                 coroutine.sector_id,
             )
         };
+
+        trace!(
+            script = %script_path,
+            function = %function_name,
+            has_resume_value = resume_value.is_some(),
+            "Executing coroutine"
+        );
 
         // Set up execution context if state accessor is available
         let _guard = if let Some(ref accessor) = self.state_accessor {
@@ -384,7 +467,7 @@ impl CoroutineScheduler {
             match ExecutionGuard::enter(exec_ctx) {
                 Ok(guard) => Some(guard),
                 Err(e) => {
-                    tracing::warn!("Failed to enter execution context for coroutine: {}", e);
+                    warn!(coroutine_id = %id, error = %e, "Failed to enter execution context for coroutine");
                     None
                 }
             }
@@ -404,6 +487,8 @@ impl CoroutineScheduler {
             scope.push_dynamic("__resume_value", resume_val);
         }
 
+        let start = Instant::now();
+
         // Execute the function with the scope containing local vars and resume value
         let result = self.engine.call_function_with_scope(
             &script_path,
@@ -412,22 +497,47 @@ impl CoroutineScheduler {
             (), // No additional args for coroutine resume
         );
 
+        let elapsed = start.elapsed();
+
         // Guard drops here automatically, applying mutations
 
         // Check for yield request
         if let Some(yield_req) = take_yield_request() {
+            trace!(
+                coroutine_id = %id,
+                elapsed_us = elapsed.as_micros() as u64,
+                yield_type = ?yield_req.yield_type,
+                "Coroutine yielded"
+            );
             return Ok(CoroutineExecResult::Yielded(yield_req));
         }
 
         match result {
-            Ok(value) => Ok(CoroutineExecResult::Completed(value)),
-            Err(e) => Ok(CoroutineExecResult::Failed(e.to_string())),
+            Ok(value) => {
+                trace!(
+                    coroutine_id = %id,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    "Coroutine completed successfully"
+                );
+                Ok(CoroutineExecResult::Completed(value))
+            }
+            Err(e) => {
+                error!(
+                    coroutine_id = %id,
+                    elapsed_us = elapsed.as_micros() as u64,
+                    error = %e,
+                    "Coroutine execution failed"
+                );
+                Ok(CoroutineExecResult::Failed(e.to_string()))
+            }
         }
     }
 
+    #[instrument(level = "trace", skip(self, request), fields(coroutine_id = %id, yield_type = ?request.yield_type))]
     fn handle_yield(&self, id: Uuid, request: YieldRequest, current_tick: u64) {
         let mut coroutines = self.coroutines.write();
         let Some(coroutine) = coroutines.get_mut(&id) else {
+            warn!(coroutine_id = %id, "Coroutine not found during yield handling");
             return;
         };
 
@@ -441,6 +551,8 @@ impl CoroutineScheduler {
                     .entry(resume_tick)
                     .or_default()
                     .push(id);
+
+                trace!(ticks, resume_tick, "Coroutine waiting for ticks");
             }
             YieldType::Seconds(secs) => {
                 // Convert seconds to ticks
@@ -453,21 +565,28 @@ impl CoroutineScheduler {
                     .entry(resume_tick)
                     .or_default()
                     .push(id);
+
+                trace!(seconds = secs, ticks, resume_tick, "Coroutine waiting for seconds");
             }
             YieldType::NextFrame => {
                 coroutine.state = CoroutineState::WaitingForNextFrame;
+                trace!("Coroutine waiting for next frame");
             }
             YieldType::Event(event_type) => {
                 coroutine.state = CoroutineState::WaitingForEvent(event_type.clone());
 
                 self.event_waiters.write()
-                    .entry(event_type)
+                    .entry(event_type.clone())
                     .or_default()
                     .push(id);
+
+                trace!(event_type = %event_type, "Coroutine waiting for event");
             }
             YieldType::Schedule { delay_ticks, callback } => {
                 // Schedule is fire-and-forget: spawn a new coroutine for the callback
                 // that will run after delay_ticks
+                trace!(delay_ticks, callback = %callback, "Scheduling callback coroutine");
+
                 let _ = self.spawn_scheduled(
                     &coroutine.script_path,
                     &callback,
@@ -485,6 +604,7 @@ impl CoroutineScheduler {
 
         // Store any yield data for later use
         if !request.data.is_empty() {
+            trace!(data_keys = request.data.len(), "Storing yield data in coroutine");
             coroutine.local_vars.extend(request.data);
         }
     }

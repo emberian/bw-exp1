@@ -60,10 +60,12 @@ fn choice(id, text) {
 
 /// Create a choice with a requirement.
 fn choice_with_req(id, text, req_type, req_value) {
+    let req = #{};
+    req[req_type] = req_value;
     #{
         id: id,
         text: text,
-        requirements: [#{ [req_type]: req_value }]
+        requirements: [req]
     }
 }
 

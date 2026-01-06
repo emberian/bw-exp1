@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use rhai::Dynamic;
 use uuid::Uuid;
+use tracing::{debug, info, instrument, trace, warn};
 
 use bw_core::models::ShipStatus;
 use bw_game::systems::{CombatEngagement, CombatLogEntry, AttackResult};
@@ -31,6 +32,7 @@ pub struct CombatTickResult {
 }
 
 /// Process all active combats in a sector for one tick.
+#[instrument(skip_all, fields(sector_id = %sector.sector.id, tick, active_combats))]
 pub fn process_sector_combats(
     state: &GameState,
     sector: &SectorInstance,
@@ -42,6 +44,13 @@ pub fn process_sector_combats(
 
     // Process each active combat
     let combat_ids: Vec<Uuid> = sector.combats.iter().map(|e| *e.key()).collect();
+    let span = tracing::Span::current();
+    span.record("tick", tick);
+    span.record("active_combats", combat_ids.len());
+
+    if !combat_ids.is_empty() {
+        trace!(count = combat_ids.len(), "Processing active combats");
+    }
 
     for combat_id in combat_ids {
         if let Some(mut combat) = sector.combats.get_mut(&combat_id) {
@@ -70,6 +79,12 @@ pub fn process_sector_combats(
             result.destroyed_ships.extend(combat_result.destroyed);
 
             if combat.is_resolved {
+                debug!(
+                    combat_id = %combat_id,
+                    round = combat.round,
+                    winner = ?combat.winner,
+                    "Combat resolved"
+                );
                 result.resolved.push(combat_id);
             }
         }
@@ -85,6 +100,7 @@ pub fn process_sector_combats(
                 if let Some(mut ship) = state.ships.get_mut(&ship_id)
                     && matches!(ship.status, ShipStatus::InCombat { .. }) {
                         ship.status = ShipStatus::Idle;
+                        trace!(ship_id = %ship_id, "Ship status reset to Idle after combat");
                     }
             }
         }
@@ -101,6 +117,7 @@ struct CombatRoundResult {
 }
 
 /// Process a single round of combat.
+#[instrument(skip_all, fields(combat_id = %combat.id, round))]
 fn process_combat_round(
     state: &GameState,
     combat: &mut CombatEngagement,
@@ -113,6 +130,12 @@ fn process_combat_round(
     let mut destroyed = Vec::new();
 
     combat.round += 1;
+    tracing::Span::current().record("round", combat.round);
+    trace!(
+        side_a = combat.side_a.len(),
+        side_b = combat.side_b.len(),
+        "Processing combat round"
+    );
 
     // Build list of all attackers with their target pools
     // Target selection is done via script
@@ -162,6 +185,7 @@ fn process_combat_round(
 }
 
 /// Resolve a single attack between two ships.
+#[instrument(skip_all, fields(attacker_id = %attacker_id, target_id = %target_id))]
 fn resolve_attack(
     state: &GameState,
     attacker_id: Uuid,
@@ -172,6 +196,7 @@ fn resolve_attack(
 ) -> Option<CombatEventDto> {
     // Guard against self-attack (would cause double mutable borrow panic)
     if attacker_id == target_id {
+        warn!("Attempted self-attack, skipping");
         return None;
     }
 
@@ -180,6 +205,7 @@ fn resolve_attack(
 
     // Check if attacker can attack
     if !attacker.can_attack() {
+        trace!("Attacker cannot attack, skipping");
         return None;
     }
 
@@ -254,6 +280,27 @@ fn resolve_attack(
     };
     combat.log_event(log_entry);
 
+    // Log attack result
+    if result.hit {
+        if result.critical_hit {
+            debug!(
+                attacker = %attacker.name,
+                target = %target.name,
+                damage = result.damage,
+                "Critical hit!"
+            );
+        } else {
+            trace!(
+                attacker = %attacker.name,
+                target = %target.name,
+                damage = result.damage,
+                "Attack hit"
+            );
+        }
+    } else {
+        trace!(attacker = %attacker.name, target = %target.name, "Attack missed");
+    }
+
     // Handle destruction
     if target_destroyed {
         destroyed.push(target_id);
@@ -265,7 +312,12 @@ fn resolve_attack(
         drop(target);
         drop(attacker);
         combat.remove_ship(target_id);
-        tracing::info!("Ship {} destroyed in combat", target_name);
+        info!(
+            ship_name = %target_name,
+            ship_id = %target_id,
+            is_player = target_is_player,
+            "Ship destroyed in combat"
+        );
 
         // Update player stats
         // If attacker is player, increment ships_destroyed
@@ -309,6 +361,7 @@ fn resolve_attack(
 const MAX_COMBAT_RANGE: f64 = 200.0;
 
 /// Start a new combat engagement.
+#[instrument(skip_all, fields(initiator_id = %initiator_id, target_id = %target_id, sector_id = %sector.sector.id))]
 pub fn start_combat(
     state: &GameState,
     sector: &SectorInstance,
@@ -322,20 +375,26 @@ pub fn start_combat(
     // Check distance - must be within combat range
     let distance = initiator.position.distance_to(&target.position);
     if distance > MAX_COMBAT_RANGE {
-        tracing::debug!(
-            "Combat initiation failed: distance {} exceeds max range {}",
-            distance, MAX_COMBAT_RANGE
+        debug!(
+            distance,
+            max_range = MAX_COMBAT_RANGE,
+            "Combat initiation failed: distance exceeds max range"
         );
         return None;
     }
 
     // Check if either is already in combat
     if matches!(initiator.status, ShipStatus::InCombat { .. }) {
+        debug!(ship_id = %initiator_id, "Combat initiation failed: initiator already in combat");
         return None;
     }
     if matches!(target.status, ShipStatus::InCombat { .. }) {
+        debug!(ship_id = %target_id, "Combat initiation failed: target already in combat");
         return None;
     }
+
+    let initiator_name = initiator.name.clone();
+    let target_name = target.name.clone();
 
     // Create engagement
     let engagement = CombatEngagement::new(
@@ -360,12 +419,18 @@ pub fn start_combat(
     // Add to sector
     sector.combats.insert(engagement_id, engagement.clone());
 
-    tracing::info!("Combat started: {} vs {}", initiator_id, target_id);
+    info!(
+        engagement_id = %engagement_id,
+        initiator = %initiator_name,
+        target = %target_name,
+        "Combat started"
+    );
 
     Some(engagement)
 }
 
 /// Handle a ship fleeing from combat.
+#[instrument(skip_all, fields(ship_id = %ship_id))]
 pub fn flee_from_combat(
     state: &GameState,
     sector: &SectorInstance,
@@ -386,7 +451,10 @@ pub fn flee_from_combat(
         }
     }) {
         Some(id) => id,
-        None => return false,
+        None => {
+            debug!("Ship not in combat, cannot flee");
+            return false;
+        }
     };
 
     // Calculate flee chance via script
@@ -395,9 +463,11 @@ pub fn flee_from_combat(
         script_calculate_flee_chance(&hooks, stats.speed)
     }).unwrap_or(0.3);
 
+    let ship_name = ship.as_ref().map(|s| s.name.clone()).unwrap_or_default();
     drop(ship);
 
     if rng.r#gen::<f32>() > flee_chance {
+        debug!(ship_name = %ship_name, flee_chance, "Flee attempt failed");
         return false; // Failed to flee
     }
 
@@ -411,7 +481,7 @@ pub fn flee_from_combat(
         ship.status = ShipStatus::Idle;
     }
 
-    tracing::debug!("Ship {} fled from combat", ship_id);
+    info!(ship_name = %ship_name, engagement_id = %engagement_id, "Ship fled from combat");
     true
 }
 

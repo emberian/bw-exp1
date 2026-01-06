@@ -29,6 +29,18 @@ command -v trunk >/dev/null || { err "trunk not found (cargo install trunk)"; ex
 log "Building frontend..."
 (cd crates/bw-frontend && trunk build)
 
+# Build GM editor
+log "Building GM editor..."
+if command -v wasm-pack >/dev/null; then
+    (cd crates/bw-gm-editor && ./build.sh)
+    # Copy to frontend dist
+    mkdir -p crates/bw-frontend/dist/gm-editor
+    cp crates/bw-gm-editor/dist/*.js crates/bw-gm-editor/dist/*.wasm crates/bw-frontend/dist/gm-editor/
+    log "GM editor built and copied to dist/gm-editor/"
+else
+    warn "wasm-pack not found, skipping GM editor build (cargo install wasm-pack)"
+fi
+
 # Link dist to play dir for server
 rm -rf play
 ln -sf crates/bw-frontend/dist play

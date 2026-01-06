@@ -27,6 +27,7 @@ pub mod errors;
 pub mod context;
 pub mod debug;
 pub mod schema;
+pub mod schema_traits;
 
 // Core scripting exports
 pub use engine::*;
@@ -44,7 +45,40 @@ pub use effects::{
     create_effect_registry, create_effect_dispatcher, apply_effect,
 };
 pub use behaviors::*;
-pub use validation::*;
+pub use validation::{
+    // API functions
+    ApiFn, ReturnType, API_FUNCTIONS, CTX_KEYS, KNOWN_EVENT_TYPES,
+    EventSubscriptionInfo, VarInfo, get_api_function, is_known_event_type,
+    // Types
+    InferredType, BinaryOpRule, BINARY_OP_RULES, BINARY_OPERATORS,
+    NullGuardInfo, VarState, Scope, ReturnMapField, FunctionAnalysis,
+    is_binary_operator, check_binary_op, is_implicit_coercion,
+    // Schema
+    NestedFieldType, NestedFieldSchema, ObjectSchema, AccessSegment, AccessPath,
+    SHIP_SCHEMA as VAL_SHIP_SCHEMA, PLAYER_SCHEMA, CARGO_ITEM_SCHEMA, INSTALLED_UPGRADE_SCHEMA,
+    POSITION_SCHEMA, WEAPON_SCHEMA as VAL_WEAPON_SCHEMA, LOCATION_SCHEMA, SECTOR_SCHEMA,
+    ADJACENT_SECTOR_SCHEMA, COMBAT_ENGAGEMENT_SCHEMA, SQUADRON_SCHEMA,
+    SQUADRON_INVITE_SCHEMA, MISSION_SCHEMA,
+    get_object_schema, api_return_schema,
+    // Analysis
+    AstAnalysis, ArchetypeRegistry, ARCHETYPE_LOOKUP_FNS,
+    analyze_ast, analyze_function, extract_string_literal,
+    is_archetype_lookup_fn, archetype_category, is_builtin_var, infer_dynamic_type,
+    // Validators
+    ActionScriptValidation, RegisteredAction, ActionValidationError, ActionValidationWarning,
+    ActionValidationReport, ActionScriptValidator,
+    DefinitionScriptValidation, DefinitionInfo, DefinitionValidationError, DefinitionValidationWarning,
+    DefinitionValidationReport, DefinitionScriptValidator,
+    ScriptContract, FunctionSpec, ValidationResult,
+    contracts, validate_script, infer_contract,
+    // Dependency
+    ScriptActionInfo, ScriptDependencyGraph,
+    // Traits
+    ValidationError, ValidationWarning, ScriptValidation, ValidationReport,
+    ScriptValidator, collect_rhai_files,
+    // Error codes
+    ErrorCategory, is_error, is_warning,
+};
 pub use views::{ShipView, PlayerView, SectorView, LocationView};
 pub use transaction::TransactionContext;
 pub use persistence::{
@@ -79,6 +113,9 @@ pub use schema::{
     DefFieldType, DefFieldSchema, DefinitionSchema, DefinitionSchemaRegistry,
     SHIP_SCHEMA, WEAPON_SCHEMA, EFFECT_SCHEMA, CARGO_SCHEMA, ABILITY_SCHEMA, FACTION_SCHEMA,
 };
+
+// Re-export schema traits
+pub use schema_traits::{TypeCategory, SchemaField, Schema, SchemaRegistry};
 
 // Minimal re-exports for internal macros (used via $crate::state in macros.rs)
 pub mod state {

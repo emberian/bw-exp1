@@ -151,6 +151,10 @@ fn handle_accept_alliance(ctx, params) {
         return #{ success: false, error: "Proposing squadron no longer exists" };
     }
 
+    if to_squadron == () {
+        return #{ success: false, error: "Your squadron no longer exists" };
+    }
+
     // Create alliance
     create_alliance(from_squadron_id, squadron_id);
 

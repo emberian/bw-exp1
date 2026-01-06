@@ -306,14 +306,48 @@ async fn upsert_player(
 
     let owned_ships_json: Vec<String> = player.owned_ships.iter().map(|id| id.to_string()).collect();
 
+    // If no password hash is provided, use UPDATE-only (player must already exist).
+    // This avoids SQLite's NOT NULL check which happens BEFORE the ON CONFLICT clause.
+    if password_hash.is_none() {
+        use sea_orm::{QueryFilter, ColumnTrait};
+
+        let model = player::ActiveModel {
+            id: Set(player.id.to_string()),
+            username: Set(player.username.clone()),
+            password_hash: sea_orm::ActiveValue::NotSet,
+            reputation: Set(player.resources.reputation),
+            fame: Set(player.resources.fame),
+            faction_standings: Set(serde_json::to_string(&player.faction_standings).unwrap_or_default()),
+            stats: Set(serde_json::to_string(&player.stats).unwrap_or_default()),
+            squadron_id: Set(player.squadron_id.map(|id| id.to_string())),
+            squadron_rank: Set(player.squadron_rank.map(|r| format!("{:?}", r))),
+            active_ship_id: Set(Some(player.active_ship_id.to_string())),
+            faction_id: Set(player.faction_id.to_string()),
+            patrol_sector_id: Set(Some(player.patrol_sector_id.to_string())),
+            is_online: Set(if player.is_online { 1 } else { 0 }),
+            last_seen: Set(Some(player.last_seen.to_rfc3339())),
+            offline_attacks_remaining: Set(player.offline_attacks_remaining),
+            missions_completed: Set(player.missions_completed),
+            missions_failed: Set(player.missions_failed),
+            credits: Set(Some(player.credits)),
+            game_mode: Set(Some(format!("{:?}", player.game_mode))),
+            owned_ships: Set(Some(serde_json::to_string(&owned_ships_json).unwrap_or_default())),
+            created_at: sea_orm::ActiveValue::NotSet,
+            updated_at: Set(chrono::Utc::now().to_rfc3339()),
+        };
+
+        return player::Entity::update(model)
+            .filter(player::Column::Id.eq(player.id.to_string()))
+            .exec(db)
+            .await
+            .map(|_| ());
+    }
+
+    // Full upsert with password hash (for new players)
     let model = player::ActiveModel {
         id: Set(player.id.to_string()),
         username: Set(player.username.clone()),
-        password_hash: if let Some(hash) = password_hash {
-            Set(hash.to_string())
-        } else {
-            sea_orm::ActiveValue::NotSet
-        },
+        password_hash: Set(password_hash.unwrap().to_string()),
         reputation: Set(player.resources.reputation),
         fame: Set(player.resources.fame),
         faction_standings: Set(serde_json::to_string(&player.faction_standings).unwrap_or_default()),

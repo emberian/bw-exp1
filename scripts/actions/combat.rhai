@@ -127,7 +127,7 @@ fn handle_engage_target(ctx, params) {
 }
 
 // Disengage from combat
-fn handle_disengage_combat(ctx, params) {
+fn handle_disengage_combat(ctx, _params) {
     let ship_id = ctx["ship_id"];
     let player_id = ctx["player_id"];
 

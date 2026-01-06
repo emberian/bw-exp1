@@ -4,7 +4,9 @@
 //! Uses the generic handler infrastructure with action-specific requirements validation.
 
 use std::sync::Arc;
+use std::time::Instant;
 use rhai::{Dynamic, Map};
+use tracing::{debug, error, info, instrument, trace, warn};
 use uuid::Uuid;
 
 use crate::engine::ScriptEngine;
@@ -135,34 +137,76 @@ impl ActionDispatcher {
     }
 
     /// Dispatch an action to its handler.
+    #[instrument(
+        level = "debug",
+        skip(self, ctx),
+        fields(
+            action = %ctx.action,
+            player_id = %ctx.player_id,
+            ship_id = %ctx.ship_id,
+            sector_id = %ctx.sector_id
+        )
+    )]
     pub fn dispatch(&self, ctx: ActionContext) -> ActionResult {
+        let start = Instant::now();
+        debug!("Dispatching action");
+
         // Look up the handler
         let handler = match self.registry.get(&ctx.action) {
             Some(h) => h,
             None => {
-                tracing::debug!(action = %ctx.action, "Action not found in registry");
+                debug!(action = %ctx.action, "Action not found in registry");
                 return ActionResult::error(format!("Unknown action: {}", ctx.action));
             }
         };
 
         // Check if handler is enabled
         if !handler.enabled {
+            warn!(action = %ctx.action, "Action is disabled");
             return ActionResult::error(format!("Action '{}' is currently disabled", ctx.action));
         }
 
         // Validate requirements
         if let Err(e) = self.validate_requirements(&handler, &ctx) {
+            debug!(action = %ctx.action, error = %e, "Action requirements not met");
             return ActionResult::error(e);
         }
 
+        trace!(
+            action = %ctx.action,
+            script = %handler.script_path,
+            function = %handler.handler_function,
+            "Executing action handler"
+        );
+
         // Execute the handler
         match self.execute_handler(&handler, &ctx) {
-            Ok((result, mutations)) => result.with_mutations(mutations),
+            Ok((result, mutations)) => {
+                let elapsed = start.elapsed();
+                if result.success {
+                    info!(
+                        action = %ctx.action,
+                        mutations = mutations.len(),
+                        elapsed_us = elapsed.as_micros() as u64,
+                        "Action completed successfully"
+                    );
+                } else {
+                    warn!(
+                        action = %ctx.action,
+                        error = ?result.error,
+                        elapsed_us = elapsed.as_micros() as u64,
+                        "Action returned failure"
+                    );
+                }
+                result.with_mutations(mutations)
+            }
             Err(e) => {
-                tracing::warn!(
+                let elapsed = start.elapsed();
+                error!(
                     action = %ctx.action,
                     error = %e,
-                    "Action handler failed"
+                    elapsed_us = elapsed.as_micros() as u64,
+                    "Action handler execution failed"
                 );
                 ActionResult::error(e)
             }
@@ -170,58 +214,80 @@ impl ActionDispatcher {
     }
 
     /// Validate that requirements are met.
+    #[instrument(level = "trace", skip(self, handler, ctx), fields(action = %ctx.action, requirements = handler.requirements.len()))]
     fn validate_requirements(&self, handler: &ActionHandler, ctx: &ActionContext) -> Result<(), String> {
         for req in &handler.requirements {
             match req {
                 ActionRequirement::Authenticated => {
                     // Always true for valid sessions - player_id is set
+                    trace!("Requirement check: Authenticated (passed)");
                 }
                 ActionRequirement::ShipStatus(allowed) => {
                     // Check ship status via state accessor
                     if let Some(ref accessor) = self.state_accessor
                         && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
                             && !allowed.iter().any(|s| s == &ship.status) {
+                                trace!(required = ?allowed, actual = %ship.status, "Requirement check: ShipStatus (failed)");
                                 return Err(format!(
                                     "Action requires ship status {:?}, but ship is '{}'",
                                     allowed, ship.status
                                 ));
                             }
+                    trace!(allowed = ?allowed, "Requirement check: ShipStatus (passed)");
                 }
                 ActionRequirement::MustBeDocked => {
                     if let Some(ref accessor) = self.state_accessor
                         && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
                             && ship.status != "docked" {
+                                trace!(actual = %ship.status, "Requirement check: MustBeDocked (failed)");
                                 return Err("Must be docked to perform this action".to_string());
                             }
+                    trace!("Requirement check: MustBeDocked (passed)");
                 }
                 ActionRequirement::MustBeUndocked => {
                     if let Some(ref accessor) = self.state_accessor
                         && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
                             && ship.status == "docked" {
+                                trace!("Requirement check: MustBeUndocked (failed)");
                                 return Err("Cannot perform this action while docked".to_string());
                             }
+                    trace!("Requirement check: MustBeUndocked (passed)");
                 }
                 ActionRequirement::NotInCombat => {
                     if let Some(ref accessor) = self.state_accessor
                         && let Ok(Some(ship)) = accessor.get_ship(ctx.ship_id)
                             && ship.status == "in_combat" {
+                                trace!("Requirement check: NotInCombat (failed)");
                                 return Err("Cannot perform this action during combat".to_string());
                             }
+                    trace!("Requirement check: NotInCombat (passed)");
                 }
                 ActionRequirement::SameSector => {
                     // This requires target info which should be in params
                     // Validation deferred to script
+                    trace!("Requirement check: SameSector (deferred to script)");
                 }
-                ActionRequirement::Custom(_) => {
+                ActionRequirement::Custom(name) => {
                     // Custom validation is handled in the script
+                    trace!(custom_req = %name, "Requirement check: Custom (deferred to script)");
                 }
             }
         }
 
+        trace!("All requirements validated");
         Ok(())
     }
 
     /// Execute the handler script function.
+    #[instrument(
+        level = "trace",
+        skip(self, handler, ctx),
+        fields(
+            action = %ctx.action,
+            script = %handler.script_path,
+            function = %handler.handler_function
+        )
+    )]
     fn execute_handler(
         &self,
         handler: &ActionHandler,
@@ -229,6 +295,7 @@ impl ActionDispatcher {
     ) -> Result<(ActionResult, Vec<StateMutation>), String> {
         // Check script exists
         if !self.engine.has_script(&handler.script_path) {
+            error!(script = %handler.script_path, "Script not found for action handler");
             return Err(format!("Script not found: {}", handler.script_path));
         }
 
@@ -245,18 +312,24 @@ impl ActionDispatcher {
                 .with_sector(ctx.sector_id);
 
             match ExecutionGuard::enter(exec_ctx) {
-                Ok(guard) => Some(guard),
+                Ok(guard) => {
+                    trace!("Execution context entered for action");
+                    Some(guard)
+                }
                 Err(e) => {
-                    tracing::warn!("Failed to enter execution context for action: {}", e);
+                    warn!(error = %e, "Failed to enter execution context for action");
                     return Err(format!("Execution context error: {}", e));
                 }
             }
         } else {
+            trace!("No state accessor available, executing without context");
             None
         };
 
         // Convert params to Dynamic
         let params_dynamic = json_to_dynamic(&ctx.params);
+
+        trace!("Calling action handler function");
 
         // Call the handler function
         let result = self.engine.call_function_dynamic(
@@ -267,7 +340,9 @@ impl ActionDispatcher {
 
         // Collect mutations before guard drops
         let mutations = if let Some(ref accessor) = self.state_accessor {
-            accessor.take_mutations()
+            let m = accessor.take_mutations();
+            trace!(mutations = m.len(), "Collected mutations from action handler");
+            m
         } else {
             Vec::new()
         };
@@ -278,9 +353,13 @@ impl ActionDispatcher {
             Ok(return_val) => {
                 // Parse the return value from the script
                 let action_result = parse_action_result(return_val);
+                trace!(success = action_result.success, "Action handler returned");
                 Ok((action_result, mutations))
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                error!(error = %e, "Action handler script error");
+                Err(e.to_string())
+            }
         }
     }
 }

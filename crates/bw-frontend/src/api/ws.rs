@@ -108,6 +108,8 @@ impl WsService {
 
     /// Queue a message to send.
     fn send(&self, msg: ClientMessage) {
+        // Log outgoing message to browser console
+        web_sys::console::log_1(&format!("[WS OUT] {:?}", msg).into());
         self.outgoing_queue.update(|queue| queue.push(msg));
     }
 
@@ -408,10 +410,11 @@ impl WsService {
             game_state_close.connected.set(false);
 
             // Check if we should attempt reconnection
-            let attempts = reconnect_attempts_signal.get();
-            let should_reconnect = auto_reconnect_signal.get()
+            // Use get_untracked since this is a callback, not a reactive context
+            let attempts = reconnect_attempts_signal.get_untracked();
+            let should_reconnect = auto_reconnect_signal.get_untracked()
                 && attempts < MAX_RECONNECT_ATTEMPTS
-                && auth_token_signal.get().is_some();
+                && auth_token_signal.get_untracked().is_some();
 
             if should_reconnect {
                 // Set reconnecting state
@@ -419,7 +422,7 @@ impl WsService {
                 reconnect_attempts_signal.set(attempts + 1);
 
                 // Increment generation to invalidate any previously scheduled reconnects
-                let generation = reconnect_generation_signal.get();
+                let generation = reconnect_generation_signal.get_untracked();
                 reconnect_generation_signal.set(generation + 1);
                 let expected_generation = generation + 1;
 
@@ -430,12 +433,12 @@ impl WsService {
                 // Schedule reconnection
                 let game_state_reconnect = game_state_close;
                 let ws_service_reconnect = ws_service;
-                let token = auth_token_signal.get().unwrap();
+                let token = auth_token_signal.get_untracked().unwrap();
                 let reconnect_closure = Closure::once(Box::new(move || {
                     // Only reconnect if this is still the active reconnection attempt
                     // (generation matches) and we're still in reconnecting state
-                    if ws_service_reconnect.reconnect_generation.get() == expected_generation
-                        && ws_service_reconnect.state.get() == ConnectionState::Reconnecting
+                    if ws_service_reconnect.reconnect_generation.get_untracked() == expected_generation
+                        && ws_service_reconnect.state.get_untracked() == ConnectionState::Reconnecting
                     {
                         ws_service_reconnect.connect_internal(game_state_reconnect, token);
                     }
@@ -537,6 +540,21 @@ impl WsService {
 
 /// Handle incoming server messages.
 pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
+    // Log incoming message to browser console (abbreviated for large messages)
+    let log_msg = match &msg {
+        ServerMessage::StateUpdate { tick, ship_updates, .. } => {
+            format!("[WS IN] StateUpdate {{ tick: {}, ship_updates: {} }}", tick, ship_updates.len())
+        }
+        ServerMessage::TickMetrics(_) | ServerMessage::TickMetricsHistory(_) => {
+            // Skip noisy metrics messages
+            String::new()
+        }
+        other => format!("[WS IN] {:?}", other),
+    };
+    if !log_msg.is_empty() {
+        web_sys::console::log_1(&log_msg.into());
+    }
+
     match msg {
         ServerMessage::AuthResult {
             success,
@@ -547,7 +565,16 @@ pub fn handle_server_message(game_state: &GameState, msg: ServerMessage) {
                 game_state.player_id.set(player_id);
                 game_state.clear_error();
             } else {
-                game_state.set_error(error.unwrap_or_else(|| "Authentication failed".to_string()));
+                // Clear invalid token and redirect to login
+                if let Some(storage) = web_sys::window()
+                    .and_then(|w| w.local_storage().ok())
+                    .flatten()
+                {
+                    let _ = storage.remove_item("auth_token");
+                }
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().set_href("/play/login");
+                }
             }
         }
 

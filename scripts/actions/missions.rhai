@@ -27,7 +27,7 @@ fn handle_accept_mission(ctx, params) {
     }
 
     let player_id = ctx["player_id"];
-    let sector_id = ctx["sector_id"];
+    let _sector_id = ctx["sector_id"];  // Available for future sector-based mission checks
 
     // Query the mission
     let mission = query_mission(mission_id);

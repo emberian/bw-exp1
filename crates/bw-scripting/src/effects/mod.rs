@@ -28,6 +28,7 @@ mod builtins;
 
 use std::sync::Arc;
 use rhai::{Dynamic, Map};
+use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::handlers::{HandlerContext, HandlerDispatcher, HandlerRegistry, Handler, HandlerResult};
@@ -143,7 +144,9 @@ pub type EffectDispatcher = HandlerDispatcher<EffectContext>;
 pub type EffectRegistry = HandlerRegistry<EffectContext>;
 
 /// Create a new effect registry with built-in handlers registered.
+#[instrument(level = "debug", skip_all)]
 pub fn create_effect_registry() -> EffectRegistry {
+    debug!("Creating effect registry with built-in handlers");
     let registry = EffectRegistry::new();
 
     // Register built-in effect handlers
@@ -153,42 +156,64 @@ pub fn create_effect_registry() -> EffectRegistry {
 }
 
 /// Create a new effect dispatcher.
+#[instrument(level = "debug", skip_all)]
 pub fn create_effect_dispatcher(
     registry: Arc<EffectRegistry>,
     engine: Arc<ScriptEngine>,
 ) -> EffectDispatcher {
+    debug!("Creating effect dispatcher");
     HandlerDispatcher::new(registry, engine)
 }
 
 /// Register built-in effect handlers.
+#[instrument(level = "debug", skip_all)]
 fn register_builtin_effects(registry: &EffectRegistry) {
+    trace!("Registering damage modifier effects");
     // Damage modifiers
     registry.register(Handler::builtin("shield_pierce", Arc::new(ShieldPierceHandler)));
     registry.register(Handler::builtin("armor_pierce", Arc::new(ArmorPierceHandler)));
     registry.register(Handler::builtin("damage_mult", Arc::new(DamageMultHandler)));
 
+    trace!("Registering status effects");
     // Status effects
     registry.register(Handler::builtin("dot", Arc::new(DotHandler)));
     registry.register(Handler::builtin("stat_modifier", Arc::new(StatModifierHandler)));
 
+    trace!("Registering combat modifier effects");
     // Combat modifiers
     registry.register(Handler::builtin("accuracy_bonus", Arc::new(AccuracyBonusHandler)));
     registry.register(Handler::builtin("multi_attack", Arc::new(MultiAttackHandler)));
 
+    trace!("Registering special effects");
     // Special effects
     registry.register(Handler::builtin("emp", Arc::new(EmpHandler)));
     registry.register(Handler::builtin("aoe", Arc::new(AoeHandler)));
 
-    tracing::debug!(count = registry.count(), "Built-in effect handlers registered");
+    debug!(count = registry.count(), "Built-in effect handlers registered");
 }
 
 /// Helper to apply an effect and return the modified context.
+#[instrument(
+    level = "debug",
+    skip(dispatcher, ctx, params),
+    fields(
+        effect = %effect_id,
+        source_id = %ctx.source_id,
+        target_id = %ctx.target_id,
+        base_damage = ctx.damage
+    )
+)]
 pub fn apply_effect(
     dispatcher: &EffectDispatcher,
     effect_id: &str,
     ctx: &mut EffectContext,
     params: &Dynamic,
 ) -> HandlerResult {
+    trace!(
+        modified_damage_before = ctx.modified_damage,
+        "Applying effect"
+    );
+
     let result = dispatcher.dispatch(effect_id, ctx, params);
 
     // If the handler returned modified damage in data, apply it
@@ -197,8 +222,20 @@ pub fn apply_effect(
             && let Some(new_damage) = map.get("modified_damage")
                 .and_then(|v| v.clone().try_cast::<f32>())
             {
+                trace!(
+                    old_damage = ctx.modified_damage,
+                    new_damage,
+                    "Effect modified damage"
+                );
                 ctx.modified_damage = new_damage;
             }
+
+    debug!(
+        effect = %effect_id,
+        success = result.success,
+        final_damage = ctx.modified_damage,
+        "Effect applied"
+    );
 
     result
 }

@@ -3,10 +3,12 @@
 //! Shared constants between server and client.
 
 /// Server tick rate (ticks per second).
-pub const TICK_RATE: u32 = 10;
+/// DEBUG: Set to 0.2 TPS (5 second ticks) for debugging
+pub const TICK_RATE: u32 = 1; // Nominal value, actual rate is 0.2 TPS
 
 /// Tick duration in milliseconds.
-pub const TICK_DURATION_MS: u64 = 1000 / TICK_RATE as u64;
+/// DEBUG: 5000ms = 0.2 TPS for debugging
+pub const TICK_DURATION_MS: u64 = 5000;
 
 /// Maximum ships per sector.
 pub const MAX_SHIPS_PER_SECTOR: usize = 100;

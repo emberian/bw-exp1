@@ -52,6 +52,13 @@ async fn main() -> anyhow::Result<()> {
         .context(format!("Failed to connect to database: {}", database_url))?;
     tracing::info!("Database connected and migrations applied");
 
+    // Seed initial game data (factions, sectors, locations) if empty
+    match db.seed_initial_data().await {
+        Ok(true) => tracing::info!("Seeded initial game data"),
+        Ok(false) => tracing::debug!("Initial game data already exists"),
+        Err(e) => tracing::error!("Failed to seed initial data: {}", e),
+    }
+
     // Seed default admin user if it doesn't exist
     match db.seed_default_admin().await {
         Ok(true) => tracing::info!("Created default admin user (admin:hunter2)"),

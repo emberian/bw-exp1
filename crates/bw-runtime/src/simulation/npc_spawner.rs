@@ -5,6 +5,7 @@
 //! Complex logic (class selection, naming) can be overridden via Rhai scripts.
 
 use uuid::Uuid;
+use tracing::{debug, instrument, trace, warn};
 
 use bw_core::models::{DangerLevel, Ship, ShipClass};
 use bw_shared::dto::ShipDto;
@@ -25,6 +26,7 @@ pub struct SpawnResult {
 /// Try to spawn NPCs in a sector.
 ///
 /// If `hooks` is provided, scripts can override class selection and naming.
+#[instrument(skip_all, fields(sector_name = %sector.sector.name, sector_id = %sector.sector.id))]
 pub fn try_spawn_npcs(
     state: &GameState,
     sector: &SectorInstance,
@@ -54,11 +56,13 @@ pub fn try_spawn_npcs(
 
     // Check if we need more NPCs
     if npc_count >= config.max_npcs_per_sector {
+        trace!(npc_count, max = config.max_npcs_per_sector, "Sector at NPC capacity");
         return result;
     }
 
     // Force spawn if below minimum
     let should_spawn = if npc_count < config.min_npcs_per_sector {
+        trace!(npc_count, min = config.min_npcs_per_sector, "Below minimum NPCs, forcing spawn");
         true
     } else {
         // Adjust spawn chance by danger level (from config)
@@ -74,17 +78,18 @@ pub fn try_spawn_npcs(
     };
 
     if !should_spawn {
+        trace!("Spawn roll failed");
         return result;
     }
 
     // Determine NPC type via script
     let Some(hooks) = hooks else {
-        tracing::warn!("NPC spawning requires ScriptHooks - skipping spawn");
+        warn!("NPC spawning requires ScriptHooks - skipping spawn");
         return result;
     };
 
     let Some((ship_class, faction_id)) = script_select_npc(hooks, state, sector) else {
-        tracing::debug!("Script did not return valid NPC class - skipping spawn");
+        debug!("Script did not return valid NPC class - skipping spawn");
         return result;
     };
 
@@ -108,7 +113,12 @@ pub fn try_spawn_npcs(
     state.ships.insert(ship_id, npc_ship);
     sector.ship_ids.insert(ship_id, ());
 
-    tracing::debug!("Spawned NPC {} ({:?}) in {}", name, ship_class, sector.sector.name);
+    debug!(
+        ship_id = %ship_id,
+        name = %name,
+        class = ?ship_class,
+        "NPC spawned"
+    );
 
     result.ship_dtos.push(ship_dto);
     result.spawned_ships.push((ship_id, sector_id, ship_class));
@@ -116,6 +126,7 @@ pub fn try_spawn_npcs(
 }
 
 /// Despawn NPC ships that are destroyed or too far from any player.
+#[instrument(skip_all, fields(sector_name = %sector.sector.name))]
 pub fn cleanup_npcs(
     state: &GameState,
     sector: &SectorInstance,
@@ -151,6 +162,7 @@ pub fn cleanup_npcs(
 
                 // Always despawn destroyed ships
                 if matches!(ship.status, bw_core::models::ShipStatus::Destroyed) {
+                    trace!(ship_id = %ship_id, "Despawning destroyed NPC");
                     return Some(ship_id);
                 }
 
@@ -168,6 +180,12 @@ pub fn cleanup_npcs(
 
                     // Despawn if too far from all players
                     if min_distance > despawn_distance {
+                        trace!(
+                            ship_id = %ship_id,
+                            min_distance,
+                            despawn_distance,
+                            "Despawning NPC too far from players"
+                        );
                         return Some(ship_id);
                     }
                 }
@@ -181,7 +199,10 @@ pub fn cleanup_npcs(
         sector.ship_ids.remove(&ship_id);
         state.ships.remove(&ship_id);
         despawned.push(ship_id);
-        tracing::debug!("Despawned NPC {}", ship_id);
+    }
+
+    if !despawned.is_empty() {
+        debug!(count = despawned.len(), "NPCs despawned");
     }
 
     despawned
@@ -189,10 +210,11 @@ pub fn cleanup_npcs(
 
 /// Remove a single NPC ship from the game.
 /// Used for cleanup when behavior attachment fails.
+#[instrument(skip_all, fields(ship_id = %ship_id))]
 pub fn remove_npc_ship(state: &GameState, sector: &SectorInstance, ship_id: Uuid) {
     sector.ship_ids.remove(&ship_id);
     state.ships.remove(&ship_id);
-    tracing::debug!("Removed NPC {} due to failed behavior attachment", ship_id);
+    debug!("Removed NPC due to failed behavior attachment");
 }
 
 // =============================================================================

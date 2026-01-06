@@ -7,10 +7,9 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use crate::DbError;
 
 /// Embedded migrations in order of execution.
+/// Note: Seed data is now handled by DatabaseExt::seed_initial_data() instead of migrations.
 const MIGRATIONS: &[(&str, &str)] = &[
     ("001_sqlite_schema", include_str!("../../../migrations/001_sqlite_schema.sql")),
-    ("002_seed_factions", include_str!("../../../migrations/002_seed_factions.sql")),
-    ("003_seed_sectors", include_str!("../../../migrations/003_seed_sectors.sql")),
 ];
 
 /// Run all pending migrations using SeaORM.

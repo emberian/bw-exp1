@@ -57,11 +57,11 @@ fn handle_move_to_position(ctx, params) {
         return #{ success: false, error: "Cannot move while in combat" };
     }
 
-    // Set ship to moving status with destination
-    modify_ship(ship_id, #{
-        status: "moving",
-        destination: #{ x: x, y: y, z: z }
-    });
+    // Set ship to InTransit status with destination
+    // Use the dedicated move_ship_to function which properly sets InTransit status
+    if !move_ship_to(ship_id, x, y, z) {
+        return #{ success: false, error: "Failed to start movement" };
+    }
 
     #{
         success: true,
@@ -105,12 +105,10 @@ fn handle_move_to_location(ctx, params) {
 
     let pos = location["position"];
 
-    // Set ship to moving status
-    modify_ship(ship_id, #{
-        status: "moving",
-        destination: pos,
-        target_location: location_id
-    });
+    // Set ship to InTransit status using dedicated function
+    if !move_ship_to(ship_id, pos["x"], pos["y"], pos["z"]) {
+        return #{ success: false, error: "Failed to start movement" };
+    }
 
     send_notification(ctx["player_id"], "Moving to " + location["name"]);
 
@@ -229,7 +227,7 @@ fn handle_move_to_sector(ctx, params) {
 }
 
 // Handle stop movement
-fn handle_stop_movement(ctx, params) {
+fn handle_stop_movement(ctx, _params) {
     let ship_id = ctx["ship_id"];
     let ship = query_ship(ship_id);
 
@@ -239,19 +237,14 @@ fn handle_stop_movement(ctx, params) {
 
     let status = ship["status"];
 
-    // Can only stop if moving
-    if status != "moving" && status != "in_transit" {
+    // Can only stop if moving (in_transit status)
+    if status != "in_transit" {
         return #{ success: false, error: "Ship is not moving" };
     }
 
-    // If in transit between sectors, can't stop
-    if status == "in_transit" {
-        return #{ success: false, error: "Cannot stop during sector transit" };
-    }
-
+    // Use modify_ship with "idle" status to stop movement
     modify_ship(ship_id, #{
-        status: "idle",
-        destination: ()
+        status: "idle"
     });
 
     #{ success: true }
